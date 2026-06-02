@@ -1,0 +1,14 @@
+model:
+  type: lightgbm
+  params:
+    learning_rate: 0.03
+    num_leaves: 64
+    max_depth: 8
+features:
+  use_frequency_encoding: false
+  use_target_encoding: false
+  use_interactions: false
+  use_missing_indicators: true
+cv:
+  n_splits: 5
+  seed: 42

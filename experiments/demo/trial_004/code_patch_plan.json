@@ -1,0 +1,66 @@
+{
+  "competition": "demo",
+  "source_trial_id": "trial_003",
+  "next_trial_id": "trial_004",
+  "strategy": "sota_architecture_attempt",
+  "target_files": [
+    "experiments/demo/trial_004/config.yaml",
+    "scripts/demo_train.py"
+  ],
+  "config_changes": {
+    "model.type": "skeleton_transformer",
+    "features.use_view_aware_features": true,
+    "features.use_bed_wandering_aux_head": true,
+    "training": {
+      "epochs": 100,
+      "batch_size": 32,
+      "warmup_epochs": 10,
+      "early_stopping_patience": 25
+    }
+  },
+  "config": {
+    "model": {
+      "type": "skeleton_transformer",
+      "params": {
+        "learning_rate": 0.1025,
+        "d_model": 144,
+        "nhead": 4,
+        "num_layers": 3,
+        "dropout": 0.25
+      }
+    },
+    "features": {
+      "use_frequency_encoding": false,
+      "use_target_encoding": true,
+      "use_interactions": true,
+      "use_missing_indicators": true,
+      "use_view_aware_features": true,
+      "use_bed_wandering_aux_head": true
+    },
+    "cv": {
+      "n_splits": 5,
+      "seed": 42
+    },
+    "training": {
+      "epochs": 100,
+      "batch_size": 32,
+      "warmup_epochs": 10,
+      "early_stopping_patience": 25
+    }
+  },
+  "validation_errors": [],
+  "implementation_steps": [
+    "Add or select a training branch for the SOTA/model-architecture candidate.",
+    "Keep the output contract unchanged: metrics.json and optional submission.csv.",
+    "Run validation before any leaderboard submission."
+  ],
+  "validation_commands": [
+    "python -B -m kaggle_research_agent.cli validate-config --competition demo --trial trial_004",
+    "python -B -m unittest discover -s tests -v"
+  ],
+  "submit_gate": [
+    "Do not submit until training writes metrics.json.",
+    "Before submission, record current leaderboard score/rank.",
+    "After submission, record submitted score/rank and preserve all trial artifacts."
+  ]
+}

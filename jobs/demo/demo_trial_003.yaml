@@ -1,0 +1,13 @@
+job_id: demo_trial_003
+competition: demo
+trial_id: trial_003
+backend: local
+created_at: "2026-05-31T06:06:51.642814+00:00"
+status: done
+command: python scripts/demo_train.py --config experiments/demo/trial_003/config.yaml --output experiments/demo/trial_003
+config_path: "C:/Users/ASUS/Desktop/Research_Agent/experiments/demo/trial_003/config.yaml"
+expected_outputs:
+  - experiments/demo/trial_003/metrics.json
+  - experiments/demo/trial_003/submission.csv
+returncode: 0
+log_path: "C:/Users/ASUS/Desktop/Research_Agent/experiments/demo/trial_003/local_run.log"

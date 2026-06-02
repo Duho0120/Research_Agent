@@ -1,0 +1,12 @@
+{
+  "competition": "demo",
+  "trial_id": "trial_003",
+  "strategy": "sota_architecture_attempt",
+  "status": "executed",
+  "missing_targets": [],
+  "validation_errors": [],
+  "run_command": "python scripts/demo_train.py --config experiments/demo/trial_003/config.yaml --output experiments/demo/trial_003",
+  "job_status": "done",
+  "evaluation_recommendation": "record_but_do_not_promote",
+  "diagnosis_strategy": "strategy_escalation"
+}

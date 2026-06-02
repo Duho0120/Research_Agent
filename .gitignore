@@ -1,0 +1,53 @@
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments and local secrets
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+kaggle.json
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Runtime logs
+*.log
+local_run.log
+
+# Large or private competition data
+data/
+competitions/**/data/
+competitions/**/input/
+competitions/**/raw/
+competitions/**/downloaded/
+
+# Generated training artifacts and predictions
+experiments/**/artifacts/
+experiments/**/checkpoints/
+experiments/**/models/
+experiments/**/weights/
+experiments/**/*.ckpt
+experiments/**/*.pt
+experiments/**/*.pth
+experiments/**/*.onnx
+experiments/**/submission.csv
+experiments/**/oof*.csv
+experiments/**/test_pred*.csv
+experiments/**/predictions*.csv
+
+# Generated runtime state that can contain machine-specific history
+submissions/
+
+# Notebook checkpoints
+.ipynb_checkpoints/

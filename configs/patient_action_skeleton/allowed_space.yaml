@@ -1,0 +1,89 @@
+model:
+  type:
+    - lightgbm
+    - xgboost
+    - catboost
+    - tabular_nn
+    - skeleton_transformer
+  params:
+    learning_rate:
+      min: 0.005
+      max: 0.2
+    num_leaves:
+      min: 16
+      max: 256
+    max_depth:
+      min: 3
+      max: 12
+    d_model:
+      min: 32
+      max: 256
+    nhead:
+      - 2
+      - 4
+      - 8
+    num_layers:
+      min: 1
+      max: 6
+    dropout:
+      min: 0.0
+      max: 0.5
+features:
+  use_frequency_encoding:
+    - true
+    - false
+  use_target_encoding:
+    - true
+    - false
+  use_interactions:
+    - true
+    - false
+  use_missing_indicators:
+    - true
+    - false
+  use_roi_features:
+    - true
+    - false
+  use_view_aware_features:
+    - true
+    - false
+  use_bed_wandering_aux_head:
+    - true
+    - false
+cv:
+  n_splits:
+    - 5
+    - 10
+  seed:
+    min: 1
+    max: 9999
+data:
+  window_size:
+    - 30
+  step_size:
+    - 5
+  input_size:
+    min: 1
+    max: 512
+training:
+  epochs:
+    min: 1
+    max: 200
+  batch_size:
+    - 16
+    - 32
+    - 64
+  warmup_epochs:
+    min: 0
+    max: 20
+  early_stopping_patience:
+    min: 1
+    max: 50
+objective_metrics:
+  primary:
+    - selection_score
+    - macro_f1
+    - bed_exit_f1
+  safety_class:
+    - Fall
+    - Bed Exit

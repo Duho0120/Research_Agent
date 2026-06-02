@@ -1,0 +1,27 @@
+default_backend: local
+local_first: true
+ask_before_colab: true
+estimated_runtime_minutes_over: 30
+colab_when:
+  require_gpu: true
+  estimated_runtime_minutes_over: 30
+  local_device_missing: true
+  local_previous_run_failed_due_to_resource: true
+local_failure_patterns:
+  resource_cpu_memory:
+    - CUDA out of memory
+    - out of memory
+    - MemoryError
+  resource_gpu_missing:
+    - CUDA is not available
+    - No CUDA
+    - GPU not found
+  missing_file:
+    - No such file
+    - FileNotFoundError
+  missing_dependency:
+    - ModuleNotFoundError
+    - ImportError
+  permission_error:
+    - PermissionError
+    - Access is denied

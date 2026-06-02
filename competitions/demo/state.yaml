@@ -1,0 +1,18 @@
+competition:
+  name: demo
+  metric: accuracy
+  objective: maximize
+  submission_limit_per_day: 5
+current_state:
+  active_trial: trial_003
+  best_trial:
+    trial_id: local_demo_001
+    cv_score: 0.83
+    lb_score: null
+  consecutive_failures: 8
+  submissions_today: 0
+  validation_suspected: false
+strategy:
+  current_focus: build reliable baseline
+  promising_directions:
+  forbidden_directions:

@@ -1,0 +1,21 @@
+review_when:
+  high_error_concentration: true
+  label_boundary_ambiguous: true
+  validation_or_leakage_suspected: true
+  safety_false_negative: true
+  strategy_shift_required: true
+  repeated_failures: true
+repeated_failures_threshold: 3
+blocking_safety_classes:
+  - Fall
+question_types:
+  - label_question
+  - validation_question
+  - feature_question
+  - execution_approval
+  - submission_approval
+  - strategy_shift_question
+  - visual_semantic_question
+  - data_quality_question
+max_questions_per_review: 3
+default_review_action: prepare_review_pack

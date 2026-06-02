@@ -1,0 +1,32 @@
+axes:
+  - validation
+  - preprocessing
+  - feature_engineering
+  - augmentation
+  - sampling
+  - loss_metric_alignment
+  - hyperparameter
+  - training_recipe
+  - model_architecture
+  - model_family
+  - pretraining_strategy
+  - post_processing
+  - ensemble_submission
+  - compute_backend
+  - error_analysis
+  - human_review
+one_primary_axis_per_trial: true
+protect_model_changes_when_validation_suspected: true
+strategy_map:
+  validation: validation_review
+  model_architecture: sota_architecture_attempt
+  model_family: model_family_change
+  pretraining_strategy: sota_architecture_attempt
+  hyperparameter: controlled_refinement
+  training_recipe: controlled_refinement
+  feature_engineering: controlled_refinement
+  augmentation: controlled_refinement
+  sampling: controlled_refinement
+  loss_metric_alignment: controlled_refinement
+  post_processing: controlled_refinement
+  error_analysis: controlled_refinement

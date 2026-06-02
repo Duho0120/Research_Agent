@@ -1,0 +1,33 @@
+model:
+  type: skeleton_transformer
+  params:
+    learning_rate: 0.03
+    num_leaves: 64
+    max_depth: 8
+    d_model: 96
+    nhead: 4
+    num_layers: 2
+    dropout: 0.15
+features:
+  use_frequency_encoding: false
+  use_target_encoding: false
+  use_interactions: false
+  use_missing_indicators: true
+  use_roi_features: true
+  use_view_aware_features: false
+  use_bed_wandering_aux_head: true
+cv:
+  n_splits: 5
+  seed: 42
+data:
+  window_size: 30
+  step_size: 5
+  input_size: 127
+training:
+  epochs: 50
+  batch_size: 32
+  warmup_epochs: 5
+  early_stopping_patience: 15
+objective_metrics:
+  primary: selection_score
+  safety_class: Fall
