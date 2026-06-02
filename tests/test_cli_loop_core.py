@@ -398,6 +398,35 @@ class CliLoopCoreTest(unittest.TestCase):
             plan = json.loads((trial / "pipeline_improvement_plan.json").read_text(encoding="utf-8"))
             self.assertEqual(plan["primary_axis"], "validation")
 
+    def test_advise_models_command_creates_model_candidates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            comp = root / "competitions" / "demo"
+            comp.mkdir(parents=True)
+            (comp / "data_profile.json").write_text(
+                json.dumps(
+                    {
+                        "competition": "demo",
+                        "status": "ready",
+                        "task_type": "tabular",
+                        "target_candidates": ["target"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            trial = root / "experiments" / "demo" / "trial_001"
+            trial.mkdir(parents=True)
+            (trial / "metrics.json").write_text(json.dumps({"cv_score": 0.71, "objective": "maximize"}), encoding="utf-8")
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with redirect_stdout(io.StringIO()):
+                    code = main(["advise-models", "--competition", "demo", "--trial", "trial_001"])
+
+            self.assertEqual(code, 0)
+            self.assertTrue((trial / "model_candidates.md").exists())
+            result = json.loads((trial / "model_candidates.json").read_text(encoding="utf-8"))
+            self.assertEqual(result["candidates"][0]["model_family"], "gradient_boosted_trees")
+
     def test_prepare_patch_command_creates_code_patch_plan(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

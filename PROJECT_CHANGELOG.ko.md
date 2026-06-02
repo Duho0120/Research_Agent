@@ -1085,6 +1085,47 @@ python -B -m unittest discover -s tests -v
 - `99 tests`
 - `OK`
 
+### Model Candidate Advisor 12차 구현
+
+요약:
+
+- Planning Agent 내부 도구로 `Model Candidate Advisor`를 추가했다.
+- 목적은 대회/task/data profile/최근 trial evidence를 보고 다음에 검토할 모델 계열과 학습 전략을 구조화하는 것이다.
+- 이 도구는 모델 변경을 기본값으로 만들지 않는다.
+- validation 문제가 의심되거나 `pipeline_improvement_plan.json`에서 모델 변경이 protected axis로 지정되면 모델 변경을 보류한다.
+- DINOv2 같은 특정 사례에 과적합하지 않고, task type별 일반 후보군과 guardrail을 제안한다.
+
+주요 산출물:
+
+- `experiments/<competition>/<trial>/model_candidates.json`
+- `experiments/<competition>/<trial>/model_candidates.md`
+
+주요 변경:
+
+- `kaggle_research_agent/agents/model_advisor.py` 추가
+  - `advise_model_candidates()` 추가
+  - tabular/image/text/unknown task type별 후보 모델군 제안
+  - pretrained fine-tuning vs train-from-scratch 판단
+  - validation 보호축일 때 `defer_model_change`로 분기
+- `kaggle_research_agent/cli.py`
+  - `advise-models` CLI 명령 추가
+- `tests/test_model_advisor.py` 추가
+  - tabular baseline-friendly 후보 테스트
+  - image pretrained vision 후보 테스트
+  - validation primary axis에서 model change 보호 테스트
+- `tests/test_cli_loop_core.py`
+  - `advise-models` CLI 산출물 생성 테스트 추가
+- `README.md`
+  - Planning Agent 내부 도구로 `Model Candidate Advisor` 반영
+  - `advise-models` 사용법 추가
+
+설계 원칙:
+
+- 모델 선택은 pipeline 개선축 중 하나일 뿐이다.
+- validation, data split, leakage, human review 문제가 우선이면 모델 변경을 미룬다.
+- 최신 모델 웹 검색은 이번 범위에 포함하지 않고, 이후 별도 research/search 단계로 분리한다.
+- LangGraph runtime은 아직 적용하지 않고, 나중에 node로 옮기기 쉬운 함수형 내부 도구로 유지한다.
+
 ### 5개 Top-level Agent 구조로 공식 아키텍처 재정렬
 
 요약:

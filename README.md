@@ -5,7 +5,7 @@ Starter implementation for a staged autonomous Kaggle research system.
 ## What is included
 
 - Knowledge and Memory Agent: manages competition context, data profiles, research notes, trial memory, rules, review packs, and user feedback.
-- Planning Agent: plans trials, chooses improvement axes, generates baseline plans, prepares patch plans, and creates coding handoff requests.
+- Planning Agent: plans trials, chooses improvement axes, advises model-family candidates, generates baseline plans, prepares patch plans, and creates coding handoff requests.
 - Training and Execution Agent: creates local/Colab jobs, runs local commands, applies prepared patch plans, and preserves run artifacts.
 - Evaluation and Decision Agent: evaluates metrics, diagnoses results, validates patch/submission gates, and decides when human review is needed.
 - Feedback and Orchestration Agent: coordinates the loop, records decisions, updates memory, and controls bounded auto-research cycles.
@@ -19,7 +19,7 @@ Completed:
 - The project is organized as 5 top-level agents with smaller internal tools/modules for implementation detail.
 - The conservative research loop can plan, validate, run locally, evaluate metrics, diagnose results, update memory, and produce next-experiment recommendations.
 - Knowledge and Memory tools can inspect competitions, profile `data/<competition>/`, detect train/test/sample-submission roles, infer simple task/schema hints, and write `data_profile.md/json`.
-- Planning tools can create `next_experiment.md`, choose the next improvement axis, create a first tabular baseline plan, convert plans into `config.yaml` and `code_patch_plan.md/json`, and prepare `coding_handoff.json` / `coding_agent_request.md`.
+- Planning tools can create `next_experiment.md`, choose the next improvement axis, advise task-appropriate model candidates, create a first tabular baseline plan, convert plans into `config.yaml` and `code_patch_plan.md/json`, and prepare `coding_handoff.json` / `coding_agent_request.md`.
 - Training and Execution tools can apply a prepared patch plan, run a local command, then produce `metrics.json`, `evaluation.md`, `diagnosis.md`, and `code_edit_result.md/json`.
 - Evaluation and Decision tools can check `code_patch_plan.json` before execution, write `patch_validation.md/json`, record decisions in `decision_log.jsonl`, and block unsafe or incomplete patch plans.
 - Submission tools can record before/after score and rank metadata, preserve version files, mark the best trial, and expose `submit-trial` for manual or command-hooked submission runs.
@@ -35,6 +35,7 @@ Completed:
 - Human Review now has a closed feedback loop: `request-review` creates a review pack, `record-feedback` updates that pack, and `plan-next` can use recent user feedback.
 - Failed local runs now write `local_failure.json/md`, and the execution policy gate uses that structured artifact before falling back to raw log pattern matching.
 - The Pipeline Improvement Planner can choose the next improvement axis such as validation, preprocessing, augmentation, loss/metric alignment, hyperparameter tuning, model family, pretraining strategy, post-processing, or human review.
+- The Model Candidate Advisor can read `data_profile.json`, metrics, state, and `pipeline_improvement_plan.json` to write `model_candidates.md/json` without treating model change as the default next action.
 - The Pipeline Patch Planner uses `pipeline_improvement_plan.json` to translate selected axes into config changes, target files, approval gates, and implementation steps.
 - Patch validation now checks target files, generated config validity, required validation commands, protected-axis violations, user-approval gates, and forbidden submission-artifact edits before patch execution. `apply-patch` uses this validator result as the single patch safety gate.
 - Coding handoff now standardizes what is sent to a future Codex/API coding worker: objective, target files, required config changes, implementation steps, guardrails, and validation commands.
@@ -55,6 +56,7 @@ start-competition / init
   -> evaluate metrics
   -> diagnose
   -> plan pipeline improvement
+  -> advise model candidates when model choice matters
   -> decide human review
   -> prepare review pack / record feedback
   -> remember
@@ -81,7 +83,7 @@ Latest verified baseline:
 python -B -m unittest discover -s tests -v
 ```
 
-Expected result: `99 tests`, `OK`.
+Expected result: `103 tests`, `OK`.
 
 ## Agent Architecture
 
@@ -95,6 +97,7 @@ Knowledge and Memory Agent
 Planning Agent
   -> trial planning
   -> pipeline improvement planning
+  -> model candidate advising
   -> baseline generation planning
   -> patch planning
   -> coding handoff preparation
@@ -118,7 +121,7 @@ Feedback and Orchestration Agent
   -> memory update and next-trial feedback loop
 ```
 
-Implementation modules are intentionally smaller than the top-level agents. Files such as `pipeline_planner.py`, `patch_validator.py`, `coding_handoff.py`, and `baseline_generator.py` are internal tools used by the 5-agent architecture, not separate top-level agents.
+Implementation modules are intentionally smaller than the top-level agents. Files such as `pipeline_planner.py`, `model_advisor.py`, `patch_validator.py`, `coding_handoff.py`, and `baseline_generator.py` are internal tools used by the 5-agent architecture, not separate top-level agents.
 
 ## Policy Design
 
@@ -143,10 +146,12 @@ Useful policy commands:
 python -B -m kaggle_research_agent.cli decide-llm --competition demo --trial trial_001 --reason human_review_needed
 python -B -m kaggle_research_agent.cli request-review --competition demo --trial trial_001
 python -B -m kaggle_research_agent.cli plan-improvement --competition demo --trial trial_001
+python -B -m kaggle_research_agent.cli advise-models --competition demo --trial trial_001
 ```
 
 `decide-llm` records token-policy decisions in `memory/<competition>/decision_log.jsonl`. `request-review` now prepares the standard `review_pack/` when the human-review policy asks for one.
 `plan-improvement` writes `pipeline_improvement_plan.md/json` and keeps model changes as only one branch among validation, data, augmentation, loss, training, post-processing, and review decisions.
+`advise-models` writes `model_candidates.md/json` and recommends model families, training strategy, and guardrails from the current data profile and trial evidence.
 
 Human feedback closes the review loop:
 

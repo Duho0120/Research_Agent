@@ -10,6 +10,7 @@ from .data_onboarding import profile_competition_data
 from .agents.experiment_runner import apply_patch_plan, create_job, run_local_job
 from .agents.coding_handoff import prepare_coding_handoff
 from .agents.memory import record_user_feedback, remember_trial, request_user_review
+from .agents.model_advisor import advise_model_candidates
 from .agents.orchestrator import run_auto_research_loop, run_cycle
 from .agents.pipeline_planner import plan_pipeline_improvement
 from .agents.pipeline_patch_planner import prepare_patch_plan
@@ -172,6 +173,10 @@ def main(argv: list[str] | None = None) -> int:
     p_improve = sub.add_parser("plan-improvement")
     p_improve.add_argument("--competition", required=True)
     p_improve.add_argument("--trial", required=True)
+
+    p_advise_models = sub.add_parser("advise-models")
+    p_advise_models.add_argument("--competition", required=True)
+    p_advise_models.add_argument("--trial", required=True)
 
     p_patch = sub.add_parser("prepare-patch")
     p_patch.add_argument("--competition", required=True)
@@ -392,6 +397,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "plan-improvement":
         plan = plan_pipeline_improvement(args.competition, args.trial)
         print(f"Pipeline improvement: {plan['trial_id']} axis={plan['primary_axis']}")
+        return 0
+
+    if args.command == "advise-models":
+        result = advise_model_candidates(args.competition, args.trial)
+        print(f"Model candidates: {result['trial_id']} scope={result['recommendation_scope']}")
         return 0
 
     if args.command == "prepare-patch":
