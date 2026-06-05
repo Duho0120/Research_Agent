@@ -131,3 +131,15 @@ experiments/<competition>/<trial>/coding_result_validation.md
 - 결과 저장 후 즉시 `validate-coding-result`를 실행한다.
 
 OpenAI Responses API를 사용할 때의 기본 endpoint는 공식 API 문서 기준 `POST https://api.openai.com/v1/responses`이며, 이 프로젝트에서는 표준 라이브러리 기반 client가 `OPENAI_API_KEY` 환경 변수를 읽는다.
+
+## Validation Command Runner
+
+`coding_result_validation.json`의 status가 `accepted`이면 다음 단계에서 `run-validation-commands`를 실행할 수 있다.
+
+운영 원칙:
+
+- `accepted`가 아니면 validation command를 실행하지 않는다.
+- 실행 대상 명령은 `coding_handoff.json`의 `validation_commands`에서 읽는다.
+- 각 명령의 stdout/stderr는 `validation_command_001.log` 같은 파일로 저장한다.
+- 전체 결과는 `validation_run.json`과 `validation_run.md`에 저장한다.
+- `run-code-writer --run-validation-commands`를 사용하면 code writer 결과가 accepted인 경우에만 이어서 validation command를 실행한다.

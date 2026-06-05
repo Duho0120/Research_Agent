@@ -43,6 +43,7 @@ Completed:
 - Coding handoff now has a versioned request contract with context files, allowed write files, declared new files, forbidden paths, execution constraints, and a required `coding_result` output schema.
 - Coding result validation now checks future coding-worker output before downstream execution, including required fields, status values, changed-file scope, declared new files, and forbidden paths. `write-code-dry-run` can create a blocked placeholder result without calling an external API.
 - Code Writer Adapter can now call an injected/mock client or the OpenAI Responses API behind an explicit `--allow-api` flag, accept JSON `file_updates`, apply only allowed paths, and immediately run `validate-coding-result`.
+- Validation Command Runner can execute the handoff validation commands after an accepted coding result, write `validation_run.md/json`, and record the command outcome in `decision_log.jsonl`.
 - Data onboarding now uses local files when available, or falls back to the Kaggle inspection file listing when data has not been downloaded yet.
 - Baseline generation currently targets tabular CSV competitions with a detected target column and writes a local sanity-check `submission.csv` and `metrics.json` when run.
 - Responsibility boundaries were tightened: Pipeline Patch Planner plans only, Patch Validator is the execution safety gate, Coding Handoff reuses existing validation, and Baseline Generator consumes the saved data profile snapshot.
@@ -71,6 +72,7 @@ start-competition / init
   -> prepare coding handoff
   -> run code writer / dry-run code writer
   -> validate coding result
+  -> run validation commands
   -> apply patch plan
   -> prepare submission manifest
   -> submit after approval and leaderboard evidence
@@ -82,7 +84,6 @@ Still pending:
 - Data download, schema analysis, and baseline training code generation from a competition inspection.
 - Automatic submission policy beyond `never` / `prepare_only`.
 - Real-world validation of the code-writer API path with a live key and a deliberately small approved patch.
-- Automatic execution of validation commands after accepted code-writer output.
 - Full LangGraph auto-loop replacement; the current graph command covers the one-trial cycle first.
 
 Latest verified baseline:
@@ -91,7 +92,7 @@ Latest verified baseline:
 python -B -m unittest discover -s tests -v
 ```
 
-Expected result: `118 tests`, `OK`.
+Expected result: `123 tests`, `OK`.
 
 ## Agent Architecture
 
@@ -114,6 +115,7 @@ Training and Execution Agent
   -> local / Colab job creation
   -> local run execution
   -> scoped code-writer file updates
+  -> validation command execution
   -> patch application
 
 Evaluation and Decision Agent
@@ -374,6 +376,12 @@ Run the Code Writer Adapter with a local mock response file:
 python -B -m kaggle_research_agent.cli run-code-writer --competition demo --trial trial_002 --mock-response-file mock_response.json
 ```
 
+Run the Code Writer Adapter and immediately execute accepted validation commands:
+
+```powershell
+python -B -m kaggle_research_agent.cli run-code-writer --competition demo --trial trial_002 --mock-response-file mock_response.json --run-validation-commands
+```
+
 Run the Code Writer Adapter with the OpenAI Responses API only when you explicitly approve an API call:
 
 ```powershell
@@ -384,6 +392,12 @@ Validate a coding-agent result before downstream execution:
 
 ```powershell
 python -B -m kaggle_research_agent.cli validate-coding-result --competition demo --trial trial_002
+```
+
+Execute validation commands after an accepted coding result:
+
+```powershell
+python -B -m kaggle_research_agent.cli run-validation-commands --competition demo --trial trial_002
 ```
 
 Or let the cycle create the next-experiment recommendation immediately after diagnosis and memory update:

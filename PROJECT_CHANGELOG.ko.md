@@ -1340,3 +1340,33 @@ python -B -m unittest discover -s tests -v
 공식 API 참고:
 
 - OpenAI Responses API는 공식 문서 기준 `POST https://api.openai.com/v1/responses`를 사용한다.
+
+### Validation Command Runner 17차 구현
+
+요약:
+
+- accepted 된 `coding_result_validation.json` 이후에 handoff의 `validation_commands`를 실행하는 검증 runner를 추가했다.
+- Code Writer Adapter에 `--run-validation-commands` 옵션을 연결해, mock/API 코딩 결과가 accepted일 때 검증 명령까지 이어서 실행할 수 있게 했다.
+- accepted가 아닌 결과에서는 명령을 실행하지 않고 `blocked`로 기록한다.
+
+주요 변경:
+
+- `kaggle_research_agent/agents/validation_command_runner.py` 추가
+  - `run_validation_commands`
+  - `render_validation_run`
+- `run-validation-commands` CLI 추가
+  - `coding_result_validation.json`이 accepted일 때만 실행
+  - 결과를 `validation_run.json/md`에 저장
+  - 각 명령 로그를 `validation_command_001.log` 형식으로 저장
+  - `decision_log.jsonl`에 `decision_type: validation_commands` 기록
+- `run-code-writer --run-validation-commands` 옵션 추가
+  - code writer 결과가 accepted인 경우에만 validation command runner 실행
+- `README.md`, `docs/policies/coding_request_schema.ko.md`
+  - 17차 흐름과 명령 예시 반영
+
+설계 원칙:
+
+- 코드 작성 결과 검증과 학습 실행은 분리한다.
+- validation command는 코드 수정이 안전하게 accepted 된 뒤에만 실행한다.
+- 명령 stdout/stderr는 별도 로그 파일로 남겨 이후 diagnosis나 human review 입력으로 사용할 수 있게 한다.
+- 이번 단계는 5개 top-level agent를 늘리지 않고, Training/Execution Agent의 내부 실행 도구로 둔다.

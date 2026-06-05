@@ -650,6 +650,91 @@ class CliLoopCoreTest(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertIn("balanced", (trial / "config.yaml").read_text(encoding="utf-8"))
 
+    def test_run_code_writer_command_can_run_validation_commands(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trial = root / "experiments" / "demo" / "trial_002"
+            trial.mkdir(parents=True)
+            (trial / "config.yaml").write_text("model:\n  type: lightgbm\n", encoding="utf-8")
+            self._write_coding_handoff(
+                trial,
+                validation_commands=[
+                    (
+                        "python -c \"from pathlib import Path; "
+                        "Path(r'experiments/demo/trial_002/cli_validated.txt').write_text('ok', encoding='utf-8')\""
+                    )
+                ],
+            )
+            response_path = root / "mock_response.json"
+            response_path.write_text(
+                json.dumps(
+                    {
+                        "output_text": json.dumps(
+                            {
+                                "status": "completed",
+                                "summary": "Updated config from mock response.",
+                                "changed_files": ["experiments/demo/trial_002/config.yaml"],
+                                "file_updates": [
+                                    {
+                                        "path": "experiments/demo/trial_002/config.yaml",
+                                        "content": "model:\n  type: lightgbm\ntraining:\n  sampler: balanced\n",
+                                    }
+                                ],
+                                "validation_results": [],
+                                "blocking_issues": [],
+                            }
+                        )
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with redirect_stdout(io.StringIO()):
+                    code = main(
+                        [
+                            "run-code-writer",
+                            "--competition",
+                            "demo",
+                            "--trial",
+                            "trial_002",
+                            "--mock-response-file",
+                            str(response_path),
+                            "--run-validation-commands",
+                        ]
+                    )
+
+            self.assertEqual(code, 0)
+            self.assertTrue((trial / "validation_run.json").exists())
+            self.assertTrue((trial / "cli_validated.txt").exists())
+
+    def test_run_validation_commands_cli_writes_validation_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trial = root / "experiments" / "demo" / "trial_002"
+            trial.mkdir(parents=True)
+            self._write_coding_handoff(
+                trial,
+                validation_commands=[
+                    (
+                        "python -c \"from pathlib import Path; "
+                        "Path(r'experiments/demo/trial_002/standalone_validated.txt').write_text('ok', encoding='utf-8')\""
+                    )
+                ],
+            )
+            (trial / "coding_result_validation.json").write_text(
+                json.dumps({"competition": "demo", "trial_id": "trial_002", "status": "accepted", "issues": []}),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with redirect_stdout(io.StringIO()):
+                    code = main(["run-validation-commands", "--competition", "demo", "--trial", "trial_002"])
+
+            self.assertEqual(code, 0)
+            self.assertTrue((trial / "validation_run.json").exists())
+            self.assertTrue((trial / "standalone_validated.txt").exists())
+
     def test_cycle_accepts_apply_next_patch_options(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -856,7 +941,7 @@ class CliLoopCoreTest(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertTrue((trial / "diagnosis.md").exists())
 
-    def _write_coding_handoff(self, trial: Path) -> None:
+    def _write_coding_handoff(self, trial: Path, validation_commands: list[str] | None = None) -> None:
         (trial / "coding_handoff.json").write_text(
             json.dumps(
                 {
@@ -872,6 +957,9 @@ class CliLoopCoreTest(unittest.TestCase):
                         "submissions/",
                         "experiments/demo/trial_002/submission.csv",
                         "experiments/demo/trial_002/metrics.json",
+                    ],
+                    "validation_commands": validation_commands or [
+                        "python -B -m unittest discover -s tests -v",
                     ],
                     "required_output": {
                         "required_fields": [

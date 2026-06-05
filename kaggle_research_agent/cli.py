@@ -22,6 +22,7 @@ from .agents.research_planner import propose_next_experiment, propose_plan
 from .agents.result_analyst import diagnose_trial, evaluate_trial
 from .agents.review_pack import prepare_review_pack
 from .agents.submission import prepare_submission, record_submission_result, submit_trial
+from .agents.validation_command_runner import run_validation_commands
 from .graph.research_graph import run_graph_cycle
 from .paths import competition_configs_dir, configs_dir, trial_dir
 from .store import init_project
@@ -229,6 +230,11 @@ def main(argv: list[str] | None = None) -> int:
     p_run_code_writer.add_argument("--trial-llm-calls", type=int, default=0)
     p_run_code_writer.add_argument("--strategy-calls-today", type=int, default=0)
     p_run_code_writer.add_argument("--mock-response-file", default=None)
+    p_run_code_writer.add_argument("--run-validation-commands", action="store_true")
+
+    p_run_validation_commands = sub.add_parser("run-validation-commands")
+    p_run_validation_commands.add_argument("--competition", required=True)
+    p_run_validation_commands.add_argument("--trial", required=True)
 
     args = parser.parse_args(argv)
 
@@ -495,9 +501,16 @@ def main(argv: list[str] | None = None) -> int:
             allow_api=args.allow_api,
             trial_llm_calls=args.trial_llm_calls,
             strategy_calls_today=args.strategy_calls_today,
+            run_validation_after=args.run_validation_commands,
         )
         print(f"Code writer: {result['trial_id']} status={result['status']}")
-        return 0 if result["status"] == "accepted" else 1
+        validation_status = result.get("validation_command_status")
+        return 0 if result["status"] == "accepted" and validation_status in {None, "passed"} else 1
+
+    if args.command == "run-validation-commands":
+        result = run_validation_commands(args.competition, args.trial)
+        print(f"Validation commands: {result['trial_id']} status={result['status']}")
+        return 0 if result["status"] == "passed" else 1
 
     return 1
 

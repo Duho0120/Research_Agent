@@ -63,6 +63,7 @@ def run_code_writer(
     allow_api: bool = False,
     trial_llm_calls: int = 0,
     strategy_calls_today: int = 0,
+    run_validation_after: bool = False,
 ) -> dict[str, Any]:
     out_dir = trial_dir(competition, trial_id)
     handoff_path = out_dir / "coding_handoff.json"
@@ -117,6 +118,12 @@ def run_code_writer(
         },
         next_action=validation["next_action"],
     )
+    if run_validation_after and validation["status"] == "accepted":
+        from .validation_command_runner import run_validation_commands
+
+        command_result = run_validation_commands(competition, trial_id)
+        validation["validation_command_status"] = command_result["status"]
+        validation["validation_command_count"] = len(command_result["commands"])
     return validation
 
 
