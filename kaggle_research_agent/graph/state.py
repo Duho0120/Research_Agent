@@ -14,6 +14,10 @@ class ResearchGraphState(TypedDict, total=False):
     prepare_next_patch: bool
     apply_next_patch: bool
     next_run_command: str | None
+    run_safe_chain: bool
+    safe_chain_mock_response_file: str | None
+    safe_chain_allow_api: bool
+    safe_chain_model: str
     steps: list[str]
     status: str
     plan: dict[str, Any]
@@ -26,6 +30,7 @@ class ResearchGraphState(TypedDict, total=False):
     memory: dict[str, Any]
     execution_decision: dict[str, Any]
     job: dict[str, Any]
+    safe_execution_chain: dict[str, Any]
     next_experiment: dict[str, Any]
     patch_plan: dict[str, Any]
     next_code_edit: dict[str, Any]

@@ -4,6 +4,7 @@
 from typing import Any
 
 from ..config_validator import validate_config
+from .code_writer_adapter import FileResponseClient
 from .experiment_runner import apply_patch_plan, create_job, run_local_job
 from .memory import log_decision, remember_trial
 from .pipeline_patch_planner import prepare_patch_plan
@@ -11,6 +12,7 @@ from .policy_gate import decide_execution, decide_human_review
 from .research_planner import propose_next_experiment, propose_plan
 from .result_analyst import diagnose_trial, evaluate_trial
 from .review_pack import prepare_review_pack
+from .safe_execution_chain import run_safe_execution_chain
 from ..paths import competition_configs_dir, configs_dir, trial_dir
 from .. import simple_yaml
 
@@ -91,6 +93,10 @@ def run_cycle(
     prepare_next_patch: bool = False,
     apply_next_patch: bool = False,
     next_run_command: str | None = None,
+    run_safe_chain: bool = False,
+    safe_chain_mock_response_file: str | None = None,
+    safe_chain_allow_api: bool = False,
+    safe_chain_model: str = "gpt-5",
 ) -> dict[str, Any]:
     """Run the conservative Level 1/2 cycle for one trial.
 
@@ -132,6 +138,23 @@ def run_cycle(
         return result
 
     if create_job_request:
+        if run_safe_chain:
+            client = FileResponseClient(safe_chain_mock_response_file) if safe_chain_mock_response_file else None
+            chain = run_safe_execution_chain(
+                competition,
+                trial_id,
+                client=client,
+                model=safe_chain_model,
+                allow_api=safe_chain_allow_api,
+                command=command,
+                backend=backend,
+                run_now=run_now,
+            )
+            result["safe_execution_chain"] = chain
+            result["steps"].append("safe_execution_chain_ran")
+            result["status"] = chain["status"]
+            return result
+
         execution = decide_execution(
             competition,
             trial_id,

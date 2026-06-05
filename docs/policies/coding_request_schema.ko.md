@@ -175,3 +175,17 @@ run-code-writer
 - validation command가 passed가 아니면 trial 실행이나 job 생성을 하지 않는다.
 - 전체 체인 결과는 `safe_execution_chain.json`과 `safe_execution_chain.md`에 저장한다.
 - 판단은 `decision_log.jsonl`에 `decision_type: safe_execution_chain`으로 기록한다.
+
+## Orchestration Integration
+
+`cycle`과 `run-graph-cycle`은 기본적으로 기존의 보수적인 trial cycle을 유지한다.
+Safe Execution Chain은 사용자가 `--run-safe-chain`을 명시했을 때만 실행된다.
+
+운영 원칙:
+
+- `--run-safe-chain`이 없으면 기존 `decide_execution` 경로를 사용한다.
+- `--run-safe-chain`이 있으면 현재 trial의 `coding_handoff.json`을 읽고 Safe Execution Chain을 실행한다.
+- mock response file을 사용하면 외부 API 없이 같은 cycle 경로를 검증할 수 있다.
+- live API 호출은 `--safe-chain-allow-api`가 있을 때만 허용한다.
+- cycle 내부에서 실행해도 code writer, coding result validation, validation commands, post-validation execution gate를 우회하지 않는다.
+- chain 결과는 `safe_execution_chain.json/md`와 `decision_log.jsonl`에 남긴다.

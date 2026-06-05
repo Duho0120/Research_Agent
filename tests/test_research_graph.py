@@ -103,6 +103,103 @@ class ResearchGraphTest(unittest.TestCase):
             self.assertIn("local_job_created", result["steps"])
             self.assertEqual("local", result["job"]["backend"])
 
+    def test_graph_cycle_can_run_safe_execution_chain_when_requested(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_allowed_space(root)
+            self._write_state(root)
+            trial = root / "experiments" / "demo" / "trial_002"
+            trial.mkdir(parents=True)
+            (trial / "config.yaml").write_text(
+                json.dumps({"model": {"type": "lightgbm"}, "features": {}, "cv": {}}),
+                encoding="utf-8",
+            )
+            self._write_coding_handoff(
+                trial,
+                [
+                    (
+                        "python -c \"from pathlib import Path; "
+                        "Path(r'experiments/demo/trial_002/graph_validated.txt').write_text('ok', encoding='utf-8')\""
+                    )
+                ],
+            )
+            response_path = root / "mock_response.json"
+            self._write_mock_code_response(response_path)
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = run_graph_cycle(
+                    "demo",
+                    "trial_002",
+                    run_safe_chain=True,
+                    safe_chain_mock_response_file=str(response_path),
+                    command="python train.py",
+                )
+
+            self.assertIn("safe_execution_chain_ran", result["steps"])
+            self.assertEqual("job_created", result["safe_execution_chain"]["status"])
+            self.assertTrue((trial / "safe_execution_chain.json").exists())
+            self.assertTrue((root / "jobs" / "demo" / "demo_trial_002.yaml").exists())
+
+    def _write_coding_handoff(self, trial: Path, validation_commands: list[str]) -> None:
+        (trial / "coding_handoff.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "request_id": "demo:trial_002:coding",
+                    "competition": "demo",
+                    "trial_id": "trial_002",
+                    "status": "ready",
+                    "objective": "Implement the validated code patch plan without expanding scope.",
+                    "context_files": ["experiments/demo/trial_002/config.yaml"],
+                    "allowed_write_files": ["experiments/demo/trial_002/config.yaml"],
+                    "create_files": [],
+                    "forbidden_paths": [
+                        "data/",
+                        "submissions/",
+                        "experiments/demo/trial_002/submission.csv",
+                        "experiments/demo/trial_002/metrics.json",
+                    ],
+                    "implementation_steps": ["Add balanced sampler config."],
+                    "validation_commands": validation_commands,
+                    "required_output": {
+                        "required_fields": [
+                            "status",
+                            "summary",
+                            "changed_files",
+                            "validation_results",
+                            "blocking_issues",
+                        ],
+                        "status_values": ["completed", "blocked", "failed"],
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def _write_mock_code_response(self, path: Path) -> None:
+        path.write_text(
+            json.dumps(
+                {
+                    "output_text": json.dumps(
+                        {
+                            "status": "completed",
+                            "summary": "Updated config from mock response.",
+                            "changed_files": ["experiments/demo/trial_002/config.yaml"],
+                            "file_updates": [
+                                {
+                                    "path": "experiments/demo/trial_002/config.yaml",
+                                    "content": "model:\n  type: lightgbm\ntraining:\n  sampler: balanced\n",
+                                }
+                            ],
+                            "validation_results": [],
+                            "blocking_issues": [],
+                        }
+                    )
+                }
+            ),
+            encoding="utf-8",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

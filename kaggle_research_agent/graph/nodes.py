@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from ..agents.code_writer_adapter import FileResponseClient
 from ..agents.experiment_runner import apply_patch_plan, create_job, run_local_job
 from ..agents.memory import log_decision, remember_trial
 from ..agents.pipeline_patch_planner import prepare_patch_plan
@@ -9,6 +10,7 @@ from ..agents.policy_gate import decide_execution, decide_human_review
 from ..agents.research_planner import propose_next_experiment, propose_plan
 from ..agents.result_analyst import diagnose_trial, evaluate_trial
 from ..agents.review_pack import prepare_review_pack
+from ..agents.safe_execution_chain import run_safe_execution_chain
 from ..config_validator import validate_config
 from ..paths import competition_configs_dir, configs_dir, trial_dir
 from .. import simple_yaml
@@ -35,9 +37,11 @@ def check_metrics_node(state: ResearchGraphState) -> dict[str, Any]:
     return {"metrics_exists": metrics_exists}
 
 
-def route_after_metrics(state: ResearchGraphState) -> Literal["evaluate", "decide_execution", "end"]:
+def route_after_metrics(state: ResearchGraphState) -> Literal["evaluate", "safe_chain", "decide_execution", "end"]:
     if state.get("metrics_exists"):
         return "evaluate"
+    if state.get("run_safe_chain"):
+        return "safe_chain"
     return "decide_execution" if state.get("create_job_request", True) else "end"
 
 
@@ -117,6 +121,26 @@ def decide_execution_node(state: ResearchGraphState) -> dict[str, Any]:
         config_errors=state.get("config_errors", []),
     )
     return {"execution_decision": execution, "steps": _append_step(state, "execution_decided")}
+
+
+def safe_execution_chain_node(state: ResearchGraphState) -> dict[str, Any]:
+    mock_response_file = state.get("safe_chain_mock_response_file")
+    client = FileResponseClient(mock_response_file) if mock_response_file else None
+    chain = run_safe_execution_chain(
+        state["competition"],
+        state["trial_id"],
+        client=client,
+        model=state.get("safe_chain_model", "gpt-5"),
+        allow_api=state.get("safe_chain_allow_api", False),
+        command=state.get("command"),
+        backend=state.get("backend", "local"),
+        run_now=state.get("run_now", False),
+    )
+    return {
+        "safe_execution_chain": chain,
+        "status": chain["status"],
+        "steps": _append_step(state, "safe_execution_chain_ran"),
+    }
 
 
 def route_after_execution(state: ResearchGraphState) -> Literal["ask_user", "wait", "run_local", "create_job"]:

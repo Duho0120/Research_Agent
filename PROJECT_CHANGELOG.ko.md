@@ -1436,3 +1436,35 @@ python -B -m unittest discover -s tests -v
 - code writer가 accepted가 아니면 validation command를 실행하지 않는다.
 - validation command가 passed가 아니면 local run/job creation으로 가지 않는다.
 - 새 top-level agent를 추가하지 않고 Training/Execution Agent 내부 chain으로 둔다.
+
+## 2026-06-05 KST
+
+### Safe Execution Chain 20차 오케스트레이션 연결
+
+요약:
+
+- 19차에서 만든 `run-safe-execution-chain`을 기존 one-trial cycle에 선택적으로 연결했다.
+- 기본 `cycle`과 `run-graph-cycle` 동작은 유지하고, `--run-safe-chain`을 명시했을 때만 안전 체인을 실행하도록 했다.
+- 코드 작성, coding result validation, validation commands, post-validation execution gate를 모두 재사용하므로 중복 gate나 우회 경로를 만들지 않았다.
+
+주요 변경:
+
+- `run_cycle()`에 `run_safe_chain`, `safe_chain_mock_response_file`, `safe_chain_allow_api`, `safe_chain_model` 옵션 추가
+- LangGraph `StateGraph`에 `safe_chain` 노드와 조건부 edge 추가
+- `cycle` CLI에 `--run-safe-chain`, `--mock-response-file`, `--safe-chain-model`, `--safe-chain-allow-api` 추가
+- `run-graph-cycle` CLI에도 동일 옵션 추가
+- README와 coding request policy에 cycle 내부 안전 체인 실행 원칙 반영
+
+검증:
+
+```powershell
+python -B -m unittest tests.test_orchestrator_diagnosis.OrchestratorDiagnosisTest.test_cycle_can_run_safe_execution_chain_when_requested -v
+python -B -m unittest tests.test_research_graph.ResearchGraphTest.test_graph_cycle_can_run_safe_execution_chain_when_requested -v
+python -B -m unittest tests.test_cli_loop_core.CliLoopCoreTest.test_cycle_command_can_run_safe_execution_chain -v
+```
+
+결과:
+
+- 오케스트레이터 cycle에서 `safe_execution_chain.json`과 job artifact 생성 확인
+- LangGraph cycle에서 동일한 안전 체인 분기 확인
+- CLI `cycle --run-safe-chain` 경로 확인

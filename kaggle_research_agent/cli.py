@@ -93,6 +93,10 @@ def main(argv: list[str] | None = None) -> int:
     p_cycle.add_argument("--prepare-next-patch", action="store_true")
     p_cycle.add_argument("--apply-next-patch", action="store_true")
     p_cycle.add_argument("--next-run-command", dest="next_run_command", default=None)
+    p_cycle.add_argument("--run-safe-chain", action="store_true")
+    p_cycle.add_argument("--mock-response-file", default=None)
+    p_cycle.add_argument("--safe-chain-model", default="gpt-5")
+    p_cycle.add_argument("--safe-chain-allow-api", action="store_true")
 
     p_graph_cycle = sub.add_parser("run-graph-cycle")
     p_graph_cycle.add_argument("--competition", required=True)
@@ -105,6 +109,10 @@ def main(argv: list[str] | None = None) -> int:
     p_graph_cycle.add_argument("--prepare-next-patch", action="store_true")
     p_graph_cycle.add_argument("--apply-next-patch", action="store_true")
     p_graph_cycle.add_argument("--next-run-command", dest="next_run_command", default=None)
+    p_graph_cycle.add_argument("--run-safe-chain", action="store_true")
+    p_graph_cycle.add_argument("--mock-response-file", default=None)
+    p_graph_cycle.add_argument("--safe-chain-model", default="gpt-5")
+    p_graph_cycle.add_argument("--safe-chain-allow-api", action="store_true")
 
     p_auto = sub.add_parser("run-auto-loop")
     p_auto.add_argument("--competition", required=True)
@@ -334,6 +342,10 @@ def main(argv: list[str] | None = None) -> int:
             prepare_next_patch=args.prepare_next_patch,
             apply_next_patch=args.apply_next_patch,
             next_run_command=args.next_run_command,
+            run_safe_chain=args.run_safe_chain,
+            safe_chain_mock_response_file=args.mock_response_file,
+            safe_chain_allow_api=args.safe_chain_allow_api,
+            safe_chain_model=args.safe_chain_model,
         )
         print(" -> ".join(result["steps"]))
         if result.get("config_errors"):
@@ -353,6 +365,10 @@ def main(argv: list[str] | None = None) -> int:
             prepare_next_patch=args.prepare_next_patch,
             apply_next_patch=args.apply_next_patch,
             next_run_command=args.next_run_command,
+            run_safe_chain=args.run_safe_chain,
+            safe_chain_mock_response_file=args.mock_response_file,
+            safe_chain_allow_api=args.safe_chain_allow_api,
+            safe_chain_model=args.safe_chain_model,
         )
         print(" -> ".join(result["steps"]))
         if result.get("config_errors"):

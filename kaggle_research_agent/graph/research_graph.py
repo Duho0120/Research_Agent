@@ -19,6 +19,7 @@ from .nodes import (
     route_after_remember,
     route_after_validation,
     run_local_node,
+    safe_execution_chain_node,
     validate_config_node,
     wait_node,
 )
@@ -40,6 +41,7 @@ def build_research_graph():
     graph.add_node("remember", remember_node)
     graph.add_node("plan_next", plan_next_node)
     graph.add_node("decide_execution", decide_execution_node)
+    graph.add_node("safe_chain", safe_execution_chain_node)
     graph.add_node("ask_user", ask_user_node)
     graph.add_node("wait", wait_node)
     graph.add_node("run_local", run_local_node)
@@ -52,7 +54,7 @@ def build_research_graph():
     graph.add_conditional_edges(
         "check_metrics",
         route_after_metrics,
-        {"evaluate": "evaluate", "decide_execution": "decide_execution", "end": "finalize"},
+        {"evaluate": "evaluate", "safe_chain": "safe_chain", "decide_execution": "decide_execution", "end": "finalize"},
     )
     graph.add_edge("evaluate", "diagnose")
     graph.add_edge("diagnose", "remember")
@@ -63,6 +65,7 @@ def build_research_graph():
         route_after_execution,
         {"ask_user": "ask_user", "wait": "wait", "run_local": "run_local", "create_job": "create_job"},
     )
+    graph.add_edge("safe_chain", "finalize")
     graph.add_edge("ask_user", "finalize")
     graph.add_edge("wait", "finalize")
     graph.add_conditional_edges("run_local", route_after_local_run, {"evaluate": "evaluate", "end": "finalize"})
@@ -83,6 +86,10 @@ def run_graph_cycle(
     prepare_next_patch: bool = False,
     apply_next_patch: bool = False,
     next_run_command: str | None = None,
+    run_safe_chain: bool = False,
+    safe_chain_mock_response_file: str | None = None,
+    safe_chain_allow_api: bool = False,
+    safe_chain_model: str = "gpt-5",
 ) -> dict[str, Any]:
     initial: ResearchGraphState = {
         "competition": competition,
@@ -95,6 +102,10 @@ def run_graph_cycle(
         "prepare_next_patch": prepare_next_patch,
         "apply_next_patch": apply_next_patch,
         "next_run_command": next_run_command,
+        "run_safe_chain": run_safe_chain,
+        "safe_chain_mock_response_file": safe_chain_mock_response_file,
+        "safe_chain_allow_api": safe_chain_allow_api,
+        "safe_chain_model": safe_chain_model,
         "steps": [],
         "status": "running",
     }

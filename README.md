@@ -46,6 +46,7 @@ Completed:
 - Validation Command Runner can execute the handoff validation commands after an accepted coding result, write `validation_run.md/json`, and record the command outcome in `decision_log.jsonl`.
 - Post-Validation Executor can continue from `validation_run.status == passed` into the existing execution policy, creating a local/Colab job or running locally when explicitly requested.
 - Safe Execution Chain can run code writing, coding result validation, validation commands, and post-validation execution in one guarded path that stops at the first failed gate.
+- `cycle` and `run-graph-cycle` can optionally call the Safe Execution Chain with `--run-safe-chain`, so the main trial cycle can move from coding handoff to validated execution without bypassing any gate.
 - Data onboarding now uses local files when available, or falls back to the Kaggle inspection file listing when data has not been downloaded yet.
 - Baseline generation currently targets tabular CSV competitions with a detected target column and writes a local sanity-check `submission.csv` and `metrics.json` when run.
 - Responsibility boundaries were tightened: Pipeline Patch Planner plans only, Patch Validator is the execution safety gate, Coding Handoff reuses existing validation, and Baseline Generator consumes the saved data profile snapshot.
@@ -77,6 +78,7 @@ start-competition / init
   -> run validation commands
   -> run after validation
   -> run safe execution chain
+  -> optionally run safe execution chain inside cycle / run-graph-cycle
   -> apply patch plan
   -> prepare submission manifest
   -> submit after approval and leaderboard evidence
@@ -96,7 +98,7 @@ Latest verified baseline:
 python -B -m unittest discover -s tests -v
 ```
 
-Expected result: `130 tests`, `OK`.
+Expected result: `133 tests`, `OK`.
 
 ## Agent Architecture
 
@@ -422,6 +424,18 @@ Run the guarded end-to-end code-to-execution chain:
 
 ```powershell
 python -B -m kaggle_research_agent.cli run-safe-execution-chain --competition demo --trial trial_002 --mock-response-file mock_response.json --run-command "python scripts/demo_train.py --config experiments/demo/trial_002/config.yaml --output experiments/demo/trial_002"
+```
+
+Run that same guarded chain from the normal cycle only when explicitly requested:
+
+```powershell
+python -B -m kaggle_research_agent.cli cycle --competition demo --trial trial_002 --run-safe-chain --mock-response-file mock_response.json --run-command "python scripts/demo_train.py --config experiments/demo/trial_002/config.yaml --output experiments/demo/trial_002"
+```
+
+The LangGraph one-trial cycle supports the same guarded branch:
+
+```powershell
+python -B -m kaggle_research_agent.cli run-graph-cycle --competition demo --trial trial_002 --run-safe-chain --mock-response-file mock_response.json --run-command "python scripts/demo_train.py --config experiments/demo/trial_002/config.yaml --output experiments/demo/trial_002"
 ```
 
 Or let the cycle create the next-experiment recommendation immediately after diagnosis and memory update:

@@ -833,6 +833,46 @@ class CliLoopCoreTest(unittest.TestCase):
             self.assertTrue((trial / "chain_validated.txt").exists())
             self.assertTrue((root / "jobs" / "demo" / "demo_trial_002.yaml").exists())
 
+    def test_cycle_command_can_run_safe_execution_chain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_minimal_competition_state(root)
+            trial = root / "experiments" / "demo" / "trial_002"
+            trial.mkdir(parents=True)
+            (trial / "config.yaml").write_text(json.dumps({"model": {"type": "lightgbm"}, "features": {}, "cv": {}}), encoding="utf-8")
+            self._write_coding_handoff(
+                trial,
+                validation_commands=[
+                    (
+                        "python -c \"from pathlib import Path; "
+                        "Path(r'experiments/demo/trial_002/cli_cycle_validated.txt').write_text('ok', encoding='utf-8')\""
+                    )
+                ],
+            )
+            response_path = root / "mock_response.json"
+            self._write_mock_code_response(response_path)
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with redirect_stdout(io.StringIO()):
+                    code = main(
+                        [
+                            "cycle",
+                            "--competition",
+                            "demo",
+                            "--trial",
+                            "trial_002",
+                            "--run-safe-chain",
+                            "--mock-response-file",
+                            str(response_path),
+                            "--run-command",
+                            "python train.py",
+                        ]
+                    )
+
+            self.assertEqual(code, 0)
+            self.assertTrue((trial / "safe_execution_chain.json").exists())
+            self.assertTrue((root / "jobs" / "demo" / "demo_trial_002.yaml").exists())
+
     def test_cycle_accepts_apply_next_patch_options(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1069,6 +1109,65 @@ class CliLoopCoreTest(unittest.TestCase):
                         ],
                         "status_values": ["completed", "blocked", "failed"],
                     },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def _write_minimal_competition_state(self, root: Path) -> None:
+        comp = root / "competitions" / "demo"
+        comp.mkdir(parents=True)
+        (comp / "state.yaml").write_text(
+            "competition:\n"
+            "  objective: maximize\n"
+            "current_state:\n"
+            "  consecutive_failures: 0\n",
+            encoding="utf-8",
+        )
+        cfg = root / "configs" / "demo"
+        cfg.mkdir(parents=True)
+        (cfg / "allowed_space.yaml").write_text(
+            json.dumps(
+                {
+                    "model": {
+                        "type": ["lightgbm"],
+                        "params": {
+                            "learning_rate": {"min": 0.005, "max": 0.2},
+                            "num_leaves": {"min": 16, "max": 256},
+                            "max_depth": {"min": 3, "max": 12},
+                        },
+                    },
+                    "features": {
+                        "use_frequency_encoding": [True, False],
+                        "use_target_encoding": [True, False],
+                        "use_interactions": [True, False],
+                        "use_missing_indicators": [True, False],
+                    },
+                    "cv": {"n_splits": [5], "seed": {"min": 1, "max": 9999}},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def _write_mock_code_response(self, path: Path) -> None:
+        path.write_text(
+            json.dumps(
+                {
+                    "output_text": json.dumps(
+                        {
+                            "status": "completed",
+                            "summary": "Updated config from mock response.",
+                            "changed_files": ["experiments/demo/trial_002/config.yaml"],
+                            "file_updates": [
+                                {
+                                    "path": "experiments/demo/trial_002/config.yaml",
+                                    "content": "model:\n  type: lightgbm\ntraining:\n  sampler: balanced\n",
+                                }
+                            ],
+                            "validation_results": [],
+                            "blocking_issues": [],
+                        }
+                    )
                 }
             ),
             encoding="utf-8",
