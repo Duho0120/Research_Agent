@@ -22,6 +22,7 @@ from .agents.post_validation_executor import run_after_validation
 from .agents.research_planner import propose_next_experiment, propose_plan
 from .agents.result_analyst import diagnose_trial, evaluate_trial
 from .agents.review_pack import prepare_review_pack
+from .agents.safe_execution_chain import run_safe_execution_chain
 from .agents.submission import prepare_submission, record_submission_result, submit_trial
 from .agents.validation_command_runner import run_validation_commands
 from .graph.research_graph import run_graph_cycle
@@ -243,6 +244,18 @@ def main(argv: list[str] | None = None) -> int:
     p_run_after_validation.add_argument("--backend", choices=["local", "colab"], default="local")
     p_run_after_validation.add_argument("--run-now", action="store_true")
     p_run_after_validation.add_argument("--run-command", dest="run_command", default=None)
+
+    p_safe_chain = sub.add_parser("run-safe-execution-chain")
+    p_safe_chain.add_argument("--competition", required=True)
+    p_safe_chain.add_argument("--trial", required=True)
+    p_safe_chain.add_argument("--model", default="gpt-5")
+    p_safe_chain.add_argument("--allow-api", action="store_true")
+    p_safe_chain.add_argument("--trial-llm-calls", type=int, default=0)
+    p_safe_chain.add_argument("--strategy-calls-today", type=int, default=0)
+    p_safe_chain.add_argument("--mock-response-file", default=None)
+    p_safe_chain.add_argument("--backend", choices=["local", "colab"], default="local")
+    p_safe_chain.add_argument("--run-now", action="store_true")
+    p_safe_chain.add_argument("--run-command", dest="run_command", default=None)
 
     args = parser.parse_args(argv)
 
@@ -529,6 +542,23 @@ def main(argv: list[str] | None = None) -> int:
             run_now=args.run_now,
         )
         print(f"Post-validation execution: {result['trial_id']} status={result['status']}")
+        return 0 if result["status"] in {"job_created", "executed", "ready_to_evaluate"} else 1
+
+    if args.command == "run-safe-execution-chain":
+        client = FileResponseClient(args.mock_response_file) if args.mock_response_file else None
+        result = run_safe_execution_chain(
+            args.competition,
+            args.trial,
+            client=client,
+            model=args.model,
+            allow_api=args.allow_api,
+            trial_llm_calls=args.trial_llm_calls,
+            strategy_calls_today=args.strategy_calls_today,
+            command=args.run_command,
+            backend=args.backend,
+            run_now=args.run_now,
+        )
+        print(f"Safe execution chain: {result['trial_id']} status={result['status']}")
         return 0 if result["status"] in {"job_created", "executed", "ready_to_evaluate"} else 1
 
     return 1

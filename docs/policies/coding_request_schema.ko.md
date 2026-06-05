@@ -156,3 +156,22 @@ OpenAI Responses API를 사용할 때의 기본 endpoint는 공식 API 문서 �
 - `--run-now`와 `--run-command`가 함께 있을 때만 즉시 local 실행을 수행한다.
 - 실행 게이트 결과는 `post_validation_execution.json`과 `post_validation_execution.md`에 저장한다.
 - 실행 판단은 `decision_log.jsonl`에 `decision_type: post_validation_execution`으로 기록한다.
+
+## Safe Execution Chain
+
+`run-safe-execution-chain`은 다음 단계를 한 번에 실행한다.
+
+```text
+run-code-writer
+-> validate-coding-result
+-> run-validation-commands
+-> run-after-validation
+```
+
+운영 원칙:
+
+- 각 단계는 기존 개별 gate를 그대로 사용한다.
+- code writer 결과가 accepted가 아니면 validation command를 실행하지 않는다.
+- validation command가 passed가 아니면 trial 실행이나 job 생성을 하지 않는다.
+- 전체 체인 결과는 `safe_execution_chain.json`과 `safe_execution_chain.md`에 저장한다.
+- 판단은 `decision_log.jsonl`에 `decision_type: safe_execution_chain`으로 기록한다.

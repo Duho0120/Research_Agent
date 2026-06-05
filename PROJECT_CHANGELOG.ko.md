@@ -1402,3 +1402,37 @@ python -B -m unittest discover -s tests -v
 - `validation_run.status`가 `passed`일 때만 실행 정책을 평가한다.
 - 기본은 local-first job creation이며, 즉시 실행은 `--run-now`가 있을 때만 수행한다.
 - 새 top-level agent를 만들지 않고 Training/Execution Agent의 내부 게이트로 둔다.
+
+### Safe Execution Chain 19차 구현
+
+요약:
+
+- `run-code-writer -> validate-coding-result -> run-validation-commands -> run-after-validation` 흐름을 한 번에 실행하는 guarded chain을 추가했다.
+- 각 단계는 새 로직으로 우회하지 않고, 16~18차에서 만든 기존 gate를 그대로 사용한다.
+- 중간 단계가 실패하면 즉시 중단하고 다음 실행 단계로 넘어가지 않는다.
+
+주요 변경:
+
+- `kaggle_research_agent/agents/safe_execution_chain.py` 추가
+  - `run_safe_execution_chain`
+  - `render_safe_execution_chain`
+- `run-safe-execution-chain` CLI 추가
+  - `--mock-response-file`
+  - `--allow-api`
+  - `--run-command`
+  - `--run-now`
+  - `--backend local|colab`
+- 결과 파일 추가
+  - `safe_execution_chain.json`
+  - `safe_execution_chain.md`
+- `decision_log.jsonl`
+  - `decision_type: safe_execution_chain` 기록
+- `README.md`, `docs/policies/coding_request_schema.ko.md`
+  - safe execution chain 흐름과 명령 예시 반영
+
+설계 원칙:
+
+- 자동 체인은 편의 wrapper일 뿐이며, 개별 안전 gate를 생략하지 않는다.
+- code writer가 accepted가 아니면 validation command를 실행하지 않는다.
+- validation command가 passed가 아니면 local run/job creation으로 가지 않는다.
+- 새 top-level agent를 추가하지 않고 Training/Execution Agent 내부 chain으로 둔다.

@@ -773,6 +773,66 @@ class CliLoopCoreTest(unittest.TestCase):
             self.assertTrue((root / "jobs" / "demo" / "demo_trial_002.yaml").exists())
             self.assertTrue((trial / "post_validation_execution.json").exists())
 
+    def test_run_safe_execution_chain_command_creates_local_job(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trial = root / "experiments" / "demo" / "trial_002"
+            trial.mkdir(parents=True)
+            (trial / "config.yaml").write_text("model:\n  type: lightgbm\n", encoding="utf-8")
+            self._write_coding_handoff(
+                trial,
+                validation_commands=[
+                    (
+                        "python -c \"from pathlib import Path; "
+                        "Path(r'experiments/demo/trial_002/chain_validated.txt').write_text('ok', encoding='utf-8')\""
+                    )
+                ],
+            )
+            response_path = root / "mock_response.json"
+            response_path.write_text(
+                json.dumps(
+                    {
+                        "output_text": json.dumps(
+                            {
+                                "status": "completed",
+                                "summary": "Updated config from mock response.",
+                                "changed_files": ["experiments/demo/trial_002/config.yaml"],
+                                "file_updates": [
+                                    {
+                                        "path": "experiments/demo/trial_002/config.yaml",
+                                        "content": "model:\n  type: lightgbm\ntraining:\n  sampler: balanced\n",
+                                    }
+                                ],
+                                "validation_results": [],
+                                "blocking_issues": [],
+                            }
+                        )
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with redirect_stdout(io.StringIO()):
+                    code = main(
+                        [
+                            "run-safe-execution-chain",
+                            "--competition",
+                            "demo",
+                            "--trial",
+                            "trial_002",
+                            "--mock-response-file",
+                            str(response_path),
+                            "--run-command",
+                            "python train.py",
+                        ]
+                    )
+
+            self.assertEqual(code, 0)
+            self.assertTrue((trial / "safe_execution_chain.json").exists())
+            self.assertTrue((trial / "chain_validated.txt").exists())
+            self.assertTrue((root / "jobs" / "demo" / "demo_trial_002.yaml").exists())
+
     def test_cycle_accepts_apply_next_patch_options(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
