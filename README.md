@@ -7,7 +7,7 @@ Starter implementation for a staged autonomous Kaggle research system.
 - Knowledge and Memory Agent: manages competition context, data profiles, research notes, trial memory, rules, review packs, and user feedback.
 - Planning Agent: plans trials, chooses improvement axes, advises model-family candidates, generates baseline plans, prepares patch plans, and creates coding handoff requests.
 - Training and Execution Agent: creates local/Colab jobs, runs local commands, applies prepared patch plans, and preserves run artifacts.
-- Evaluation and Decision Agent: evaluates metrics, diagnoses results, validates patch/submission gates, and decides when human review is needed.
+- Evaluation and Decision Agent: evaluates metrics, diagnoses results, validates patch/coding/submission gates, and decides when human review is needed.
 - Feedback and Orchestration Agent: coordinates the loop, records decisions, updates memory, and controls bounded auto-research cycles.
 
 The implementation keeps execution conservative. It can plan, profile data, generate a baseline, record, evaluate, create local/Colab jobs, validate configs, prepare/validate/handoff/apply patch plans, and preserve submission metadata. Real Kaggle API submission is still exposed as a future integration point.
@@ -21,7 +21,7 @@ Completed:
 - Knowledge and Memory tools can inspect competitions, profile `data/<competition>/`, detect train/test/sample-submission roles, infer simple task/schema hints, and write `data_profile.md/json`.
 - Planning tools can create `next_experiment.md`, choose the next improvement axis, advise task-appropriate model candidates, create a first tabular baseline plan, convert plans into `config.yaml` and `code_patch_plan.md/json`, and prepare `coding_handoff.json` / `coding_agent_request.md`.
 - Training and Execution tools can apply a prepared patch plan, run a local command, then produce `metrics.json`, `evaluation.md`, `diagnosis.md`, and `code_edit_result.md/json`.
-- Evaluation and Decision tools can check `code_patch_plan.json` before execution, write `patch_validation.md/json`, record decisions in `decision_log.jsonl`, and block unsafe or incomplete patch plans.
+- Evaluation and Decision tools can check `code_patch_plan.json` before execution, write `patch_validation.md/json`, validate `coding_result.json` against the handoff contract, record decisions in `decision_log.jsonl`, and block unsafe or incomplete patch/code results.
 - Submission tools can record before/after score and rank metadata, preserve version files, mark the best trial, and expose `submit-trial` for manual or command-hooked submission runs.
 - Submission now has a safer approval gate: `prepare-submission` writes `submit_manifest.md/json` without touching leaderboard logs or best-trial markers.
 - The Kaggle CLI adapter can now build safe submit/leaderboard argument lists and return structured check/submit/leaderboard command results.
@@ -41,6 +41,7 @@ Completed:
 - Patch validation now checks target files, generated config validity, required validation commands, protected-axis violations, user-approval gates, and forbidden submission-artifact edits before patch execution. `apply-patch` uses this validator result as the single patch safety gate.
 - Coding handoff now standardizes what is sent to a future Codex/API coding worker: objective, target files, required config changes, implementation steps, guardrails, and validation commands.
 - Coding handoff now has a versioned request contract with context files, allowed write files, declared new files, forbidden paths, execution constraints, and a required `coding_result` output schema.
+- Coding result validation now checks future coding-worker output before downstream execution, including required fields, status values, changed-file scope, declared new files, and forbidden paths. `write-code-dry-run` can create a blocked placeholder result without calling an external API.
 - Data onboarding now uses local files when available, or falls back to the Kaggle inspection file listing when data has not been downloaded yet.
 - Baseline generation currently targets tabular CSV competitions with a detected target column and writes a local sanity-check `submission.csv` and `metrics.json` when run.
 - Responsibility boundaries were tightened: Pipeline Patch Planner plans only, Patch Validator is the execution safety gate, Coding Handoff reuses existing validation, and Baseline Generator consumes the saved data profile snapshot.
@@ -67,6 +68,8 @@ start-competition / init
   -> prepare patch plan
   -> validate patch plan
   -> prepare coding handoff
+  -> write code / dry-run code writer
+  -> validate coding result
   -> apply patch plan
   -> prepare submission manifest
   -> submit after approval and leaderboard evidence
@@ -87,7 +90,7 @@ Latest verified baseline:
 python -B -m unittest discover -s tests -v
 ```
 
-Expected result: `107 tests`, `OK`.
+Expected result: `113 tests`, `OK`.
 
 ## Agent Architecture
 
@@ -116,6 +119,7 @@ Evaluation and Decision Agent
   -> diagnosis
   -> execution / LLM / human-review policy gates
   -> patch validation
+  -> coding result validation
   -> submission approval and result recording
 
 Feedback and Orchestration Agent
@@ -125,7 +129,7 @@ Feedback and Orchestration Agent
   -> memory update and next-trial feedback loop
 ```
 
-Implementation modules are intentionally smaller than the top-level agents. Files such as `pipeline_planner.py`, `model_advisor.py`, `patch_validator.py`, `coding_handoff.py`, and `baseline_generator.py` are internal tools used by the 5-agent architecture, not separate top-level agents.
+Implementation modules are intentionally smaller than the top-level agents. Files such as `pipeline_planner.py`, `model_advisor.py`, `patch_validator.py`, `coding_handoff.py`, `coding_result_validator.py`, and `baseline_generator.py` are internal tools used by the 5-agent architecture, not separate top-level agents.
 
 ## Policy Design
 
@@ -356,6 +360,18 @@ Prepare a coding-agent handoff request from a validated patch plan:
 python -B -m kaggle_research_agent.cli prepare-handoff --competition demo --trial trial_002
 ```
 
+Create a dry-run coding result without calling an external coding API:
+
+```powershell
+python -B -m kaggle_research_agent.cli write-code-dry-run --competition demo --trial trial_002
+```
+
+Validate a coding-agent result before downstream execution:
+
+```powershell
+python -B -m kaggle_research_agent.cli validate-coding-result --competition demo --trial trial_002
+```
+
 Or let the cycle create the next-experiment recommendation immediately after diagnosis and memory update:
 
 ```powershell
@@ -413,6 +429,8 @@ init competition
   -> prepare pipeline patch plan
   -> validate patch plan
   -> prepare coding handoff
+  -> write code / dry-run code writer
+  -> validate coding result
   -> apply patch plan
   -> prepare submission manifest
   -> submit only after approval/evidence

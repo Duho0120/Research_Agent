@@ -1264,3 +1264,42 @@ python -B -m unittest discover -s tests -v
 
 - `99 tests`
 - `OK`
+
+### Coding Result Validator 15차 구현
+
+요약:
+
+- Codex/API 기반 코딩 작업자가 실제로 붙기 전에, 코딩 결과물을 그대로 신뢰하지 않고 `coding_handoff.json` 계약에 맞는지 검사하는 결과 검증 게이트를 추가했다.
+- 이번 단계는 외부 API 호출이 아니라 `coding_result.json/md` 산출물을 검증하는 rule-based harness다.
+- 실제 코딩 에이전트 연결 전에도 전체 루프의 모양을 테스트할 수 있도록 `write-code-dry-run` 명령을 추가했다.
+
+주요 변경:
+
+- `kaggle_research_agent/agents/coding_result_validator.py` 추가
+  - `validate_coding_result`
+  - `create_dry_run_coding_result`
+  - `render_coding_result_validation`
+- `validate-coding-result` CLI 추가
+  - 필수 필드, status 값, 변경 파일 범위, forbidden path 접촉 여부 검증
+  - 결과를 `coding_result_validation.json/md`에 저장
+  - `decision_log.jsonl`에 `decision_type: coding_result_validation` 기록
+- `write-code-dry-run` CLI 추가
+  - 외부 API 호출 없이 `blocked` 상태의 `coding_result.json/md` placeholder 생성
+  - 실제 코드 수정은 수행하지 않음
+- `docs/policies/coding_request_schema.ko.md`
+  - 결과 검증 단계와 저장 파일 명시
+- `README.md`
+  - Current Status, CLI flow, Agent Architecture, 명령 예시에 15차 반영
+- 테스트 추가
+  - 정상 completed 결과 승인
+  - 허용 범위 밖 파일 수정 차단
+  - 필수 필드/status 오류 차단
+  - dry-run placeholder 생성
+  - CLI `write-code-dry-run`, `validate-coding-result` 검증
+
+설계 원칙:
+
+- 코드 작성은 이후 Codex/API worker가 맡더라도, 결과 검증은 가벼운 Python rule gate로 처리한다.
+- `allowed_write_files`와 `create_files` 밖의 변경은 차단한다.
+- `data/`, `submissions/`, `submission.csv`, `metrics.json` 같은 학습/제출 산출물은 코딩 단계에서 수정하지 않는다.
+- 이 단계는 기존 5개 top-level agent 구조를 늘리지 않고, Evaluation and Decision Agent의 내부 검증 도구로 둔다.

@@ -559,6 +559,47 @@ class CliLoopCoreTest(unittest.TestCase):
             self.assertTrue((trial / "coding_handoff.json").exists())
             self.assertTrue((trial / "coding_agent_request.md").exists())
 
+    def test_write_code_dry_run_command_creates_blocked_coding_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trial = root / "experiments" / "demo" / "trial_002"
+            trial.mkdir(parents=True)
+            self._write_coding_handoff(trial)
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with redirect_stdout(io.StringIO()):
+                    code = main(["write-code-dry-run", "--competition", "demo", "--trial", "trial_002"])
+
+            self.assertEqual(code, 1)
+            result = json.loads((trial / "coding_result.json").read_text(encoding="utf-8"))
+            self.assertEqual(result["status"], "blocked")
+
+    def test_validate_coding_result_command_writes_validation_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trial = root / "experiments" / "demo" / "trial_002"
+            trial.mkdir(parents=True)
+            self._write_coding_handoff(trial)
+            (trial / "coding_result.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "summary": "Updated config.",
+                        "changed_files": ["experiments/demo/trial_002/config.yaml"],
+                        "validation_results": [{"command": "python -B -m unittest discover -s tests -v", "status": "passed"}],
+                        "blocking_issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with redirect_stdout(io.StringIO()):
+                    code = main(["validate-coding-result", "--competition", "demo", "--trial", "trial_002"])
+
+            self.assertEqual(code, 0)
+            self.assertTrue((trial / "coding_result_validation.json").exists())
+
     def test_cycle_accepts_apply_next_patch_options(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -764,6 +805,38 @@ class CliLoopCoreTest(unittest.TestCase):
 
             self.assertEqual(code, 0)
             self.assertTrue((trial / "diagnosis.md").exists())
+
+    def _write_coding_handoff(self, trial: Path) -> None:
+        (trial / "coding_handoff.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "request_id": "demo:trial_002:coding",
+                    "competition": "demo",
+                    "trial_id": "trial_002",
+                    "status": "ready",
+                    "allowed_write_files": ["experiments/demo/trial_002/config.yaml"],
+                    "create_files": [],
+                    "forbidden_paths": [
+                        "data/",
+                        "submissions/",
+                        "experiments/demo/trial_002/submission.csv",
+                        "experiments/demo/trial_002/metrics.json",
+                    ],
+                    "required_output": {
+                        "required_fields": [
+                            "status",
+                            "summary",
+                            "changed_files",
+                            "validation_results",
+                            "blocking_issues",
+                        ],
+                        "status_values": ["completed", "blocked", "failed"],
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ from .config_validator import validate_config
 from .data_onboarding import profile_competition_data
 from .agents.experiment_runner import apply_patch_plan, create_job, run_local_job
 from .agents.coding_handoff import prepare_coding_handoff
+from .agents.coding_result_validator import create_dry_run_coding_result, validate_coding_result
 from .agents.memory import record_user_feedback, remember_trial, request_user_review
 from .agents.model_advisor import advise_model_candidates
 from .agents.orchestrator import run_auto_research_loop, run_cycle
@@ -210,6 +211,14 @@ def main(argv: list[str] | None = None) -> int:
     p_handoff.add_argument("--competition", required=True)
     p_handoff.add_argument("--trial", required=True)
     p_handoff.add_argument("--user-approved", action="store_true")
+
+    p_write_code_dry_run = sub.add_parser("write-code-dry-run")
+    p_write_code_dry_run.add_argument("--competition", required=True)
+    p_write_code_dry_run.add_argument("--trial", required=True)
+
+    p_validate_coding_result = sub.add_parser("validate-coding-result")
+    p_validate_coding_result.add_argument("--competition", required=True)
+    p_validate_coding_result.add_argument("--trial", required=True)
 
     args = parser.parse_args(argv)
 
@@ -455,6 +464,16 @@ def main(argv: list[str] | None = None) -> int:
         result = prepare_coding_handoff(args.competition, args.trial, user_approved=args.user_approved)
         print(f"Coding handoff: {result['trial_id']} status={result['status']}")
         return 0 if result["status"] == "ready" else 1
+
+    if args.command == "write-code-dry-run":
+        result = create_dry_run_coding_result(args.competition, args.trial)
+        print(f"Coding dry run: {result['trial_id']} status={result['status']}")
+        return 0 if result["status"] == "completed" else 1
+
+    if args.command == "validate-coding-result":
+        result = validate_coding_result(args.competition, args.trial)
+        print(f"Coding result validation: {result['trial_id']} status={result['status']}")
+        return 0 if result["status"] == "accepted" else 1
 
     return 1
 

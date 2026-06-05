@@ -95,3 +95,23 @@ failed
 ```
 
 결과의 다음 action은 `validate-code-change`다. 코드 검증과 제한된 수정 재시도는 이후 단계에서 담당한다.
+
+## 결과 검증 단계
+
+`coding_result.json`은 곧바로 실행 단계로 넘어가지 않고 `validate-coding-result` 게이트를 통과해야 한다.
+
+검증 항목:
+
+- `status`, `summary`, `changed_files`, `validation_results`, `blocking_issues` 필수 필드 존재 여부
+- `status`가 `completed`, `blocked`, `failed` 중 하나인지 여부
+- `changed_files`가 `allowed_write_files` 또는 `create_files` 안에 있는지 여부
+- `data/`, `submissions/`, `submission.csv`, `metrics.json` 등 `forbidden_paths`를 건드리지 않았는지 여부
+
+검증 결과는 다음 파일에 저장한다.
+
+```text
+experiments/<competition>/<trial>/coding_result_validation.json
+experiments/<competition>/<trial>/coding_result_validation.md
+```
+
+실제 Codex/API 코딩 작업자가 붙기 전까지는 `write-code-dry-run`으로 `blocked` 상태의 placeholder 결과를 만들 수 있다. 이 dry-run은 파일을 수정하지 않고 외부 API도 호출하지 않는다.
