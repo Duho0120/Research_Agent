@@ -18,7 +18,8 @@ def validate_patch_plan(competition: str, trial_id: str, *, user_approved: bool 
         raise FileNotFoundError(f"Missing code patch plan: {plan_path}")
 
     plan = json.loads(plan_path.read_text(encoding="utf-8"))
-    missing_targets = _missing_targets(plan.get("target_files", []))
+    create_files = plan.get("create_files", [])
+    missing_targets = _missing_targets(plan.get("target_files", []), create_files)
     config_errors = _validate_trial_config(competition, trial_id)
     issues: list[str] = []
     issues.extend(f"missing_target:{item}" for item in missing_targets)
@@ -44,6 +45,7 @@ def validate_patch_plan(competition: str, trial_id: str, *, user_approved: bool 
         "pipeline_axis": plan.get("pipeline_axis"),
         "protected_axes": plan.get("protected_axes", []),
         "target_files": plan.get("target_files", []),
+        "create_files": create_files,
     }
     write_text(out_dir / "patch_validation.json", json.dumps(result, ensure_ascii=False, indent=2) + "\n")
     write_text(out_dir / "patch_validation.md", render_patch_validation(result))
@@ -80,18 +82,21 @@ def render_patch_validation(result: dict[str, Any]) -> str:
     lines.extend(f"- {item}" for item in result["issues"] or ["None"])
     lines.extend(["", "## Target Files", ""])
     lines.extend(f"- {item}" for item in result["target_files"] or ["None"])
+    lines.extend(["", "## Declared New Files", ""])
+    lines.extend(f"- {item}" for item in result["create_files"] or ["None"])
     lines.append("")
     return "\n".join(lines)
 
 
-def _missing_targets(target_files: list[str]) -> list[str]:
+def _missing_targets(target_files: list[str], create_files: list[str]) -> list[str]:
     root = paths.project_root()
+    declared_new = set(create_files)
     missing = []
     for item in target_files:
         path = Path(item)
         if not path.is_absolute():
             path = root / path
-        if not path.exists():
+        if not path.exists() and item not in declared_new:
             missing.append(item)
     return missing
 

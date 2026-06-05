@@ -26,6 +26,7 @@ class CodingHandoffTest(unittest.TestCase):
                         "protected_axes": ["validation", "model_family"],
                         "requires_user_approval": False,
                         "target_files": ["experiments/demo/trial_002/config.yaml"],
+                        "create_files": [],
                         "config_changes": {"training.sampler": "balanced"},
                         "implementation_steps": ["Add balanced sampler support."],
                         "validation_commands": [
@@ -41,13 +42,28 @@ class CodingHandoffTest(unittest.TestCase):
 
             self.assertEqual(result["status"], "ready")
             self.assertEqual(result["handoff_type"], "coding_agent_request")
+            self.assertEqual(result["schema_version"], "1.0")
+            self.assertEqual(result["request_id"], "demo:trial_002:coding")
             self.assertEqual(result["target_files"], ["experiments/demo/trial_002/config.yaml"])
+            self.assertEqual(result["create_files"], [])
+            self.assertEqual(result["allowed_write_files"], result["target_files"])
+            self.assertIn("experiments/demo/trial_002/code_patch_plan.json", result["context_files"])
+            self.assertIn("experiments/demo/trial_002/config.yaml", result["context_files"])
+            self.assertIn("submissions/", result["forbidden_paths"])
+            self.assertTrue(result["execution_constraints"]["do_not_run_training"])
+            self.assertTrue(result["execution_constraints"]["do_not_submit"])
+            self.assertEqual(result["required_output"]["status_values"], ["completed", "blocked", "failed"])
+            self.assertEqual(result["required_output"]["next_action"], "validate-code-change")
             self.assertTrue((trial / "coding_handoff.json").exists())
             request = trial / "coding_agent_request.md"
             self.assertTrue(request.exists())
             text = request.read_text(encoding="utf-8")
             self.assertIn("Add balanced sampler support.", text)
             self.assertIn("Do not edit submission artifacts.", text)
+            self.assertIn("## Input Context Files", text)
+            self.assertIn("## Allowed Write Files", text)
+            self.assertIn("## Forbidden Paths", text)
+            self.assertIn("## Required Result Contract", text)
             log_path = root / "memory" / "demo" / "decision_log.jsonl"
             last = json.loads(log_path.read_text(encoding="utf-8").splitlines()[-1])
             self.assertEqual(last["decision_type"], "coding_handoff")

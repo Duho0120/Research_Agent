@@ -20,6 +20,7 @@ from .agents.research_planner import propose_next_experiment, propose_plan
 from .agents.result_analyst import diagnose_trial, evaluate_trial
 from .agents.review_pack import prepare_review_pack
 from .agents.submission import prepare_submission, record_submission_result, submit_trial
+from .graph.research_graph import run_graph_cycle
 from .paths import competition_configs_dir, configs_dir, trial_dir
 from .store import init_project
 
@@ -87,6 +88,18 @@ def main(argv: list[str] | None = None) -> int:
     p_cycle.add_argument("--prepare-next-patch", action="store_true")
     p_cycle.add_argument("--apply-next-patch", action="store_true")
     p_cycle.add_argument("--next-run-command", dest="next_run_command", default=None)
+
+    p_graph_cycle = sub.add_parser("run-graph-cycle")
+    p_graph_cycle.add_argument("--competition", required=True)
+    p_graph_cycle.add_argument("--trial", required=True)
+    p_graph_cycle.add_argument("--no-job", action="store_true")
+    p_graph_cycle.add_argument("--backend", choices=["local", "colab"], default="local")
+    p_graph_cycle.add_argument("--run-now", action="store_true")
+    p_graph_cycle.add_argument("--run-command", dest="run_command", default=None)
+    p_graph_cycle.add_argument("--next-trial", default=None)
+    p_graph_cycle.add_argument("--prepare-next-patch", action="store_true")
+    p_graph_cycle.add_argument("--apply-next-patch", action="store_true")
+    p_graph_cycle.add_argument("--next-run-command", dest="next_run_command", default=None)
 
     p_auto = sub.add_parser("run-auto-loop")
     p_auto.add_argument("--competition", required=True)
@@ -265,6 +278,25 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "cycle":
         result = run_cycle(
+            args.competition,
+            args.trial,
+            create_job_request=not args.no_job,
+            backend=args.backend,
+            run_now=args.run_now,
+            command=args.run_command,
+            next_trial_id=args.next_trial,
+            prepare_next_patch=args.prepare_next_patch,
+            apply_next_patch=args.apply_next_patch,
+            next_run_command=args.next_run_command,
+        )
+        print(" -> ".join(result["steps"]))
+        if result.get("config_errors"):
+            print("\n".join(result["config_errors"]))
+            return 1
+        return 0
+
+    if args.command == "run-graph-cycle":
+        result = run_graph_cycle(
             args.competition,
             args.trial,
             create_job_request=not args.no_job,

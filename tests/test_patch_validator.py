@@ -104,6 +104,37 @@ class PatchValidatorTest(unittest.TestCase):
             self.assertEqual(result["status"], "ready")
             self.assertEqual(result["issues"], [])
 
+    def test_allows_declared_new_file_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trial = root / "experiments" / "demo" / "trial_002"
+            trial.mkdir(parents=True)
+            (trial / "config.yaml").write_text(
+                json.dumps({"model": {"type": "lightgbm"}, "features": {}, "cv": {"n_splits": 5}}),
+                encoding="utf-8",
+            )
+            new_file = "kaggle_research_agent/pipeline/dataset.py"
+            (trial / "code_patch_plan.json").write_text(
+                json.dumps(
+                    {
+                        "strategy": "controlled_refinement",
+                        "pipeline_axis": "sampling",
+                        "target_files": ["experiments/demo/trial_002/config.yaml", new_file],
+                        "create_files": [new_file],
+                        "config_changes": {"training.sampler": "balanced"},
+                        "validation_commands": ["python -B -m unittest discover -s tests -v"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = validate_patch_plan("demo", "trial_002")
+
+            self.assertEqual(result["status"], "ready")
+            self.assertEqual(result["missing_targets"], [])
+            self.assertEqual(result["create_files"], [new_file])
+
     def test_records_patch_validation_decision_log(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

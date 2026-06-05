@@ -30,6 +30,7 @@ Completed:
 - `inspect-competition` accepts a Kaggle competition URL or slug, checks CLI/auth access, lists available data files, and writes `competition_inspection.md/json`.
 - `start-competition` combines inspection, project initialization, onboarding notes, data profiling, and the first `trial_001` plan.
 - `run-auto-loop` can run a bounded safe research loop across multiple trials with a no-improvement stop policy and submission disabled by default.
+- `run-graph-cycle` exposes the same conservative one-trial flow through a LangGraph `StateGraph` orchestration layer while keeping the existing Python tools as graph nodes.
 - Policy files under `configs/policies/` control token use, execution decisions, and human-review decisions.
 - The policy gate records local/Colab/wait/ask_user execution decisions and LLM call/skip decisions in `decision_log.jsonl`.
 - Human Review now has a closed feedback loop: `request-review` creates a review pack, `record-feedback` updates that pack, and `plan-next` can use recent user feedback.
@@ -39,6 +40,7 @@ Completed:
 - The Pipeline Patch Planner uses `pipeline_improvement_plan.json` to translate selected axes into config changes, target files, approval gates, and implementation steps.
 - Patch validation now checks target files, generated config validity, required validation commands, protected-axis violations, user-approval gates, and forbidden submission-artifact edits before patch execution. `apply-patch` uses this validator result as the single patch safety gate.
 - Coding handoff now standardizes what is sent to a future Codex/API coding worker: objective, target files, required config changes, implementation steps, guardrails, and validation commands.
+- Coding handoff now has a versioned request contract with context files, allowed write files, declared new files, forbidden paths, execution constraints, and a required `coding_result` output schema.
 - Data onboarding now uses local files when available, or falls back to the Kaggle inspection file listing when data has not been downloaded yet.
 - Baseline generation currently targets tabular CSV competitions with a detected target column and writes a local sanity-check `submission.csv` and `metrics.json` when run.
 - Responsibility boundaries were tightened: Pipeline Patch Planner plans only, Patch Validator is the execution safety gate, Coding Handoff reuses existing validation, and Baseline Generator consumes the saved data profile snapshot.
@@ -48,6 +50,7 @@ Available CLI flow:
 ```text
 start-competition / init
   -> plan / cycle
+  -> run-graph-cycle
   -> profile data
   -> generate baseline pipeline
   -> validate config
@@ -76,6 +79,7 @@ Still pending:
 - Automatic submission policy beyond `never` / `prepare_only`.
 - A fuller production-grade code editing strategy beyond prepared patch-plan execution.
 - Direct LLM integration behind the existing token policy gate.
+- Full LangGraph auto-loop replacement; the current graph command covers the one-trial cycle first.
 
 Latest verified baseline:
 
@@ -83,7 +87,7 @@ Latest verified baseline:
 python -B -m unittest discover -s tests -v
 ```
 
-Expected result: `103 tests`, `OK`.
+Expected result: `107 tests`, `OK`.
 
 ## Agent Architecture
 
@@ -130,6 +134,7 @@ Cost-efficient autonomous research is governed by policy documents before it is 
 - `docs/policies/execution_decision_policy.ko.md`: local / Colab / ask_user / wait_for_metrics 판단 기준
 - `docs/policies/human_review_policy.ko.md`: 어떤 진단 패턴에서 사람에게 물어볼지
 - `docs/policies/review_pack_schema.ko.md`: 사람이 볼 자료, 질문, 답변 저장 형식
+- `docs/policies/coding_request_schema.ko.md`: Codex/API 코딩 작업자의 입력, 쓰기 범위, 결과 계약
 
 Machine-readable policy files live under `configs/policies/`:
 
@@ -173,6 +178,12 @@ Or run the conservative one-trial cycle:
 
 ```powershell
 python -m kaggle_research_agent.cli cycle --competition playground --trial trial_001
+```
+
+Or run the same one-trial cycle through the LangGraph orchestration layer:
+
+```powershell
+python -m kaggle_research_agent.cli run-graph-cycle --competition playground --trial trial_001
 ```
 
 By default, jobs are local jobs. Use Colab only when you explicitly need it:

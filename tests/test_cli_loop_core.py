@@ -702,6 +702,69 @@ class CliLoopCoreTest(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertTrue((trial / "diagnosis.md").exists())
 
+    def test_run_graph_cycle_command_executes_langgraph_cycle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            comp = root / "competitions" / "demo"
+            comp.mkdir(parents=True)
+            (comp / "state.yaml").write_text(
+                "competition:\n"
+                "  objective: maximize\n"
+                "current_state:\n"
+                "  consecutive_failures: 0\n"
+                "  best_trial:\n"
+                "    trial_id: old\n"
+                "    cv_score: 0.7\n",
+                encoding="utf-8",
+            )
+            cfg = root / "configs" / "demo"
+            cfg.mkdir(parents=True)
+            (cfg / "allowed_space.yaml").write_text(
+                json.dumps(
+                    {
+                        "model": {
+                            "type": ["lightgbm"],
+                            "params": {
+                                "learning_rate": {"min": 0.005, "max": 0.2},
+                                "num_leaves": {"min": 16, "max": 256},
+                                "max_depth": {"min": 3, "max": 12},
+                            },
+                        },
+                        "features": {
+                            "use_frequency_encoding": [True, False],
+                            "use_target_encoding": [True, False],
+                            "use_interactions": [True, False],
+                            "use_missing_indicators": [True, False],
+                        },
+                        "cv": {"n_splits": [5], "seed": {"min": 1, "max": 9999}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            trial = root / "experiments" / "demo" / "trial_001"
+            trial.mkdir(parents=True)
+            (trial / "config.yaml").write_text(
+                json.dumps(
+                    {
+                        "model": {
+                            "type": "lightgbm",
+                            "params": {"learning_rate": 0.03, "num_leaves": 64, "max_depth": 8},
+                        },
+                        "features": {"use_missing_indicators": True},
+                        "cv": {"n_splits": 5, "seed": 42},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (trial / "metrics.json").write_text(json.dumps({"cv_score": 0.72, "objective": "maximize"}), encoding="utf-8")
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with redirect_stdout(io.StringIO()):
+                    code = main(["run-graph-cycle", "--competition", "demo", "--trial", "trial_001", "--no-job"])
+
+            self.assertEqual(code, 0)
+            self.assertTrue((trial / "diagnosis.md").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

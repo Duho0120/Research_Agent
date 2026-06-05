@@ -1126,6 +1126,87 @@ python -B -m unittest discover -s tests -v
 - 최신 모델 웹 검색은 이번 범위에 포함하지 않고, 이후 별도 research/search 단계로 분리한다.
 - LangGraph runtime은 아직 적용하지 않고, 나중에 node로 옮기기 쉬운 함수형 내부 도구로 유지한다.
 
+### Coding Request Schema 13차 구현
+
+요약:
+
+- 코드 작성까지 포함한 자동 루프를 연결하기 전에 Codex/API 코딩 작업자에게 전달할 요청 계약을 표준화했다.
+- 코딩 작업자의 책임은 코드 수정으로 제한하고, 학습 실행과 Kaggle 제출은 다음 단계로 분리했다.
+- 새 파일을 생성해야 하는 patch plan이 기존 Patch Validator에서 차단되는 문제를 발견하고, 선언된 새 파일만 허용하는 `create_files` 계약을 추가했다.
+
+주요 변경:
+
+- `docs/policies/coding_request_schema.ko.md` 추가
+  - 입력 context 파일
+  - 허용 쓰기 파일
+  - 선언된 새 파일
+  - 금지 경로
+  - 실행 제약
+  - `coding_result.json/md` 결과 계약 정의
+- `kaggle_research_agent/agents/coding_handoff.py`
+  - `schema_version`, `request_id`, `objective` 추가
+  - `context_files`, `allowed_write_files`, `create_files`, `forbidden_paths` 추가
+  - `execution_constraints`, `required_output` 추가
+  - Markdown 요청서에 입력/쓰기/금지/결과 계약 섹션 추가
+- `kaggle_research_agent/agents/pipeline_patch_planner.py`
+  - 실제로 존재하지 않는 신규 코드 모듈을 `create_files`에 선언
+- `kaggle_research_agent/agents/patch_validator.py`
+  - `create_files`에 선언된 누락 target만 허용
+  - 선언되지 않은 누락 target은 기존처럼 차단
+- 테스트
+  - coding handoff schema 필드와 Markdown 섹션 검증
+  - 선언된 새 파일 target 허용 검증
+  - sampling patch plan의 신규 dataset 모듈 선언 검증
+
+설계 원칙:
+
+- 코딩 작업자는 `allowed_write_files` 밖을 수정하지 않는다.
+- 새 파일은 `create_files`에 명시된 경우에만 생성한다.
+- 코딩 단계에서는 학습과 제출을 실행하지 않는다.
+- 코드 수정 결과는 다음 자동 검증 단계가 읽을 수 있는 구조로 남긴다.
+
+검증:
+
+```powershell
+python -B -m compileall -q kaggle_research_agent
+python -B -m unittest discover -s tests -v
+```
+
+결과:
+
+- `104 tests`
+- `OK`
+
+### LangGraph One-Trial Cycle 14차 구현
+
+요약:
+
+- 기존 Python 기반 agent/tool 함수들을 제거하지 않고, LangGraph `StateGraph` orchestration layer를 추가했다.
+- 이번 범위는 전체 auto-loop 교체가 아니라 보수적인 one-trial `cycle` 흐름을 LangGraph node/edge로 감싸는 것이다.
+- 기존 `cycle` CLI는 유지하고, 새 `run-graph-cycle` CLI를 추가해 비교 가능한 전환 경로를 만들었다.
+
+주요 변경:
+
+- `kaggle_research_agent/graph/` 패키지 추가
+  - `state.py`: graph state schema
+  - `nodes.py`: 기존 Python 도구를 감싼 node 함수와 routing 함수
+  - `research_graph.py`: `StateGraph`, `START`, `END`, conditional edge wiring
+- `kaggle_research_agent/cli.py`
+  - `run-graph-cycle` 명령 추가
+- `requirements.txt`
+  - `langgraph>=1.0.5` 추가
+- 테스트
+  - 완료된 trial에서 graph가 evaluate/diagnose/remember까지 실행하는지 검증
+  - metrics가 없을 때 execution decision 후 job request를 생성하는지 검증
+  - CLI `run-graph-cycle` 검증
+
+설계 원칙:
+
+- Python 함수는 실제 작업 단위로 유지한다.
+- LangGraph는 순서, 분기, 상태 전달만 담당한다.
+- 한 번에 전체 `run-auto-loop`를 교체하지 않고 one-trial cycle부터 적용한다.
+- 향후 Human Review, Code Writing Agent, submission approval branch를 graph node로 확장한다.
+
 ### 5개 Top-level Agent 구조로 공식 아키텍처 재정렬
 
 요약:

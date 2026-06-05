@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import copy
 import json
+from pathlib import Path
 from typing import Any
 
-from .. import simple_yaml
+from .. import paths, simple_yaml
 from ..paths import competition_configs_dir, configs_dir, trial_dir
 from ..store import read_text, write_text
 
@@ -55,6 +56,7 @@ def prepare_patch_plan(competition: str, source_trial_id: str, next_trial_id: st
         pipeline_axis,
         bool(pipeline_plan.get("requires_human_review")),
     )
+    create_files = _declared_new_files(target_files)
 
     plan = {
         "competition": competition,
@@ -66,6 +68,7 @@ def prepare_patch_plan(competition: str, source_trial_id: str, next_trial_id: st
         "protected_axes": pipeline_plan.get("protected_axes", []),
         "requires_user_approval": _requires_user_approval(pipeline_axis, pipeline_plan),
         "target_files": target_files,
+        "create_files": create_files,
         "config_changes": config_changes,
         "config": config,
         "implementation_steps": implementation_steps,
@@ -99,6 +102,8 @@ def render_patch_plan(plan: dict[str, Any]) -> str:
         "",
     ]
     lines.extend(f"- {item}" for item in plan["target_files"])
+    lines.extend(["", "## Declared New Files", ""])
+    lines.extend(f"- {item}" for item in plan.get("create_files", []) or ["None"])
     lines.extend(["", "## Pipeline Axis", "", f"- primary_axis: {plan.get('pipeline_axis') or 'None'}"])
     lines.extend(f"- protected_axis: {item}" for item in plan.get("protected_axes", []) or ["None"])
     lines.extend(["", "## Approval", "", f"- requires_user_approval: {plan.get('requires_user_approval', False)}"])
@@ -276,6 +281,18 @@ def _requires_user_approval(axis: str | None, pipeline_plan: dict[str, Any]) -> 
 def _append_unique(items: list[str], value: str) -> None:
     if value not in items:
         items.append(value)
+
+
+def _declared_new_files(target_files: list[str]) -> list[str]:
+    root = paths.project_root()
+    declared = []
+    for item in target_files:
+        path = Path(item)
+        if not path.is_absolute():
+            path = root / path
+        if not path.exists() and not item.startswith("experiments/"):
+            declared.append(item)
+    return declared
 
 
 def _allowed(allowed: dict[str, Any], path: list[str], value: Any) -> bool:

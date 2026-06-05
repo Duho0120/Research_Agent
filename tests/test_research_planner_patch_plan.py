@@ -147,6 +147,7 @@ class PipelinePatchPlannerTest(unittest.TestCase):
             self.assertEqual(plan["config"]["training"]["sampler"], "balanced")
             self.assertIn("training.sampler", plan["config_changes"])
             self.assertIn("dataset", " ".join(plan["target_files"]))
+            self.assertIn("kaggle_research_agent/pipeline/dataset.py", plan["create_files"])
             self.assertIn("protected_axes", plan)
 
     def test_prepare_patch_plan_translates_loss_metric_alignment_axis(self):
