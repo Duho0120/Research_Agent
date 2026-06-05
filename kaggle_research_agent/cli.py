@@ -10,6 +10,7 @@ from .data_onboarding import profile_competition_data
 from .agents.experiment_runner import apply_patch_plan, create_job, run_local_job
 from .agents.coding_handoff import prepare_coding_handoff
 from .agents.coding_result_validator import create_dry_run_coding_result, validate_coding_result
+from .agents.code_writer_adapter import FileResponseClient, run_code_writer
 from .agents.memory import record_user_feedback, remember_trial, request_user_review
 from .agents.model_advisor import advise_model_candidates
 from .agents.orchestrator import run_auto_research_loop, run_cycle
@@ -219,6 +220,15 @@ def main(argv: list[str] | None = None) -> int:
     p_validate_coding_result = sub.add_parser("validate-coding-result")
     p_validate_coding_result.add_argument("--competition", required=True)
     p_validate_coding_result.add_argument("--trial", required=True)
+
+    p_run_code_writer = sub.add_parser("run-code-writer")
+    p_run_code_writer.add_argument("--competition", required=True)
+    p_run_code_writer.add_argument("--trial", required=True)
+    p_run_code_writer.add_argument("--model", default="gpt-5")
+    p_run_code_writer.add_argument("--allow-api", action="store_true")
+    p_run_code_writer.add_argument("--trial-llm-calls", type=int, default=0)
+    p_run_code_writer.add_argument("--strategy-calls-today", type=int, default=0)
+    p_run_code_writer.add_argument("--mock-response-file", default=None)
 
     args = parser.parse_args(argv)
 
@@ -473,6 +483,20 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "validate-coding-result":
         result = validate_coding_result(args.competition, args.trial)
         print(f"Coding result validation: {result['trial_id']} status={result['status']}")
+        return 0 if result["status"] == "accepted" else 1
+
+    if args.command == "run-code-writer":
+        client = FileResponseClient(args.mock_response_file) if args.mock_response_file else None
+        result = run_code_writer(
+            args.competition,
+            args.trial,
+            client=client,
+            model=args.model,
+            allow_api=args.allow_api,
+            trial_llm_calls=args.trial_llm_calls,
+            strategy_calls_today=args.strategy_calls_today,
+        )
+        print(f"Code writer: {result['trial_id']} status={result['status']}")
         return 0 if result["status"] == "accepted" else 1
 
     return 1

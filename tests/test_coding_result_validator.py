@@ -92,6 +92,38 @@ class CodingResultValidatorTest(unittest.TestCase):
             self.assertIn("missing_required_field:summary", result["issues"])
             self.assertIn("missing_required_field:validation_results", result["issues"])
 
+    def test_validate_coding_result_blocks_out_of_scope_file_update(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trial = root / "experiments" / "demo" / "trial_002"
+            trial.mkdir(parents=True)
+            self._write_handoff(trial)
+            (trial / "coding_result.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "summary": "Returned unsafe file update.",
+                        "changed_files": ["experiments/demo/trial_002/config.yaml"],
+                        "file_updates": [
+                            {
+                                "path": "experiments/demo/trial_002/metrics.json",
+                                "content": "{}",
+                            }
+                        ],
+                        "validation_results": [],
+                        "blocking_issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = validate_coding_result("demo", "trial_002")
+
+            self.assertEqual(result["status"], "blocked")
+            self.assertIn("file_update_not_allowed:experiments/demo/trial_002/metrics.json", result["issues"])
+            self.assertIn("forbidden_path_touched:experiments/demo/trial_002/metrics.json", result["issues"])
+
     def test_dry_run_coding_result_writes_blocked_placeholder(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

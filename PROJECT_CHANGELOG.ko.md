@@ -1303,3 +1303,40 @@ python -B -m unittest discover -s tests -v
 - `allowed_write_files`와 `create_files` 밖의 변경은 차단한다.
 - `data/`, `submissions/`, `submission.csv`, `metrics.json` 같은 학습/제출 산출물은 코딩 단계에서 수정하지 않는다.
 - 이 단계는 기존 5개 top-level agent 구조를 늘리지 않고, Evaluation and Decision Agent의 내부 검증 도구로 둔다.
+
+### Code Writer Adapter 16차 구현
+
+요약:
+
+- `coding_handoff.json`을 실제 코딩 모델/API 또는 mock client에 전달하는 Code Writer Adapter를 추가했다.
+- 모델/API가 로컬 파일을 직접 수정하는 구조가 아니라, JSON `file_updates`를 반환하고 Python adapter가 허용된 파일만 쓰는 구조로 설계했다.
+- 실제 OpenAI API 호출은 `--allow-api`가 있을 때만 가능하게 했고, 테스트와 로컬 검증은 `--mock-response-file`로 비용 없이 수행할 수 있게 했다.
+
+주요 변경:
+
+- `kaggle_research_agent/agents/code_writer_adapter.py` 추가
+  - `run_code_writer`
+  - `build_code_writer_payload`
+  - `OpenAIResponsesClient`
+  - `FileResponseClient`
+- `run-code-writer` CLI 추가
+  - `--mock-response-file`로 외부 API 없이 adapter 경로 검증
+  - `--allow-api`가 있을 때만 실제 API client 사용
+  - `--model` 기본값은 `gpt-5`
+- `configs/policies/token_policy.yaml`, `kaggle_research_agent/policies.py`
+  - `code_writing` LLM 호출 사유 추가
+- `coding_result_validator.py`
+  - `file_updates.path`도 `allowed_write_files` / `create_files` / `forbidden_paths` 기준으로 검증
+- `README.md`, `docs/policies/coding_request_schema.ko.md`
+  - Code Writer Adapter 사용법과 안전 원칙 반영
+
+설계 원칙:
+
+- API 호출은 token policy와 명시 플래그를 모두 통과해야 한다.
+- 모델이 반환한 경로가 허용 범위를 벗어나면 파일을 쓰기 전에 차단한다.
+- adapter가 파일을 쓴 뒤에는 즉시 `validate-coding-result`를 실행한다.
+- 이번 구현은 5개 top-level agent 구조를 늘리지 않고, Training/Execution Agent의 내부 실행 도구와 Evaluation/Decision Agent의 검증 게이트를 연결한다.
+
+공식 API 참고:
+
+- OpenAI Responses API는 공식 문서 기준 `POST https://api.openai.com/v1/responses`를 사용한다.

@@ -21,6 +21,7 @@ DEFAULT_POLICIES: dict[str, dict[str, Any]] = {
             "high_error_concentration",
             "human_review_needed",
             "strategy_shift_required",
+            "code_writing",
         ],
     },
     "execution_policy": {

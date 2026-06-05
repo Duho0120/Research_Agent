@@ -10,7 +10,7 @@ Starter implementation for a staged autonomous Kaggle research system.
 - Evaluation and Decision Agent: evaluates metrics, diagnoses results, validates patch/coding/submission gates, and decides when human review is needed.
 - Feedback and Orchestration Agent: coordinates the loop, records decisions, updates memory, and controls bounded auto-research cycles.
 
-The implementation keeps execution conservative. It can plan, profile data, generate a baseline, record, evaluate, create local/Colab jobs, validate configs, prepare/validate/handoff/apply patch plans, and preserve submission metadata. Real Kaggle API submission is still exposed as a future integration point.
+The implementation keeps execution conservative. It can plan, profile data, generate a baseline, record, evaluate, create local/Colab jobs, validate configs, prepare/validate/handoff API coding requests, apply scoped code-writer updates, and preserve submission metadata. Real Kaggle API submission is still exposed as a future integration point.
 
 ## Current Status
 
@@ -42,6 +42,7 @@ Completed:
 - Coding handoff now standardizes what is sent to a future Codex/API coding worker: objective, target files, required config changes, implementation steps, guardrails, and validation commands.
 - Coding handoff now has a versioned request contract with context files, allowed write files, declared new files, forbidden paths, execution constraints, and a required `coding_result` output schema.
 - Coding result validation now checks future coding-worker output before downstream execution, including required fields, status values, changed-file scope, declared new files, and forbidden paths. `write-code-dry-run` can create a blocked placeholder result without calling an external API.
+- Code Writer Adapter can now call an injected/mock client or the OpenAI Responses API behind an explicit `--allow-api` flag, accept JSON `file_updates`, apply only allowed paths, and immediately run `validate-coding-result`.
 - Data onboarding now uses local files when available, or falls back to the Kaggle inspection file listing when data has not been downloaded yet.
 - Baseline generation currently targets tabular CSV competitions with a detected target column and writes a local sanity-check `submission.csv` and `metrics.json` when run.
 - Responsibility boundaries were tightened: Pipeline Patch Planner plans only, Patch Validator is the execution safety gate, Coding Handoff reuses existing validation, and Baseline Generator consumes the saved data profile snapshot.
@@ -68,7 +69,7 @@ start-competition / init
   -> prepare patch plan
   -> validate patch plan
   -> prepare coding handoff
-  -> write code / dry-run code writer
+  -> run code writer / dry-run code writer
   -> validate coding result
   -> apply patch plan
   -> prepare submission manifest
@@ -80,8 +81,8 @@ Still pending:
 - Real-world Kaggle smoke testing with an approved competition and submission file.
 - Data download, schema analysis, and baseline training code generation from a competition inspection.
 - Automatic submission policy beyond `never` / `prepare_only`.
-- A fuller production-grade code editing strategy beyond prepared patch-plan execution.
-- Direct LLM integration behind the existing token policy gate.
+- Real-world validation of the code-writer API path with a live key and a deliberately small approved patch.
+- Automatic execution of validation commands after accepted code-writer output.
 - Full LangGraph auto-loop replacement; the current graph command covers the one-trial cycle first.
 
 Latest verified baseline:
@@ -90,7 +91,7 @@ Latest verified baseline:
 python -B -m unittest discover -s tests -v
 ```
 
-Expected result: `113 tests`, `OK`.
+Expected result: `118 tests`, `OK`.
 
 ## Agent Architecture
 
@@ -112,6 +113,7 @@ Planning Agent
 Training and Execution Agent
   -> local / Colab job creation
   -> local run execution
+  -> scoped code-writer file updates
   -> patch application
 
 Evaluation and Decision Agent
@@ -129,7 +131,7 @@ Feedback and Orchestration Agent
   -> memory update and next-trial feedback loop
 ```
 
-Implementation modules are intentionally smaller than the top-level agents. Files such as `pipeline_planner.py`, `model_advisor.py`, `patch_validator.py`, `coding_handoff.py`, `coding_result_validator.py`, and `baseline_generator.py` are internal tools used by the 5-agent architecture, not separate top-level agents.
+Implementation modules are intentionally smaller than the top-level agents. Files such as `pipeline_planner.py`, `model_advisor.py`, `patch_validator.py`, `coding_handoff.py`, `code_writer_adapter.py`, `coding_result_validator.py`, and `baseline_generator.py` are internal tools used by the 5-agent architecture, not separate top-level agents.
 
 ## Policy Design
 
@@ -364,6 +366,18 @@ Create a dry-run coding result without calling an external coding API:
 
 ```powershell
 python -B -m kaggle_research_agent.cli write-code-dry-run --competition demo --trial trial_002
+```
+
+Run the Code Writer Adapter with a local mock response file:
+
+```powershell
+python -B -m kaggle_research_agent.cli run-code-writer --competition demo --trial trial_002 --mock-response-file mock_response.json
+```
+
+Run the Code Writer Adapter with the OpenAI Responses API only when you explicitly approve an API call:
+
+```powershell
+python -B -m kaggle_research_agent.cli run-code-writer --competition demo --trial trial_002 --model gpt-5 --allow-api
 ```
 
 Validate a coding-agent result before downstream execution:

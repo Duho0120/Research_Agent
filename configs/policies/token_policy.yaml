@@ -11,3 +11,4 @@ call_llm_when:
   - high_error_concentration
   - human_review_needed
   - strategy_shift_required
+  - code_writing

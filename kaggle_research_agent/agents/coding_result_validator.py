@@ -21,6 +21,7 @@ def validate_coding_result(competition: str, trial_id: str) -> dict[str, Any]:
     coding_result = json.loads(result_path.read_text(encoding="utf-8"))
     issues = _validate_schema(coding_result, handoff)
     issues.extend(_validate_changed_files(coding_result, handoff))
+    issues.extend(_validate_file_updates(coding_result, handoff))
 
     result = {
         "competition": competition,
@@ -153,6 +154,27 @@ def _validate_changed_files(coding_result: dict[str, Any], handoff: dict[str, An
             issues.append(f"changed_file_not_allowed:{item}")
         if _matches_forbidden_path(item, forbidden):
             issues.append(f"forbidden_path_touched:{item}")
+    return issues
+
+
+def _validate_file_updates(coding_result: dict[str, Any], handoff: dict[str, Any]) -> list[str]:
+    updates = coding_result.get("file_updates", [])
+    if not updates:
+        return []
+    if not isinstance(updates, list):
+        return ["invalid_type:file_updates"]
+    allowed = set(handoff.get("allowed_write_files", [])) | set(handoff.get("create_files", []))
+    forbidden = handoff.get("forbidden_paths", [])
+    issues: list[str] = []
+    for update in updates:
+        path = update.get("path") if isinstance(update, dict) else None
+        if not path:
+            issues.append("invalid_file_update")
+            continue
+        if path not in allowed:
+            issues.append(f"file_update_not_allowed:{path}")
+        if _matches_forbidden_path(path, forbidden):
+            issues.append(f"forbidden_path_touched:{path}")
     return issues
 
 

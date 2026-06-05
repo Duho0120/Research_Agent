@@ -115,3 +115,19 @@ experiments/<competition>/<trial>/coding_result_validation.md
 ```
 
 실제 Codex/API 코딩 작업자가 붙기 전까지는 `write-code-dry-run`으로 `blocked` 상태의 placeholder 결과를 만들 수 있다. 이 dry-run은 파일을 수정하지 않고 외부 API도 호출하지 않는다.
+
+## Code Writer Adapter
+
+`run-code-writer`는 `coding_handoff.json`을 읽어 코딩 모델 또는 mock client에 전달한다.
+
+운영 원칙:
+
+- 실제 API 호출은 `--allow-api`가 있을 때만 수행한다.
+- mock response file을 사용하면 외부 API 없이 같은 경로를 테스트할 수 있다.
+- 모델은 로컬 파일을 직접 수정하지 않는다.
+- 모델은 JSON 안에 `file_updates`를 반환하고, Python adapter가 허용된 경로만 실제로 쓴다.
+- `file_updates.path`는 `allowed_write_files` 또는 `create_files` 안에 있어야 한다.
+- `forbidden_paths`에 해당하는 경로는 쓰지 않는다.
+- 결과 저장 후 즉시 `validate-coding-result`를 실행한다.
+
+OpenAI Responses API를 사용할 때의 기본 endpoint는 공식 API 문서 기준 `POST https://api.openai.com/v1/responses`이며, 이 프로젝트에서는 표준 라이브러리 기반 client가 `OPENAI_API_KEY` 환경 변수를 읽는다.

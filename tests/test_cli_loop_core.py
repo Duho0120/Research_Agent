@@ -600,6 +600,56 @@ class CliLoopCoreTest(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertTrue((trial / "coding_result_validation.json").exists())
 
+    def test_run_code_writer_command_uses_mock_response_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trial = root / "experiments" / "demo" / "trial_002"
+            trial.mkdir(parents=True)
+            (trial / "config.yaml").write_text("model:\n  type: lightgbm\n", encoding="utf-8")
+            self._write_coding_handoff(trial)
+            response_path = root / "mock_response.json"
+            response_path.write_text(
+                json.dumps(
+                    {
+                        "output_text": json.dumps(
+                            {
+                                "status": "completed",
+                                "summary": "Updated config from mock response.",
+                                "changed_files": ["experiments/demo/trial_002/config.yaml"],
+                                "file_updates": [
+                                    {
+                                        "path": "experiments/demo/trial_002/config.yaml",
+                                        "content": "model:\n  type: lightgbm\ntraining:\n  sampler: balanced\n",
+                                    }
+                                ],
+                                "validation_results": [
+                                    {"command": "python -B -m unittest discover -s tests -v", "status": "not_run"}
+                                ],
+                                "blocking_issues": [],
+                            }
+                        )
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with redirect_stdout(io.StringIO()):
+                    code = main(
+                        [
+                            "run-code-writer",
+                            "--competition",
+                            "demo",
+                            "--trial",
+                            "trial_002",
+                            "--mock-response-file",
+                            str(response_path),
+                        ]
+                    )
+
+            self.assertEqual(code, 0)
+            self.assertIn("balanced", (trial / "config.yaml").read_text(encoding="utf-8"))
+
     def test_cycle_accepts_apply_next_patch_options(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
