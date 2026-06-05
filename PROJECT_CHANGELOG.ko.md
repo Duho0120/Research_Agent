@@ -1468,3 +1468,53 @@ python -B -m unittest tests.test_cli_loop_core.CliLoopCoreTest.test_cycle_comman
 - 오케스트레이터 cycle에서 `safe_execution_chain.json`과 job artifact 생성 확인
 - LangGraph cycle에서 동일한 안전 체인 분기 확인
 - CLI `cycle --run-safe-chain` 경로 확인
+
+## 2026-06-05 KST
+
+### ETRI Human Understanding 21차 DACON 온보딩
+
+요약:
+
+- 사용자가 제공한 ETRI Human Understanding handoff 문서를 읽고, 이 대회가 Kaggle이 아니라 DACON 계열 외부 대회임을 반영했다.
+- Kaggle CLI 제출/리더보드 polling을 사용하지 않는 `manual_external` 운영 방식으로 competition memory를 구성했다.
+- V11, V15, V16의 핵심 trial 기록을 Research Agent가 읽을 수 있는 state, notes, rules, trial_index, metrics/config/plan artifact로 이식했다.
+
+주요 변경:
+
+- `competitions/etri_human_understanding/`
+  - `state.yaml`
+  - `overview.md`
+  - `data_notes.md`
+  - `metric.md`
+  - `data_profile.json`
+- `memory/etri_human_understanding/`
+  - `research_notes.md`
+  - `rules.md`
+  - `trial_index.jsonl`
+  - `best_trial.json`
+  - `decision_log.jsonl`
+- `experiments/etri_human_understanding/`
+  - `trial_v11_public_baseline`
+  - `trial_v15_subject_temporal_deviation`
+  - `trial_v16_causal_rolling_baseline`
+- `configs/etri_human_understanding/allowed_space.yaml`
+- ETRI 온보딩 회귀 테스트 추가
+
+핵심 기록:
+
+- V11은 Public LB 약 `0.5984`의 신뢰 baseline으로 기록했다.
+- V15는 local CV 개선에도 Public LB `0.5994936146`으로 악화되어 subject personalization 위험 사례로 기록했다.
+- V16은 Subject-hole `0.584915`, Tail `0.596018`의 local best이지만 Public LB 미확인 상태로 기록했다.
+- 규칙에 `random KFold 금지`, `Subject-hole/Tail 필수`, `Kaggle CLI 사용 금지`, `V11 대비 target별 변화량 추적`을 반영했다.
+
+검증:
+
+```powershell
+python -B -m unittest tests.test_etri_onboarding.EtriOnboardingTest.test_etri_competition_onboarding_files_exist_and_preserve_key_context -v
+```
+
+다음 후보:
+
+- V16 safe Public LB가 이미 제출되었는지 확인하고 `record-submission` 또는 submission metadata로 기록
+- V17 Target Chain Stacking 계획 생성
+- DACON/external submission adapter를 별도 기능으로 추가할지 검토

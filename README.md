@@ -12,6 +12,8 @@ Starter implementation for a staged autonomous Kaggle research system.
 
 The implementation keeps execution conservative. It can plan, profile data, generate a baseline, record, evaluate, create local/Colab jobs, validate configs, prepare/validate/handoff API coding requests, apply scoped code-writer updates, and preserve submission metadata. Real Kaggle API submission is still exposed as a future integration point.
 
+Although the project began as a Kaggle research agent, competition memory can also track external competitions. External platforms such as DACON should use manual or platform-specific submission records rather than the Kaggle CLI adapter.
+
 ## Current Status
 
 Completed:
@@ -47,6 +49,7 @@ Completed:
 - Post-Validation Executor can continue from `validation_run.status == passed` into the existing execution policy, creating a local/Colab job or running locally when explicitly requested.
 - Safe Execution Chain can run code writing, coding result validation, validation commands, and post-validation execution in one guarded path that stops at the first failed gate.
 - `cycle` and `run-graph-cycle` can optionally call the Safe Execution Chain with `--run-safe-chain`, so the main trial cycle can move from coding handoff to validated execution without bypassing any gate.
+- ETRI Human Understanding has been onboarded as a DACON/external competition under `etri_human_understanding`, with state, data notes, research notes, rules, prior trial memory, and V11/V15/V16 trial artifacts.
 - Data onboarding now uses local files when available, or falls back to the Kaggle inspection file listing when data has not been downloaded yet.
 - Baseline generation currently targets tabular CSV competitions with a detected target column and writes a local sanity-check `submission.csv` and `metrics.json` when run.
 - Responsibility boundaries were tightened: Pipeline Patch Planner plans only, Patch Validator is the execution safety gate, Coding Handoff reuses existing validation, and Baseline Generator consumes the saved data profile snapshot.
@@ -87,6 +90,7 @@ start-competition / init
 Still pending:
 
 - Real-world Kaggle smoke testing with an approved competition and submission file.
+- A platform-neutral submission adapter for DACON/external competitions; ETRI currently uses manual submission tracking.
 - Data download, schema analysis, and baseline training code generation from a competition inspection.
 - Automatic submission policy beyond `never` / `prepare_only`.
 - Real-world validation of the code-writer API path with a live key and a deliberately small approved patch.
@@ -98,7 +102,7 @@ Latest verified baseline:
 python -B -m unittest discover -s tests -v
 ```
 
-Expected result: `133 tests`, `OK`.
+Expected result: `134 tests`, `OK`.
 
 ## Agent Architecture
 

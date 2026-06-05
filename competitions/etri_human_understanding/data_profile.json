@@ -1,0 +1,17 @@
+{
+  "competition": "etri_human_understanding",
+  "platform": "dacon",
+  "status": "handoff_imported",
+  "task_type": "multi_output_binary_classification",
+  "metric": "mean_binary_logloss",
+  "objective": "minimize",
+  "train_rows": 450,
+  "test_rows": 250,
+  "subjects": 10,
+  "key_columns": ["subject_id", "sleep_date", "lifelog_date"],
+  "target_columns": ["Q1", "Q2", "Q3", "S1", "S2", "S3", "S4"],
+  "submission_columns": ["subject_id", "sleep_date", "lifelog_date", "Q1", "Q2", "Q3", "S1", "S2", "S3", "S4"],
+  "modalities": ["tabular", "sensor_event_parquet", "lifelog"],
+  "main_validation": ["subject_hole", "tail"],
+  "notes": "Imported from ETRI handoff document. Local files remain in the original ETRI project folder."
+}

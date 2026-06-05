@@ -1,0 +1,31 @@
+model:
+  family:
+    - anchored_stacking
+    - target_chain_stacking
+    - adversarial_weighted_blend
+    - calibrated_blend
+    - mixed_effects_prototype
+features:
+  use_causal_rolling_baseline:
+    - true
+    - false
+  use_full_period_subject_deviation:
+    - false
+  use_graph_neighbor_anchor:
+    - true
+    - false
+  use_oof_chain_features:
+    - true
+    - false
+validation:
+  subject_hole:
+    - true
+  tail:
+    - true
+submission:
+  clip_min:
+    min: 0.0
+    max: 0.05
+  clip_max:
+    min: 0.95
+    max: 1.0
