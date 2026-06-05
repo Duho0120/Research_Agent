@@ -1370,3 +1370,35 @@ python -B -m unittest discover -s tests -v
 - validation command는 코드 수정이 안전하게 accepted 된 뒤에만 실행한다.
 - 명령 stdout/stderr는 별도 로그 파일로 남겨 이후 diagnosis나 human review 입력으로 사용할 수 있게 한다.
 - 이번 단계는 5개 top-level agent를 늘리지 않고, Training/Execution Agent의 내부 실행 도구로 둔다.
+
+### Post-Validation Executor 18차 구현
+
+요약:
+
+- `validation_run.status == passed` 이후에만 실제 trial 실행 단계로 넘어가는 실행 게이트를 추가했다.
+- 기존 `execution_policy`와 `decide_execution`을 재사용해 local-first job creation 또는 명시적 local run으로 연결한다.
+- validation이 failed/blocked이면 job 생성과 local 실행을 모두 차단한다.
+
+주요 변경:
+
+- `kaggle_research_agent/agents/post_validation_executor.py` 추가
+  - `run_after_validation`
+  - `render_post_validation_execution`
+- `run-after-validation` CLI 추가
+  - `--run-command`
+  - `--run-now`
+  - `--backend local|colab`
+- 결과 파일 추가
+  - `post_validation_execution.json`
+  - `post_validation_execution.md`
+- `decision_log.jsonl`
+  - `decision_type: post_validation_execution` 기록
+- `README.md`, `docs/policies/coding_request_schema.ko.md`
+  - post-validation execution gate 흐름과 명령 예시 반영
+
+설계 원칙:
+
+- 코드 수정 검증과 실제 trial 실행은 분리한다.
+- `validation_run.status`가 `passed`일 때만 실행 정책을 평가한다.
+- 기본은 local-first job creation이며, 즉시 실행은 `--run-now`가 있을 때만 수행한다.
+- 새 top-level agent를 만들지 않고 Training/Execution Agent의 내부 게이트로 둔다.

@@ -735,6 +735,44 @@ class CliLoopCoreTest(unittest.TestCase):
             self.assertTrue((trial / "validation_run.json").exists())
             self.assertTrue((trial / "standalone_validated.txt").exists())
 
+    def test_run_after_validation_command_creates_local_job(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trial = root / "experiments" / "demo" / "trial_002"
+            trial.mkdir(parents=True)
+            (trial / "config.yaml").write_text("model:\n  type: lightgbm\n", encoding="utf-8")
+            (trial / "validation_run.json").write_text(
+                json.dumps(
+                    {
+                        "competition": "demo",
+                        "trial_id": "trial_002",
+                        "status": "passed",
+                        "issues": [],
+                        "commands": [],
+                        "next_action": "run-trial",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with redirect_stdout(io.StringIO()):
+                    code = main(
+                        [
+                            "run-after-validation",
+                            "--competition",
+                            "demo",
+                            "--trial",
+                            "trial_002",
+                            "--run-command",
+                            "python train.py",
+                        ]
+                    )
+
+            self.assertEqual(code, 0)
+            self.assertTrue((root / "jobs" / "demo" / "demo_trial_002.yaml").exists())
+            self.assertTrue((trial / "post_validation_execution.json").exists())
+
     def test_cycle_accepts_apply_next_patch_options(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -18,6 +18,7 @@ from .agents.pipeline_planner import plan_pipeline_improvement
 from .agents.pipeline_patch_planner import prepare_patch_plan
 from .agents.patch_validator import validate_patch_plan
 from .agents.policy_gate import decide_human_review, log_llm_decision
+from .agents.post_validation_executor import run_after_validation
 from .agents.research_planner import propose_next_experiment, propose_plan
 from .agents.result_analyst import diagnose_trial, evaluate_trial
 from .agents.review_pack import prepare_review_pack
@@ -235,6 +236,13 @@ def main(argv: list[str] | None = None) -> int:
     p_run_validation_commands = sub.add_parser("run-validation-commands")
     p_run_validation_commands.add_argument("--competition", required=True)
     p_run_validation_commands.add_argument("--trial", required=True)
+
+    p_run_after_validation = sub.add_parser("run-after-validation")
+    p_run_after_validation.add_argument("--competition", required=True)
+    p_run_after_validation.add_argument("--trial", required=True)
+    p_run_after_validation.add_argument("--backend", choices=["local", "colab"], default="local")
+    p_run_after_validation.add_argument("--run-now", action="store_true")
+    p_run_after_validation.add_argument("--run-command", dest="run_command", default=None)
 
     args = parser.parse_args(argv)
 
@@ -511,6 +519,17 @@ def main(argv: list[str] | None = None) -> int:
         result = run_validation_commands(args.competition, args.trial)
         print(f"Validation commands: {result['trial_id']} status={result['status']}")
         return 0 if result["status"] == "passed" else 1
+
+    if args.command == "run-after-validation":
+        result = run_after_validation(
+            args.competition,
+            args.trial,
+            command=args.run_command,
+            backend=args.backend,
+            run_now=args.run_now,
+        )
+        print(f"Post-validation execution: {result['trial_id']} status={result['status']}")
+        return 0 if result["status"] in {"job_created", "executed", "ready_to_evaluate"} else 1
 
     return 1
 

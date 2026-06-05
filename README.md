@@ -6,7 +6,7 @@ Starter implementation for a staged autonomous Kaggle research system.
 
 - Knowledge and Memory Agent: manages competition context, data profiles, research notes, trial memory, rules, review packs, and user feedback.
 - Planning Agent: plans trials, chooses improvement axes, advises model-family candidates, generates baseline plans, prepares patch plans, and creates coding handoff requests.
-- Training and Execution Agent: creates local/Colab jobs, runs local commands, applies prepared patch plans, and preserves run artifacts.
+- Training and Execution Agent: creates local/Colab jobs, runs local commands, applies scoped code-writer updates, runs validation commands, gates post-validation execution, and preserves run artifacts.
 - Evaluation and Decision Agent: evaluates metrics, diagnoses results, validates patch/coding/submission gates, and decides when human review is needed.
 - Feedback and Orchestration Agent: coordinates the loop, records decisions, updates memory, and controls bounded auto-research cycles.
 
@@ -44,6 +44,7 @@ Completed:
 - Coding result validation now checks future coding-worker output before downstream execution, including required fields, status values, changed-file scope, declared new files, and forbidden paths. `write-code-dry-run` can create a blocked placeholder result without calling an external API.
 - Code Writer Adapter can now call an injected/mock client or the OpenAI Responses API behind an explicit `--allow-api` flag, accept JSON `file_updates`, apply only allowed paths, and immediately run `validate-coding-result`.
 - Validation Command Runner can execute the handoff validation commands after an accepted coding result, write `validation_run.md/json`, and record the command outcome in `decision_log.jsonl`.
+- Post-Validation Executor can continue from `validation_run.status == passed` into the existing execution policy, creating a local/Colab job or running locally when explicitly requested.
 - Data onboarding now uses local files when available, or falls back to the Kaggle inspection file listing when data has not been downloaded yet.
 - Baseline generation currently targets tabular CSV competitions with a detected target column and writes a local sanity-check `submission.csv` and `metrics.json` when run.
 - Responsibility boundaries were tightened: Pipeline Patch Planner plans only, Patch Validator is the execution safety gate, Coding Handoff reuses existing validation, and Baseline Generator consumes the saved data profile snapshot.
@@ -73,6 +74,7 @@ start-competition / init
   -> run code writer / dry-run code writer
   -> validate coding result
   -> run validation commands
+  -> run after validation
   -> apply patch plan
   -> prepare submission manifest
   -> submit after approval and leaderboard evidence
@@ -92,7 +94,7 @@ Latest verified baseline:
 python -B -m unittest discover -s tests -v
 ```
 
-Expected result: `123 tests`, `OK`.
+Expected result: `127 tests`, `OK`.
 
 ## Agent Architecture
 
@@ -116,6 +118,7 @@ Training and Execution Agent
   -> local run execution
   -> scoped code-writer file updates
   -> validation command execution
+  -> post-validation execution gate
   -> patch application
 
 Evaluation and Decision Agent
@@ -398,6 +401,18 @@ Execute validation commands after an accepted coding result:
 
 ```powershell
 python -B -m kaggle_research_agent.cli run-validation-commands --competition demo --trial trial_002
+```
+
+Continue from passed validation into the execution policy:
+
+```powershell
+python -B -m kaggle_research_agent.cli run-after-validation --competition demo --trial trial_002 --run-command "python scripts/demo_train.py --config experiments/demo/trial_002/config.yaml --output experiments/demo/trial_002"
+```
+
+Run locally immediately only when requested:
+
+```powershell
+python -B -m kaggle_research_agent.cli run-after-validation --competition demo --trial trial_002 --run-now --run-command "python scripts/demo_train.py --config experiments/demo/trial_002/config.yaml --output experiments/demo/trial_002"
 ```
 
 Or let the cycle create the next-experiment recommendation immediately after diagnosis and memory update:

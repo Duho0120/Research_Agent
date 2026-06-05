@@ -143,3 +143,16 @@ OpenAI Responses API를 사용할 때의 기본 endpoint는 공식 API 문서 �
 - 각 명령의 stdout/stderr는 `validation_command_001.log` 같은 파일로 저장한다.
 - 전체 결과는 `validation_run.json`과 `validation_run.md`에 저장한다.
 - `run-code-writer --run-validation-commands`를 사용하면 code writer 결과가 accepted인 경우에만 이어서 validation command를 실행한다.
+
+## Post-Validation Execution Gate
+
+`validation_run.json`의 status가 `passed`이면 다음 단계에서 `run-after-validation`을 실행할 수 있다.
+
+운영 원칙:
+
+- `validation_run.status`가 `passed`가 아니면 trial 실행이나 job 생성을 하지 않는다.
+- 실행 backend 판단은 기존 `execution_policy`와 `decide_execution`을 사용한다.
+- 기본 흐름은 local-first job creation이다.
+- `--run-now`와 `--run-command`가 함께 있을 때만 즉시 local 실행을 수행한다.
+- 실행 게이트 결과는 `post_validation_execution.json`과 `post_validation_execution.md`에 저장한다.
+- 실행 판단은 `decision_log.jsonl`에 `decision_type: post_validation_execution`으로 기록한다.
