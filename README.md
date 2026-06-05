@@ -34,6 +34,7 @@ Completed:
 - `run-auto-loop` can run a bounded safe research loop across multiple trials with a no-improvement stop policy and submission disabled by default.
 - `run-graph-cycle` exposes the same conservative one-trial flow through a LangGraph `StateGraph` orchestration layer while keeping the existing Python tools as graph nodes.
 - Policy files under `configs/policies/` control token use, execution decisions, and human-review decisions.
+- Research Operating Protocol now standardizes the agent's research style across competitions: current state, evidence, risk, safe/main/aggressive candidate actions, do-not-change constraints, user checks, and execution plan are written before code-oriented follow-up.
 - The policy gate records local/Colab/wait/ask_user execution decisions and LLM call/skip decisions in `decision_log.jsonl`.
 - Human Review now has a closed feedback loop: `request-review` creates a review pack, `record-feedback` updates that pack, and `plan-next` can use recent user feedback.
 - Failed local runs now write `local_failure.json/md`, and the execution policy gate uses that structured artifact before falling back to raw log pattern matching.
@@ -67,6 +68,7 @@ start-competition / init
   -> run local / create local job / ask user / create Colab job / wait
   -> evaluate metrics
   -> diagnose
+  -> research protocol
   -> plan pipeline improvement
   -> advise model candidates when model choice matters
   -> decide human review
@@ -102,7 +104,7 @@ Latest verified baseline:
 python -B -m unittest discover -s tests -v
 ```
 
-Expected result: `134 tests`, `OK`.
+Expected result: `137 tests`, `OK`.
 
 ## Agent Architecture
 
@@ -156,12 +158,15 @@ Cost-efficient autonomous research is governed by policy documents before it is 
 - `docs/policies/review_pack_schema.ko.md`: 사람이 볼 자료, 질문, 답변 저장 형식
 - `docs/policies/coding_request_schema.ko.md`: Codex/API 코딩 작업자의 입력, 쓰기 범위, 결과 계약
 
+- `docs/policies/research_operating_protocol.ko.md`: risk-aware research flow, safe/main/aggressive candidate lanes, and user-check rules
+
 Machine-readable policy files live under `configs/policies/`:
 
 - `token_policy.yaml`
 - `execution_policy.yaml`
 - `human_review_policy.yaml`
 - `pipeline_improvement_policy.yaml`
+- `research_operating_policy.yaml`
 
 The first rule-based policy gate is implemented in `kaggle_research_agent/agents/policy_gate.py`, and review pack creation is implemented in `kaggle_research_agent/agents/review_pack.py`.
 
@@ -170,6 +175,7 @@ Useful policy commands:
 ```powershell
 python -B -m kaggle_research_agent.cli decide-llm --competition demo --trial trial_001 --reason human_review_needed
 python -B -m kaggle_research_agent.cli request-review --competition demo --trial trial_001
+python -B -m kaggle_research_agent.cli research-protocol --competition demo --trial trial_001 --next-trial trial_002
 python -B -m kaggle_research_agent.cli plan-improvement --competition demo --trial trial_001
 python -B -m kaggle_research_agent.cli advise-models --competition demo --trial trial_001
 ```

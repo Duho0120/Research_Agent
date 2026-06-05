@@ -8,6 +8,7 @@ from .. import simple_yaml
 from ..defaults import DEFAULT_CONFIG
 from ..paths import competition_configs_dir, competition_memory_dir, configs_dir, memory_dir, trial_dir
 from ..store import load_recent_trials, load_state, read_text, write_text
+from .research_protocol import build_research_protocol
 
 
 def propose_plan(competition: str, trial_id: str) -> dict[str, Any]:
@@ -136,10 +137,13 @@ def propose_next_experiment(competition: str, source_trial_id: str, next_trial_i
     submission = _latest_submission(competition, source_trial_id)
     user_feedback = _latest_user_feedback(competition, source_trial_id)
     pipeline_plan = _latest_or_create_pipeline_plan(competition, source_trial_id)
+    research_protocol = _latest_or_create_research_protocol(competition, source_trial_id, next_trial_id)
     strategy_hint = diagnosis.get("evidence", {}).get("strategy_recommendation")
     issues = diagnosis.get("evidence", {}).get("issues", [])
 
     strategy = _choose_strategy(strategy_hint, failures, submission, user_feedback, pipeline_plan)
+    if research_protocol and strategy == "controlled_refinement":
+        strategy = research_protocol.get("recommended_next_trial", {}).get("strategy") or strategy
     plan = {
         "competition": competition,
         "source_trial_id": source_trial_id,
@@ -156,6 +160,7 @@ def propose_next_experiment(competition: str, source_trial_id: str, next_trial_i
             "latest_submission": submission,
             "latest_user_feedback": user_feedback,
             "pipeline_improvement": pipeline_plan,
+            "research_protocol": _compact_protocol(research_protocol),
         },
     }
     out_dir = trial_dir(competition, next_trial_id)
@@ -182,6 +187,15 @@ def render_next_experiment(plan: dict[str, Any]) -> str:
     lines.extend(f"- {item}" for item in plan["changes"])
     lines.extend(["", "## Guardrails", ""])
     lines.extend(f"- {item}" for item in plan["guardrails"])
+    protocol = plan["evidence_used"].get("research_protocol", {})
+    if protocol:
+        lines.extend(["", "## Research Protocol", ""])
+        lines.append(f"- risk_level: {protocol.get('risk', {}).get('level')}")
+        lines.append(f"- protocol_strategy: {protocol.get('recommended_next_trial', {}).get('strategy')}")
+        lines.extend(["", "### Do Not Change", ""])
+        lines.extend(f"- {item}" for item in protocol.get("do_not_change", []))
+        lines.extend(["", "### Need User Check", ""])
+        lines.extend(f"- {item}" for item in protocol.get("need_user_check", []) or ["No immediate user check required."])
     lines.extend(
         [
             "",
@@ -338,6 +352,31 @@ def _latest_or_create_pipeline_plan(competition: str, trial_id: str) -> dict[str
     if not (trial_dir(competition, trial_id) / "metrics.json").exists():
         return None
     return plan_pipeline_improvement(competition, trial_id)
+
+
+def _latest_or_create_research_protocol(
+    competition: str,
+    source_trial_id: str,
+    next_trial_id: str,
+) -> dict[str, Any] | None:
+    source_dir = trial_dir(competition, source_trial_id)
+    if not (source_dir / "metrics.json").exists():
+        return None
+    path = source_dir / "research_protocol.json"
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    return build_research_protocol(competition, source_trial_id, next_trial_id)
+
+
+def _compact_protocol(protocol: dict[str, Any] | None) -> dict[str, Any]:
+    if not protocol:
+        return {}
+    return {
+        "risk": protocol.get("risk"),
+        "recommended_next_trial": protocol.get("recommended_next_trial"),
+        "need_user_check": protocol.get("need_user_check"),
+        "do_not_change": protocol.get("do_not_change"),
+    }
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:

@@ -1518,3 +1518,47 @@ python -B -m unittest tests.test_etri_onboarding.EtriOnboardingTest.test_etri_co
 - V16 safe Public LB가 이미 제출되었는지 확인하고 `record-submission` 또는 submission metadata로 기록
 - V17 Target Chain Stacking 계획 생성
 - DACON/external submission adapter를 별도 기능으로 추가할지 검토
+
+## 2026-06-05 KST
+
+### Research Operating Protocol 22차 구현
+
+요약:
+
+- 특정 ETRI 대회에만 맞춘 기능이 아니라, 어떤 대회/데이터가 들어와도 에이전트가 같은 연구 방식으로 사고하도록 Research Operating Protocol을 추가했다.
+- 핵심 흐름은 `Current State -> Evidence -> Risk -> Candidate Actions -> Recommended Next Trial -> Do Not Change -> Need User Check -> Execution Plan`이다.
+- 다음 실험을 바로 코드 수정으로 보내지 않고, safe/main/aggressive 후보와 리스크를 먼저 정리하도록 했다.
+
+주요 변경:
+
+- `kaggle_research_agent/agents/research_protocol.py` 추가
+  - `build_research_protocol`
+  - `render_research_protocol`
+- `research-protocol` CLI 추가
+- `configs/policies/research_operating_policy.yaml` 추가
+- `docs/policies/research_operating_protocol.ko.md` 추가
+- `plan-next`가 source trial에 metrics가 있을 경우 research protocol을 생성하고, next experiment 문서에 protocol risk/user check/do-not-change 정보를 포함하도록 연결
+- ETRI V16 trial에 실제 protocol artifact 생성
+  - `research_protocol.json`
+  - `research_protocol.md`
+
+프로토콜 판단 예시:
+
+- local CV가 좋아졌지만 LB가 나빠지면 `validation_review`를 우선한다.
+- local best인데 Public/외부 leaderboard evidence가 없으면 `safe_submission_or_holdout_confirmation`을 우선한다.
+- 작은 데이터/적은 subject/group, validation suspected, 외부 수동 제출 대회는 risk flag로 남긴다.
+- local-only evidence만으로 public baseline을 대체하지 않는다.
+
+검증:
+
+```powershell
+python -B -m unittest tests.test_research_protocol -v
+python -B -m unittest tests.test_research_planner_next_experiment -v
+python -B -m kaggle_research_agent.cli research-protocol --competition etri_human_understanding --trial trial_v16_causal_rolling_baseline --next-trial trial_v17_target_chain_stacking
+```
+
+ETRI V16 결과:
+
+- risk: `medium`
+- strategy: `safe_submission_or_holdout_confirmation`
+- 이유: local best지만 Public LB가 없고, validation suspected/small data/manual external submission 리스크가 있음

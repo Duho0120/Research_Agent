@@ -20,6 +20,7 @@ from .agents.patch_validator import validate_patch_plan
 from .agents.policy_gate import decide_human_review, log_llm_decision
 from .agents.post_validation_executor import run_after_validation
 from .agents.research_planner import propose_next_experiment, propose_plan
+from .agents.research_protocol import build_research_protocol
 from .agents.result_analyst import diagnose_trial, evaluate_trial
 from .agents.review_pack import prepare_review_pack
 from .agents.safe_execution_chain import run_safe_execution_chain
@@ -127,6 +128,11 @@ def main(argv: list[str] | None = None) -> int:
     p_diag = sub.add_parser("diagnose")
     p_diag.add_argument("--competition", required=True)
     p_diag.add_argument("--trial", required=True)
+
+    p_research_protocol = sub.add_parser("research-protocol")
+    p_research_protocol.add_argument("--competition", required=True)
+    p_research_protocol.add_argument("--trial", required=True)
+    p_research_protocol.add_argument("--next-trial", default=None)
 
     p_review = sub.add_parser("request-review")
     p_review.add_argument("--competition", required=True)
@@ -393,6 +399,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "diagnose":
         diagnosis = diagnose_trial(args.competition, args.trial)
         print(f"Diagnosis: needs_user_review={diagnosis['needs_user_review']}")
+        return 0
+
+    if args.command == "research-protocol":
+        result = build_research_protocol(args.competition, args.trial, args.next_trial)
+        print(
+            "Research protocol: "
+            f"{result['trial_id']} risk={result['risk']['level']} "
+            f"strategy={result['recommended_next_trial']['strategy']}"
+        )
         return 0
 
     if args.command == "request-review":

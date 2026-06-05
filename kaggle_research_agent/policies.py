@@ -103,6 +103,28 @@ DEFAULT_POLICIES: dict[str, dict[str, Any]] = {
             "error_analysis": "controlled_refinement",
         },
     },
+    "research_operating_policy": {
+        "required_output_sections": [
+            "current_state",
+            "evidence",
+            "risk",
+            "candidate_actions",
+            "recommended_next_trial",
+            "do_not_change",
+            "need_user_check",
+            "execution_plan",
+        ],
+        "preserve_public_anchor_on_cv_lb_conflict": True,
+        "require_public_evidence_before_promoting_local_best": True,
+        "small_data_train_rows_threshold": 1000,
+        "small_subject_count_threshold": 20,
+        "candidate_lanes": ["safe", "main", "aggressive"],
+        "default_probability_checks": [
+            "Compare against the trusted baseline before submission.",
+            "Check per-target or per-segment movement when available.",
+            "Keep validation fixed unless the protocol selects validation review.",
+        ],
+    },
 }
 
 
