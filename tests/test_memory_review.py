@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.agents.memory import record_user_feedback, request_user_review
+from kaggle_research_agent.agents.memory import log_token_usage, normalize_token_usage, record_user_feedback, request_user_review
 
 
 class MemoryReviewTest(unittest.TestCase):
@@ -86,6 +86,35 @@ class MemoryReviewTest(unittest.TestCase):
             self.assertEqual(feedback["overall_decision"], "change_validation")
             self.assertEqual(decision["decision_type"], "human_feedback")
             self.assertTrue(decision["user_input_used"])
+
+    def test_log_token_usage_appends_normalized_jsonl(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                row = log_token_usage(
+                    "demo",
+                    "trial_001",
+                    provider="openai_responses",
+                    model="gpt-5",
+                    call_type="code_writing",
+                    usage={"prompt_tokens": "10", "completion_tokens": 5},
+                    request_id="resp_001",
+                )
+
+            path = root / "memory" / "demo" / "token_usage.jsonl"
+            self.assertTrue(path.exists())
+            saved = json.loads(path.read_text(encoding="utf-8").strip())
+            self.assertEqual(row["input_tokens"], 10)
+            self.assertEqual(saved["output_tokens"], 5)
+            self.assertEqual(saved["total_tokens"], 15)
+            self.assertEqual(saved["request_id"], "resp_001")
+
+    def test_normalize_token_usage_preserves_total_when_present(self):
+        normalized = normalize_token_usage({"input_tokens": 10, "output_tokens": 5, "total_tokens": 99})
+
+        self.assertEqual(normalized["input_tokens"], 10)
+        self.assertEqual(normalized["output_tokens"], 5)
+        self.assertEqual(normalized["total_tokens"], 99)
 
 
 if __name__ == "__main__":

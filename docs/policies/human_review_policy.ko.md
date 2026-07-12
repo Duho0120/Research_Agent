@@ -312,3 +312,14 @@ LLM에 raw training log 전체를 넣지 않는다. 필요한 경우 Python/tool
 - 사람에게 보여줄 자료와 질문이 구체적이다.
 - 피드백이 memory에 남고 다음 trial에 반영된다.
 - Human Review가 자율성을 방해하는 예외가 아니라 안정성을 높이는 정식 branch로 작동한다.
+# Review Timing
+
+Human Review는 모든 trial마다 요청하지 않는다.
+
+- `request_now`: leakage, label boundary, safety false negative, 필수 정보 누락 또는 성숙한 파이프라인의 review trigger
+- `defer`: 비긴급 trigger가 있지만 비교 가능한 완료 trial이 부족함
+- `no_review`: 사람의 판단이 필요한 trigger가 없음
+
+비긴급 review의 기본 성숙도는 Execution Profile ready, workspace run completed, metrics collected, 완료 trial 2개 이상이다. 보류된 trigger는 competition별 queue에 누적해 성숙 시점의 review pack에 합친다.
+
+기존 review pack이 사용자 피드백 대기 중이면 후속 비긴급 요청은 다시 보내지 않는다. 긴급 trigger만 이 대기 상태를 우회한다.

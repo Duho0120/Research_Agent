@@ -5,15 +5,13 @@
 ```json
 {
   "objective": "minimize",
-  "platform": "dacon",
   "active_trial": "trial_v16_causal_rolling_baseline",
   "best_trial": {
     "trial_id": "trial_v16_causal_rolling_baseline",
     "cv_score": 0.584915,
     "lb_score": null
   },
-  "consecutive_failures": 1,
-  "validation_suspected": true
+  "consecutive_failures": 1
 }
 ```
 
@@ -21,71 +19,53 @@
 
 ```json
 {
-  "cv_score": 0.584915,
-  "lb_score": null,
-  "best_cv_before": 0.584915,
-  "best_lb_before": null,
-  "cv_improved": false,
+  "score": 0.584915,
+  "best_score_before": 0.584915,
+  "improved": false,
+  "task_type": "multi_output_binary_classification",
   "diagnosis_issues": [
     "CV did not improve against the current best trial."
-  ],
-  "task_type": "multi_output_binary_classification",
-  "train_rows": 450,
-  "subjects": 10,
-  "target_columns": [
-    "Q1",
-    "Q2",
-    "Q3",
-    "S1",
-    "S2",
-    "S3",
-    "S4"
   ]
 }
 ```
 
-## Risk
+## Issues
 
-- level: medium
-- local_best_public_unknown
-- validation_suspected
-- small_data_or_subject_count
-- external_platform_manual_submission
+- CV did not improve against the current best trial.
 
 ## Candidate Actions
 
-### safe
-- Record or request leaderboard/holdout evidence for the local best.
+- Review validation assumptions before changing the pipeline.
 
-### main
-- Prepare a conservative next trial anchored to the trusted public baseline.
-
-### aggressive
-- Postpone model-family changes until public evidence exists.
-
-## Recommended Next Trial
+## Recommended Action
 
 - trial_id: trial_v17_target_chain_stacking
-- strategy: safe_submission_or_holdout_confirmation
-- reason: Selected because risk flags are present: local_best_public_unknown, validation_suspected, small_data_or_subject_count, external_platform_manual_submission.
+- strategy: validation_review
+- reason: Selected `validation_review` from the current diagnosis: CV did not improve against the current best trial.
 
-## Do Not Change
+## Constraints
 
-- Do not mix multiple primary improvement axes in one trial.
-- Do not change model family before resolving public evidence.
-- Do not replace the trusted public baseline with local-only evidence.
-- Do not trust high-capacity changes without strong validation evidence.
+- Change only one primary improvement axis in the next trial.
+- Do not bypass code validation or protected-file rules.
+- Do not make a large model change until validation is reviewed.
 
-## Need User Check
+## User Questions
 
-- Record or request leaderboard evidence before promoting the local best.
-- Confirm platform submission limits and how leaderboard evidence will be recorded.
-- Confirm target semantics before changing target dependencies or classifier chains.
+- No immediate user question required.
 
 ## Execution Plan
 
 - Use `trial_v17_target_chain_stacking` as the next trial id.
-- Write or update pipeline_improvement_plan before code changes.
-- Create patch plan and validate it before coding handoff.
-- Run validation commands before training or job creation.
-- Record manual or platform leaderboard result before aggressive follow-up.
+- Create the pipeline improvement plan.
+- Validate the patch plan before code writing.
+- Run validation commands before training.
+- Evaluate and store the result before planning another trial.
+
+## Optional Competition Evidence
+
+```json
+{
+  "leaderboard_score": null,
+  "best_leaderboard_score": null
+}
+```

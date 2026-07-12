@@ -1,0 +1,23 @@
+high_cost:
+  provider: anthropic
+  api: messages
+  model: claude-sonnet-5
+  call_types:
+    - experiment_planning
+    - code_writing
+    - workspace_code_writing
+    - complex_diagnosis
+    - research_strategy
+low_cost:
+  provider: openai
+  api: responses
+  model: gpt-5.6-luna
+  call_types:
+    - status_summary
+    - log_summary
+    - short_note_rewrite
+    - simple_context_summary
+fallback:
+  provider: openai
+  api: responses
+  model: gpt-5.6-luna

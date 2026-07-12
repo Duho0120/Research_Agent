@@ -4,7 +4,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.agents.code_writer_adapter import run_code_writer
+from kaggle_research_agent.agents.code_writer_adapter import (
+    build_anthropic_messages_payload,
+    normalize_anthropic_messages_response,
+    run_code_writer,
+)
 
 
 class FakeCodeWriterClient:
@@ -18,6 +22,33 @@ class FakeCodeWriterClient:
 
 
 class CodeWriterAdapterTest(unittest.TestCase):
+    def test_anthropic_payload_conversion_and_response_normalization(self):
+        payload = {
+            "model": "claude-sonnet-5",
+            "input": [
+                {"role": "developer", "content": "Return only JSON."},
+                {"role": "user", "content": "Write a pipeline."},
+            ],
+        }
+
+        converted = build_anthropic_messages_payload(payload, max_tokens=2048)
+        normalized = normalize_anthropic_messages_response(
+            {
+                "id": "msg_123",
+                "model": "claude-sonnet-5",
+                "content": [{"type": "text", "text": "{\"status\":\"completed\"}"}],
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+            },
+            fallback_model="claude-sonnet-5",
+        )
+
+        self.assertEqual("claude-sonnet-5", converted["model"])
+        self.assertEqual(2048, converted["max_tokens"])
+        self.assertEqual("Return only JSON.", converted["system"])
+        self.assertEqual([{"role": "user", "content": "Write a pipeline."}], converted["messages"])
+        self.assertEqual("{\"status\":\"completed\"}", normalized["output_text"])
+        self.assertEqual(15, normalized["usage"]["total_tokens"])
+
     def test_run_code_writer_applies_allowed_file_update_and_validates_result(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -28,6 +59,11 @@ class CodeWriterAdapterTest(unittest.TestCase):
             client = FakeCodeWriterClient(
                 {
                     "id": "resp_test",
+                    "usage": {
+                        "input_tokens": 1200,
+                        "output_tokens": 300,
+                        "total_tokens": 1500,
+                    },
                     "output_text": json.dumps(
                         {
                             "status": "completed",
@@ -57,6 +93,15 @@ class CodeWriterAdapterTest(unittest.TestCase):
             self.assertTrue((trial / "coding_api_request.json").exists())
             self.assertTrue((trial / "coding_api_response.json").exists())
             self.assertTrue((trial / "coding_result_validation.json").exists())
+            usage_log = root / "memory" / "demo" / "token_usage.jsonl"
+            self.assertTrue(usage_log.exists())
+            usage = json.loads(usage_log.read_text(encoding="utf-8").strip())
+            self.assertEqual(usage["provider"], "openai_responses")
+            self.assertEqual(usage["model"], "gpt-5")
+            self.assertEqual(usage["call_type"], "code_writing")
+            self.assertEqual(usage["input_tokens"], 1200)
+            self.assertEqual(usage["output_tokens"], 300)
+            self.assertEqual(usage["total_tokens"], 1500)
 
     def test_run_code_writer_blocks_when_token_policy_budget_is_exhausted(self):
         with tempfile.TemporaryDirectory() as tmp:

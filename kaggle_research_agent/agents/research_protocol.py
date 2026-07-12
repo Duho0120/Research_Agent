@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ..paths import competition_dir, trial_dir
+from .. import simple_yaml
+from ..paths import competition_configs_dir, competition_dir, trial_dir
 from ..policies import load_policy
-from ..store import load_state, read_text, write_text
+from ..store import load_state, write_text
 from .result_analyst import diagnose_trial
 
 
@@ -14,7 +15,7 @@ def build_research_protocol(
     trial_id: str,
     next_trial_id: str | None = None,
 ) -> dict[str, Any]:
-    """Build the operating protocol snapshot before planning the next code experiment."""
+    """Build a small, domain-neutral research decision before code changes."""
 
     out_dir = trial_dir(competition, trial_id)
     metrics_path = out_dir / "metrics.json"
@@ -25,57 +26,63 @@ def build_research_protocol(
     state = load_state(competition)
     profile = _load_data_profile(competition)
     diagnosis = diagnose_trial(competition, trial_id)
-    policy = load_policy("research_operating_policy")
+    global_policy = load_policy("research_operating_policy")
+    competition_policy = _load_competition_policy(competition)
 
     objective = metrics.get("objective") or state.get("competition", {}).get("objective", "maximize")
     best = state.get("current_state", {}).get("best_trial", {})
-    cv_score = metrics.get("cv_score")
-    lb_score = metrics.get("lb_score")
-    best_cv = best.get("cv_score") if isinstance(best, dict) else None
-    best_lb = best.get("lb_score") if isinstance(best, dict) else None
+    score = metrics.get("cv_score")
+    best_score = best.get("cv_score") if isinstance(best, dict) else None
+    issues = list(diagnosis.get("issues", []))
+    optional_evidence: dict[str, Any] = {}
 
-    risk_flags = _risk_flags(metrics, diagnosis, profile, state, objective, policy, trial_id)
-    risk_level = _risk_level(risk_flags)
-    recommended_strategy = _recommended_strategy(risk_flags, diagnosis, metrics)
+    leaderboard_conflict = _apply_optional_leaderboard_check(
+        metrics,
+        best,
+        objective,
+        competition_policy,
+        issues,
+        optional_evidence,
+    )
+    strategy = _choose_strategy(
+        diagnosis,
+        state,
+        leaderboard_conflict=leaderboard_conflict,
+        leaderboard_affects_strategy=bool(
+            competition_policy.get("leaderboard_tracking", {}).get("affects_strategy", False)
+        ),
+    )
+
     result = {
         "competition": competition,
         "trial_id": trial_id,
         "next_trial_id": next_trial_id,
         "current_state": {
             "objective": objective,
-            "platform": state.get("competition", {}).get("platform", "unknown"),
             "active_trial": state.get("current_state", {}).get("active_trial"),
             "best_trial": best,
             "consecutive_failures": state.get("current_state", {}).get("consecutive_failures", 0),
-            "validation_suspected": state.get("current_state", {}).get("validation_suspected", False),
         },
         "evidence": {
-            "cv_score": cv_score,
-            "lb_score": lb_score,
-            "best_cv_before": best_cv,
-            "best_lb_before": best_lb,
-            "cv_improved": diagnosis.get("cv_improved"),
-            "diagnosis_issues": diagnosis.get("issues", []),
+            "score": score,
+            "best_score_before": best_score,
+            "improved": _improved(score, best_score, objective),
             "task_type": profile.get("task_type", "unknown"),
-            "train_rows": profile.get("train_rows"),
-            "subjects": profile.get("subjects"),
-            "target_columns": profile.get("target_columns", []),
+            "diagnosis_issues": diagnosis.get("issues", []),
         },
-        "risk": {
-            "level": risk_level,
-            "flags": risk_flags,
-            "summary": _risk_summary(risk_flags),
-        },
-        "candidate_actions": _candidate_actions(recommended_strategy, risk_flags, policy),
-        "recommended_next_trial": {
+        "issues": _unique(issues),
+        "candidate_actions": _candidate_actions(strategy),
+        "recommended_action": {
             "trial_id": next_trial_id,
-            "strategy": recommended_strategy,
-            "reason": _strategy_reason(recommended_strategy, risk_flags),
+            "strategy": strategy,
+            "reason": _strategy_reason(strategy, issues),
         },
-        "do_not_change": _do_not_change(recommended_strategy, risk_flags),
-        "need_user_check": _need_user_check(risk_flags, state, profile),
-        "execution_plan": _execution_plan(recommended_strategy, risk_flags, next_trial_id),
-        "required_output_sections": policy.get("required_output_sections", []),
+        "constraints": _constraints(strategy),
+        "user_questions": _user_questions(diagnosis, competition_policy, leaderboard_conflict),
+        "execution_plan": _execution_plan(next_trial_id),
+        "optional_evidence": optional_evidence,
+        "enabled_extensions": _enabled_extensions(competition_policy),
+        "required_output_sections": global_policy.get("required_output_sections", []),
     }
     write_text(out_dir / "research_protocol.json", json.dumps(result, ensure_ascii=False, indent=2) + "\n")
     write_text(out_dir / "research_protocol.md", render_research_protocol(result))
@@ -98,33 +105,41 @@ def render_research_protocol(protocol: dict[str, Any]) -> str:
         json.dumps(protocol["evidence"], ensure_ascii=False, indent=2),
         "```",
         "",
-        "## Risk",
+        "## Issues",
         "",
-        f"- level: {protocol['risk']['level']}",
     ]
-    lines.extend(f"- {item}" for item in protocol["risk"]["flags"] or ["none"])
+    lines.extend(f"- {item}" for item in protocol["issues"] or ["No major issue detected."])
     lines.extend(["", "## Candidate Actions", ""])
-    for lane, actions in protocol["candidate_actions"].items():
-        lines.append(f"### {lane}")
-        lines.extend(f"- {item}" for item in actions)
-        lines.append("")
+    lines.extend(f"- {item}" for item in protocol["candidate_actions"])
     lines.extend(
         [
-            "## Recommended Next Trial",
             "",
-            f"- trial_id: {protocol['recommended_next_trial']['trial_id']}",
-            f"- strategy: {protocol['recommended_next_trial']['strategy']}",
-            f"- reason: {protocol['recommended_next_trial']['reason']}",
+            "## Recommended Action",
             "",
-            "## Do Not Change",
+            f"- trial_id: {protocol['recommended_action']['trial_id']}",
+            f"- strategy: {protocol['recommended_action']['strategy']}",
+            f"- reason: {protocol['recommended_action']['reason']}",
+            "",
+            "## Constraints",
             "",
         ]
     )
-    lines.extend(f"- {item}" for item in protocol["do_not_change"])
-    lines.extend(["", "## Need User Check", ""])
-    lines.extend(f"- {item}" for item in protocol["need_user_check"] or ["No immediate user check required."])
+    lines.extend(f"- {item}" for item in protocol["constraints"])
+    lines.extend(["", "## User Questions", ""])
+    lines.extend(f"- {item}" for item in protocol["user_questions"] or ["No immediate user question required."])
     lines.extend(["", "## Execution Plan", ""])
     lines.extend(f"- {item}" for item in protocol["execution_plan"])
+    if protocol["optional_evidence"]:
+        lines.extend(
+            [
+                "",
+                "## Optional Competition Evidence",
+                "",
+                "```json",
+                json.dumps(protocol["optional_evidence"], ensure_ascii=False, indent=2),
+                "```",
+            ]
+        )
     lines.append("")
     return "\n".join(lines)
 
@@ -136,165 +151,123 @@ def _load_data_profile(competition: str) -> dict[str, Any]:
     return {}
 
 
-def _risk_flags(
+def _load_competition_policy(competition: str) -> dict[str, Any]:
+    path = competition_configs_dir(competition) / "research_policy.yaml"
+    return simple_yaml.load(path, default={}) if path.exists() else {}
+
+
+def _apply_optional_leaderboard_check(
     metrics: dict[str, Any],
-    diagnosis: dict[str, Any],
-    profile: dict[str, Any],
-    state: dict[str, Any],
+    best: dict[str, Any],
     objective: str,
-    policy: dict[str, Any],
-    trial_id: str,
-) -> list[str]:
-    flags: list[str] = []
-    issues = " ".join(diagnosis.get("issues", [])).casefold()
-    lb_score = metrics.get("lb_score")
-    best = state.get("current_state", {}).get("best_trial", {})
-    best_lb = best.get("lb_score") if isinstance(best, dict) else None
-    cv_score = metrics.get("cv_score")
-    best_cv = best.get("cv_score") if isinstance(best, dict) else None
+    competition_policy: dict[str, Any],
+    issues: list[str],
+    optional_evidence: dict[str, Any],
+) -> bool:
+    settings = competition_policy.get("leaderboard_tracking", {})
+    if not settings.get("enabled", False):
+        return False
+    leaderboard_score = metrics.get(settings.get("score_field", "lb_score"))
+    best_leaderboard_score = best.get(settings.get("score_field", "lb_score")) if isinstance(best, dict) else None
+    optional_evidence["leaderboard_score"] = leaderboard_score
+    optional_evidence["best_leaderboard_score"] = best_leaderboard_score
+    conflict = (
+        _improved(metrics.get("cv_score"), best.get("cv_score") if isinstance(best, dict) else None, objective)
+        and leaderboard_score is not None
+        and best_leaderboard_score is not None
+        and not _improved(leaderboard_score, best_leaderboard_score, objective)
+    )
+    if conflict:
+        issues.append("Local and leaderboard movement disagree.")
+    return conflict
 
-    if "cv/lb" in issues:
-        flags.append("cv_lb_conflict")
-    if _local_improved(cv_score, best_cv, objective) and lb_score is not None and best_lb is not None:
-        if (objective == "minimize" and lb_score >= best_lb) or (objective == "maximize" and lb_score <= best_lb):
-            flags.extend(["cv_lb_conflict", "public_anchor_preserved"])
-    is_current_best_trial = isinstance(best, dict) and best.get("trial_id") == trial_id
-    if (_local_improved(cv_score, best_cv, objective) or is_current_best_trial) and lb_score is None:
-        flags.append("local_best_public_unknown")
-    if metrics.get("leakage_warning"):
-        flags.append("leakage_suspected")
+
+def _choose_strategy(
+    diagnosis: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    leaderboard_conflict: bool,
+    leaderboard_affects_strategy: bool,
+) -> str:
+    if leaderboard_conflict and leaderboard_affects_strategy:
+        return "validation_review"
+    if diagnosis.get("needs_user_review"):
+        return "human_review"
     if state.get("current_state", {}).get("validation_suspected"):
-        flags.append("validation_suspected")
-    if metrics.get("prediction_correlation_with_best", 0) >= 0.995:
-        flags.append("low_prediction_diversity")
-    if _small_data(profile, policy):
-        flags.append("small_data_or_subject_count")
-    if state.get("competition", {}).get("platform") not in {None, "", "kaggle"}:
-        flags.append("external_platform_manual_submission")
-    return _unique(flags)
+        return "validation_review"
+    if int(state.get("current_state", {}).get("consecutive_failures", 0) or 0) >= 3:
+        return "strategy_change"
+    return "controlled_improvement"
 
 
-def _local_improved(score: float | None, best: float | None, objective: str) -> bool:
+def _candidate_actions(strategy: str) -> list[str]:
+    if strategy == "human_review":
+        return ["Prepare the evidence needed for a focused user decision."]
+    if strategy == "validation_review":
+        return ["Review validation assumptions before changing the pipeline."]
+    if strategy == "strategy_change":
+        return ["Select one new improvement axis and keep the remaining assumptions fixed."]
+    return [
+        "Choose one primary improvement axis from the latest evidence.",
+        "Keep unrelated pipeline assumptions unchanged for attribution.",
+    ]
+
+
+def _constraints(strategy: str) -> list[str]:
+    constraints = [
+        "Change only one primary improvement axis in the next trial.",
+        "Do not bypass code validation or protected-file rules.",
+    ]
+    if strategy == "validation_review":
+        constraints.append("Do not make a large model change until validation is reviewed.")
+    return constraints
+
+
+def _user_questions(
+    diagnosis: dict[str, Any],
+    competition_policy: dict[str, Any],
+    leaderboard_conflict: bool,
+) -> list[str]:
+    questions = list(diagnosis.get("user_questions", []))
+    settings = competition_policy.get("leaderboard_tracking", {})
+    if leaderboard_conflict and settings.get("ask_user_on_conflict", True):
+        questions.append("Should validation or submission assumptions be reviewed before the next trial?")
+    return _unique(questions)
+
+
+def _execution_plan(next_trial_id: str | None) -> list[str]:
+    steps = []
+    if next_trial_id:
+        steps.append(f"Use `{next_trial_id}` as the next trial id.")
+    steps.extend(
+        [
+            "Create the pipeline improvement plan.",
+            "Validate the patch plan before code writing.",
+            "Run validation commands before training.",
+            "Evaluate and store the result before planning another trial.",
+        ]
+    )
+    return steps
+
+
+def _enabled_extensions(policy: dict[str, Any]) -> list[str]:
+    enabled = []
+    if policy.get("leaderboard_tracking", {}).get("enabled", False):
+        enabled.append("leaderboard_tracking")
+    return enabled
+
+
+def _improved(score: float | None, best: float | None, objective: str) -> bool:
     if score is None or best is None:
         return False
     return score < best if objective == "minimize" else score > best
 
 
-def _small_data(profile: dict[str, Any], policy: dict[str, Any]) -> bool:
-    train_rows = profile.get("train_rows")
-    subjects = profile.get("subjects")
-    row_threshold = policy.get("small_data_train_rows_threshold", 1000)
-    subject_threshold = policy.get("small_subject_count_threshold", 20)
-    return (isinstance(train_rows, int) and train_rows < row_threshold) or (
-        isinstance(subjects, int) and subjects < subject_threshold
-    )
-
-
-def _risk_level(flags: list[str]) -> str:
-    high = {"cv_lb_conflict", "leakage_suspected", "public_anchor_preserved"}
-    medium = {"local_best_public_unknown", "validation_suspected", "small_data_or_subject_count"}
-    if any(flag in high for flag in flags):
-        return "high"
-    if any(flag in medium for flag in flags):
-        return "medium"
-    return "low"
-
-
-def _recommended_strategy(flags: list[str], diagnosis: dict[str, Any], metrics: dict[str, Any]) -> str:
-    if "cv_lb_conflict" in flags or "leakage_suspected" in flags:
-        return "validation_review"
-    if "local_best_public_unknown" in flags:
-        return "safe_submission_or_holdout_confirmation"
-    if metrics.get("segment_errors") or diagnosis.get("needs_user_review"):
-        return "error_analysis_human_review"
-    if "low_prediction_diversity" in flags:
-        return "diverse_candidate_search"
-    return "controlled_refinement"
-
-
-def _candidate_actions(strategy: str, flags: list[str], policy: dict[str, Any]) -> dict[str, list[str]]:
-    default_checks = policy.get("default_probability_checks", [])
-    if strategy == "validation_review":
-        return {
-            "safe": ["Audit validation split and leakage assumptions.", *default_checks],
-            "main": ["Try conservative calibration or blend repair without changing model family."],
-            "aggressive": ["Delay architecture/model-family changes until validation conflict is explained."],
-        }
-    if strategy == "safe_submission_or_holdout_confirmation":
-        return {
-            "safe": ["Record or request leaderboard/holdout evidence for the local best."],
-            "main": ["Prepare a conservative next trial anchored to the trusted public baseline."],
-            "aggressive": ["Postpone model-family changes until public evidence exists."],
-        }
-    if strategy == "error_analysis_human_review":
-        return {
-            "safe": ["Prepare error slices and review questions."],
-            "main": ["Change one data, feature, sampling, or calibration axis based on the error pattern."],
-            "aggressive": ["Consider model-family changes only after the error pattern is understood."],
-        }
-    return {
-        "safe": ["Make one small controlled change and keep validation fixed."],
-        "main": ["Use pipeline improvement planning to choose one primary axis."],
-        "aggressive": ["Consider model or architecture changes only after repeated saturation evidence."],
-    }
-
-
-def _do_not_change(strategy: str, flags: list[str]) -> list[str]:
-    items = ["Do not mix multiple primary improvement axes in one trial."]
-    if strategy in {"validation_review", "safe_submission_or_holdout_confirmation"} or "validation_suspected" in flags:
-        items.append("Do not change model family before resolving public evidence.")
-    if "public_anchor_preserved" in flags or "local_best_public_unknown" in flags:
-        items.append("Do not replace the trusted public baseline with local-only evidence.")
-    if "small_data_or_subject_count" in flags:
-        items.append("Do not trust high-capacity changes without strong validation evidence.")
-    return items
-
-
-def _need_user_check(flags: list[str], state: dict[str, Any], profile: dict[str, Any]) -> list[str]:
-    checks: list[str] = []
-    if "local_best_public_unknown" in flags:
-        checks.append("Record or request leaderboard evidence before promoting the local best.")
-    if "cv_lb_conflict" in flags:
-        checks.append("Ask whether the validation split or submission strategy should change.")
-    if "external_platform_manual_submission" in flags:
-        checks.append("Confirm platform submission limits and how leaderboard evidence will be recorded.")
-    if profile.get("target_columns"):
-        checks.append("Confirm target semantics before changing target dependencies or classifier chains.")
-    return checks
-
-
-def _execution_plan(strategy: str, flags: list[str], next_trial_id: str | None) -> list[str]:
-    plan = [
-        "Write or update pipeline_improvement_plan before code changes.",
-        "Create patch plan and validate it before coding handoff.",
-        "Run validation commands before training or job creation.",
-    ]
-    if next_trial_id:
-        plan.insert(0, f"Use `{next_trial_id}` as the next trial id.")
-    if strategy == "safe_submission_or_holdout_confirmation":
-        plan.append("Record manual or platform leaderboard result before aggressive follow-up.")
-    if "cv_lb_conflict" in flags:
-        plan.append("Run validation review before any model-family change.")
-    return plan
-
-
-def _risk_summary(flags: list[str]) -> str:
-    if not flags:
-        return "No major protocol risks detected."
-    return "Protocol risks detected: " + ", ".join(flags) + "."
-
-
-def _strategy_reason(strategy: str, flags: list[str]) -> str:
-    if flags:
-        return f"Selected because risk flags are present: {', '.join(flags)}."
-    return f"Selected `{strategy}` because no higher-priority protocol risk was detected."
+def _strategy_reason(strategy: str, issues: list[str]) -> str:
+    if issues:
+        return f"Selected `{strategy}` from the current diagnosis: {'; '.join(_unique(issues))}"
+    return f"Selected `{strategy}` because no higher-priority issue was detected."
 
 
 def _unique(items: list[str]) -> list[str]:
-    seen = set()
-    result = []
-    for item in items:
-        if item not in seen:
-            seen.add(item)
-            result.append(item)
-    return result
+    return list(dict.fromkeys(items))

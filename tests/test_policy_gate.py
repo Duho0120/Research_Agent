@@ -6,12 +6,14 @@ from unittest.mock import patch
 
 from kaggle_research_agent.agents.policy_gate import (
     classify_local_failure,
+    count_llm_calls_from_decision_log,
     decide_execution,
     decide_human_review,
     log_llm_decision,
     should_call_llm,
 )
-from kaggle_research_agent.policies import load_policy
+from kaggle_research_agent.agents.memory import log_decision
+from kaggle_research_agent.policies import load_policy, select_model_for_call
 
 
 class PolicyGateTest(unittest.TestCase):
@@ -21,6 +23,17 @@ class PolicyGateTest(unittest.TestCase):
         self.assertEqual(policy["default_backend"], "local")
         self.assertTrue(policy["local_first"])
         self.assertTrue(policy["ask_before_colab"])
+
+    def test_model_policy_selects_high_and_low_cost_models(self):
+        policy = load_policy("model_policy")
+
+        high_cost = select_model_for_call("experiment_planning", policy=policy)
+        low_cost = select_model_for_call("status_summary", policy=policy)
+
+        self.assertEqual("anthropic", high_cost["provider"])
+        self.assertEqual("claude-sonnet-5", high_cost["model"])
+        self.assertEqual("openai", low_cost["provider"])
+        self.assertEqual("gpt-5.6-luna", low_cost["model"])
 
     def test_decide_execution_chooses_local_run_when_safe(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -111,6 +124,135 @@ class PolicyGateTest(unittest.TestCase):
             self.assertEqual(result["decision"], "prepare_review_pack")
             self.assertIn("high_error_concentration", result["triggers"])
 
+    def test_nonurgent_human_review_is_deferred_before_pipeline_maturity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = decide_human_review(
+                    "demo",
+                    "trial_001",
+                    {
+                        "needs_user_review": True,
+                        "issues": ["Errors are concentrated in one segment."],
+                        "user_questions": ["Check this segment."],
+                    },
+                    pipeline_readiness=self._readiness(completed_trial_count=1),
+                )
+
+            self.assertEqual("defer_review", result["decision"])
+            self.assertEqual("defer", result["timing"])
+
+    def test_nonurgent_human_review_is_released_after_two_completed_trials(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = decide_human_review(
+                    "demo",
+                    "trial_002",
+                    {
+                        "needs_user_review": True,
+                        "issues": ["Errors are concentrated in one segment."],
+                        "user_questions": ["Check this segment."],
+                    },
+                    pipeline_readiness=self._readiness(completed_trial_count=2),
+                )
+
+            self.assertEqual("prepare_review_pack", result["decision"])
+            self.assertEqual("request_now", result["timing"])
+
+    def test_nonurgent_review_is_deferred_while_previous_feedback_is_pending(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            readiness = self._readiness(completed_trial_count=3)
+            readiness["pending_user_review"] = True
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = decide_human_review(
+                    "demo",
+                    "trial_003",
+                    {
+                        "needs_user_review": True,
+                        "issues": ["Errors are concentrated in one segment."],
+                        "user_questions": ["Check this segment."],
+                    },
+                    pipeline_readiness=readiness,
+                )
+
+            self.assertEqual("defer_review", result["decision"])
+            self.assertEqual("defer", result["timing"])
+
+    def test_leakage_review_bypasses_pipeline_maturity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = decide_human_review(
+                    "demo",
+                    "trial_001",
+                    {
+                        "needs_user_review": True,
+                        "issues": ["Leakage warning is present in metrics."],
+                        "user_questions": ["Confirm the validation boundary."],
+                    },
+                    pipeline_readiness=self._readiness(completed_trial_count=1),
+                )
+
+            self.assertEqual("prepare_review_pack", result["decision"])
+            self.assertEqual("request_now", result["timing"])
+            self.assertTrue(result["urgent"])
+
+    def test_label_boundary_ambiguity_bypasses_pipeline_maturity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = decide_human_review(
+                    "demo",
+                    "trial_001",
+                    {
+                        "needs_user_review": True,
+                        "issues": ["Label boundary is ambiguous for adjacent classes."],
+                        "user_questions": ["Confirm the label boundary."],
+                    },
+                    pipeline_readiness=self._readiness(completed_trial_count=1),
+                )
+
+            self.assertIn("label_boundary_ambiguous", result["triggers"])
+            self.assertEqual("request_now", result["timing"])
+
+    def test_safety_false_negative_bypasses_pipeline_maturity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = decide_human_review(
+                    "demo",
+                    "trial_001",
+                    {
+                        "needs_user_review": True,
+                        "issues": ["Fall safety false negative was detected."],
+                        "user_questions": ["Inspect the missed Fall case."],
+                    },
+                    pipeline_readiness=self._readiness(completed_trial_count=1),
+                )
+
+            self.assertIn("safety_false_negative", result["triggers"])
+            self.assertEqual("request_now", result["timing"])
+
+    def test_missing_metric_definition_bypasses_pipeline_maturity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = decide_human_review(
+                    "demo",
+                    "trial_001",
+                    {
+                        "needs_user_review": True,
+                        "issues": ["Required metric definition is missing."],
+                        "user_questions": ["Confirm the primary metric."],
+                    },
+                    pipeline_readiness=self._readiness(completed_trial_count=1),
+                )
+
+            self.assertIn("blocking_information_missing", result["triggers"])
+            self.assertEqual("request_now", result["timing"])
+
     def test_should_call_llm_respects_reason_and_budget(self):
         allowed = should_call_llm("human_review_needed", trial_llm_calls=0, strategy_calls_today=0)
         blocked = should_call_llm("human_review_needed", trial_llm_calls=4, strategy_calls_today=0)
@@ -119,6 +261,76 @@ class PolicyGateTest(unittest.TestCase):
         self.assertEqual(allowed["decision"], "call_llm")
         self.assertEqual(blocked["decision"], "skip_llm")
         self.assertEqual(unnecessary["decision"], "skip_llm")
+
+    def test_should_call_llm_counts_existing_decision_log_when_counts_omitted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                for _ in range(4):
+                    log_decision(
+                        "demo",
+                        "trial_001",
+                        decision_type="llm_call",
+                        decision="call_llm",
+                        reason="Existing LLM call.",
+                    )
+
+                result = should_call_llm("human_review_needed", competition="demo", trial_id="trial_001")
+
+        self.assertEqual(result["decision"], "skip_llm")
+        self.assertEqual(result["trial_llm_calls"], 4)
+        self.assertEqual(result["counts_source"], "decision_log")
+
+    def test_should_call_llm_manual_counts_override_decision_log_counts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                for _ in range(4):
+                    log_decision(
+                        "demo",
+                        "trial_001",
+                        decision_type="llm_call",
+                        decision="call_llm",
+                        reason="Existing LLM call.",
+                    )
+
+                result = should_call_llm(
+                    "human_review_needed",
+                    competition="demo",
+                    trial_id="trial_001",
+                    trial_llm_calls=0,
+                    strategy_calls_today=0,
+                )
+
+        self.assertEqual(result["decision"], "call_llm")
+        self.assertEqual(result["trial_llm_calls"], 0)
+        self.assertEqual(result["strategy_calls_today"], 0)
+
+    def test_count_llm_calls_includes_code_writer_token_decisions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                log_decision(
+                    "demo",
+                    "trial_001",
+                    decision_type="code_writer_api",
+                    decision="accepted",
+                    reason="Code writer ran.",
+                    evidence={"token_decision": {"decision": "call_llm"}},
+                )
+                log_decision(
+                    "demo",
+                    "trial_002",
+                    decision_type="code_writer_api",
+                    decision="blocked",
+                    reason="Code writer blocked.",
+                    evidence={"token_decision": {"decision": "skip_llm"}},
+                )
+
+                counts = count_llm_calls_from_decision_log("demo", "trial_001")
+
+        self.assertEqual(counts["trial_llm_calls"], 1)
+        self.assertGreaterEqual(counts["strategy_calls_today"], 1)
 
     def test_log_llm_decision_records_token_policy_result(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -140,6 +352,15 @@ class PolicyGateTest(unittest.TestCase):
             self.assertEqual(saved["decision"], "call_llm")
             self.assertEqual(saved["evidence"]["llm_reason"], "human_review_needed")
             self.assertEqual(saved["evidence"]["trial_llm_calls"], 1)
+
+    @staticmethod
+    def _readiness(*, completed_trial_count: int) -> dict:
+        return {
+            "execution_profile_ready": True,
+            "workspace_run_completed": True,
+            "metrics_collected": True,
+            "completed_trial_count": completed_trial_count,
+        }
 
 
 if __name__ == "__main__":

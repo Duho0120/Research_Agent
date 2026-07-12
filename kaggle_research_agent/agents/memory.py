@@ -121,6 +121,64 @@ def log_decision(
     return row
 
 
+def log_token_usage(
+    competition: str,
+    trial_id: str | None,
+    *,
+    provider: str,
+    model: str,
+    call_type: str,
+    usage: dict[str, Any],
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    normalized = normalize_token_usage(usage)
+    row = {
+        "time": now_iso(),
+        "competition": competition,
+        "trial_id": trial_id,
+        "provider": provider,
+        "model": model,
+        "call_type": call_type,
+        "request_id": request_id,
+        **normalized,
+        "raw_usage": usage,
+    }
+    out_dir = competition_memory_dir(competition)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / "token_usage.jsonl"
+    with path.open("a", encoding="utf-8") as file:
+        file.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return row
+
+
+def normalize_token_usage(usage: dict[str, Any]) -> dict[str, int | None]:
+    input_tokens = _first_int(usage, ["input_tokens", "prompt_tokens"])
+    output_tokens = _first_int(usage, ["output_tokens", "completion_tokens"])
+    total_tokens = _first_int(usage, ["total_tokens"])
+    if total_tokens is None and input_tokens is not None and output_tokens is not None:
+        total_tokens = input_tokens + output_tokens
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+    }
+
+
+def _first_int(data: dict[str, Any], keys: list[str]) -> int | None:
+    for key in keys:
+        value = data.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            try:
+                return int(value)
+            except ValueError:
+                continue
+    return None
+
+
 import json
 from pathlib import Path
 from typing import Any

@@ -39,6 +39,12 @@ class ResultAnalystTest(unittest.TestCase):
                 "    lb_score: 0.8\n",
                 encoding="utf-8",
             )
+            config_dir = root / "configs" / "demo"
+            config_dir.mkdir(parents=True)
+            (config_dir / "research_policy.yaml").write_text(
+                "leaderboard_tracking:\n  enabled: true\n",
+                encoding="utf-8",
+            )
 
             with patch("kaggle_research_agent.paths.project_root", return_value=root):
                 result = diagnose_trial("demo", "trial_001")

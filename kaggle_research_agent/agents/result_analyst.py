@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .. import simple_yaml
+from ..paths import competition_configs_dir
 from ..paths import trial_dir
 from ..store import load_state, read_text, write_text
 
@@ -130,7 +132,7 @@ def diagnose_trial(competition: str, trial_id: str) -> dict[str, Any]:
     consecutive_failures = int(state.get("current_state", {}).get("consecutive_failures", 0))
 
     raw_cv_improved = _improved(cv_score, best_score, objective) if best_score is not None else True
-    has_direction_conflict = (
+    has_direction_conflict = _leaderboard_tracking_enabled(competition) and (
         cv_score is not None
         and lb_score is not None
         and _direction_conflict(cv_score, lb_score, best_score, best_lb_score, objective)
@@ -213,6 +215,14 @@ def _direction_conflict(
     if objective == "minimize":
         return score < best_score and lb_score >= best_lb_score
     return score > best_score and lb_score <= best_lb_score
+
+
+def _leaderboard_tracking_enabled(competition: str) -> bool:
+    path = competition_configs_dir(competition) / "research_policy.yaml"
+    if not path.exists():
+        return False
+    policy = simple_yaml.load(path, default={})
+    return bool(policy.get("leaderboard_tracking", {}).get("enabled", False))
 
 
 def render_diagnosis(result: dict[str, Any]) -> str:

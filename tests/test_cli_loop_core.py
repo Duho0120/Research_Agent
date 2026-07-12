@@ -384,6 +384,12 @@ class CliLoopCoreTest(unittest.TestCase):
             )
             trial = root / "experiments" / "demo" / "trial_001"
             trial.mkdir(parents=True)
+            config_dir = root / "configs" / "demo"
+            config_dir.mkdir(parents=True)
+            (config_dir / "research_policy.yaml").write_text(
+                "leaderboard_tracking:\n  enabled: true\n",
+                encoding="utf-8",
+            )
             (trial / "metrics.json").write_text(
                 json.dumps({"cv_score": 0.82, "lb_score": 0.78, "objective": "maximize"}),
                 encoding="utf-8",

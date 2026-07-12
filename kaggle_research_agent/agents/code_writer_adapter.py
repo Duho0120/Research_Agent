@@ -11,7 +11,7 @@ from .. import paths
 from ..paths import trial_dir
 from ..store import read_text, write_text
 from .coding_result_validator import render_coding_result, validate_coding_result
-from .memory import log_decision
+from .memory import log_decision, log_token_usage
 from .policy_gate import should_call_llm
 
 
@@ -46,6 +46,44 @@ class OpenAIResponsesClient:
             raise RuntimeError(f"OpenAI API error {error.code}: {detail}") from error
 
 
+class AnthropicMessagesClient:
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        base_url: str = "https://api.anthropic.com/v1/messages",
+        anthropic_version: str = "2023-06-01",
+        max_tokens: int = 4096,
+    ):
+        self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        self.base_url = base_url
+        self.anthropic_version = anthropic_version
+        self.max_tokens = max_tokens
+
+    def create_response(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if not self.api_key:
+            raise RuntimeError("ANTHROPIC_API_KEY is not set")
+        anthropic_payload = build_anthropic_messages_payload(payload, max_tokens=self.max_tokens)
+        body = json.dumps(anthropic_payload).encode("utf-8")
+        request = urllib.request.Request(
+            self.base_url,
+            data=body,
+            headers={
+                "x-api-key": self.api_key,
+                "anthropic-version": self.anthropic_version,
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                raw_response = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Anthropic API error {error.code}: {detail}") from error
+        return normalize_anthropic_messages_response(raw_response, fallback_model=str(payload.get("model", "")))
+
+
 class FileResponseClient:
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -54,15 +92,104 @@ class FileResponseClient:
         return json.loads(self.path.read_text(encoding="utf-8"))
 
 
+def create_llm_client(provider: str) -> CodeWriterClient:
+    normalized = normalize_provider(provider)
+    if normalized == "anthropic":
+        return AnthropicMessagesClient()
+    if normalized == "openai":
+        return OpenAIResponsesClient()
+    raise ValueError(f"Unsupported LLM provider: {provider}")
+
+
+def provider_log_name(provider: str) -> str:
+    normalized = normalize_provider(provider)
+    if normalized == "anthropic":
+        return "anthropic_messages"
+    if normalized == "openai":
+        return "openai_responses"
+    return normalized
+
+
+def normalize_provider(provider: str | None) -> str:
+    normalized = (provider or "openai").strip().lower()
+    aliases = {
+        "anthropic_messages": "anthropic",
+        "claude": "anthropic",
+        "openai_responses": "openai",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def build_anthropic_messages_payload(payload: dict[str, Any], *, max_tokens: int) -> dict[str, Any]:
+    system_parts: list[str] = []
+    messages: list[dict[str, str]] = []
+    for item in payload.get("input", []):
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role", "user"))
+        content = _stringify_message_content(item.get("content", ""))
+        if role in {"developer", "system"}:
+            system_parts.append(content)
+        elif role in {"user", "assistant"}:
+            messages.append({"role": role, "content": content})
+        else:
+            messages.append({"role": "user", "content": content})
+    if not messages:
+        messages.append({"role": "user", "content": json.dumps(payload, ensure_ascii=False)})
+    anthropic_payload = {
+        "model": payload.get("model"),
+        "max_tokens": max_tokens,
+        "messages": messages,
+    }
+    if system_parts:
+        anthropic_payload["system"] = "\n\n".join(system_parts)
+    return anthropic_payload
+
+
+def normalize_anthropic_messages_response(raw_response: dict[str, Any], *, fallback_model: str) -> dict[str, Any]:
+    parts: list[str] = []
+    for block in raw_response.get("content", []):
+        if isinstance(block, dict) and block.get("type") == "text":
+            parts.append(str(block.get("text", "")))
+    usage = raw_response.get("usage", {})
+    if isinstance(usage, dict):
+        input_tokens = usage.get("input_tokens")
+        output_tokens = usage.get("output_tokens")
+        total_tokens = None
+        if isinstance(input_tokens, int) and isinstance(output_tokens, int):
+            total_tokens = input_tokens + output_tokens
+        normalized_usage = {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": total_tokens,
+        }
+    else:
+        normalized_usage = {}
+    return {
+        "id": raw_response.get("id"),
+        "model": raw_response.get("model") or fallback_model,
+        "output_text": "\n".join(part for part in parts if part),
+        "usage": normalized_usage,
+        "provider_response": raw_response,
+    }
+
+
+def _stringify_message_content(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    return json.dumps(content, ensure_ascii=False)
+
+
 def run_code_writer(
     competition: str,
     trial_id: str,
     *,
     client: CodeWriterClient | None = None,
     model: str = "gpt-5",
+    provider: str = "openai",
     allow_api: bool = False,
-    trial_llm_calls: int = 0,
-    strategy_calls_today: int = 0,
+    trial_llm_calls: int | None = None,
+    strategy_calls_today: int | None = None,
     run_validation_after: bool = False,
 ) -> dict[str, Any]:
     out_dir = trial_dir(competition, trial_id)
@@ -75,6 +202,8 @@ def run_code_writer(
 
     token_decision = should_call_llm(
         "code_writing",
+        competition=competition,
+        trial_id=trial_id,
         trial_llm_calls=trial_llm_calls,
         strategy_calls_today=strategy_calls_today,
     )
@@ -84,7 +213,7 @@ def run_code_writer(
     if client is None:
         if not allow_api:
             return _write_blocked_result(competition, trial_id, handoff, ["api_call_not_enabled"], token_decision)
-        client = OpenAIResponsesClient()
+        client = create_llm_client(provider)
 
     payload = build_code_writer_payload(handoff, model=model)
     write_text(out_dir / "coding_api_request.json", json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
@@ -93,6 +222,14 @@ def run_code_writer(
     except RuntimeError as error:
         return _write_blocked_result(competition, trial_id, handoff, [f"api_error:{error}"], token_decision)
     write_text(out_dir / "coding_api_response.json", json.dumps(raw_response, ensure_ascii=False, indent=2) + "\n")
+    token_usage = _record_response_token_usage(
+        competition,
+        trial_id,
+        raw_response,
+        provider=provider_log_name(provider),
+        model=model,
+        call_type="code_writing",
+    )
 
     coding_result = _extract_coding_result(raw_response)
     coding_result = _normalize_coding_result(coding_result, competition, trial_id, handoff)
@@ -113,6 +250,7 @@ def run_code_writer(
         evidence={
             "model": model,
             "token_decision": token_decision,
+            "token_usage": token_usage,
             "changed_files": coding_result.get("changed_files", []),
             "validation_issues": validation.get("issues", []),
         },
@@ -125,6 +263,29 @@ def run_code_writer(
         validation["validation_command_status"] = command_result["status"]
         validation["validation_command_count"] = len(command_result["commands"])
     return validation
+
+
+def _record_response_token_usage(
+    competition: str,
+    trial_id: str,
+    raw_response: dict[str, Any],
+    *,
+    provider: str,
+    model: str,
+    call_type: str,
+) -> dict[str, Any] | None:
+    usage = raw_response.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    return log_token_usage(
+        competition,
+        trial_id,
+        provider=provider,
+        model=model,
+        call_type=call_type,
+        usage=usage,
+        request_id=raw_response.get("id"),
+    )
 
 
 def build_code_writer_payload(handoff: dict[str, Any], *, model: str) -> dict[str, Any]:

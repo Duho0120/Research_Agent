@@ -7,6 +7,7 @@ from .competition_inspector import inspect_competition
 from .competition_onboarding import start_competition
 from .config_validator import validate_config
 from .data_onboarding import profile_competition_data
+from .execution_profile import validate_execution_profile
 from .agents.experiment_runner import apply_patch_plan, create_job, run_local_job
 from .agents.coding_handoff import prepare_coding_handoff
 from .agents.coding_result_validator import create_dry_run_coding_result, validate_coding_result
@@ -29,6 +30,15 @@ from .agents.validation_command_runner import run_validation_commands
 from .graph.research_graph import run_graph_cycle
 from .paths import competition_configs_dir, configs_dir, trial_dir
 from .store import init_project
+from .workspace_preparer import prepare_workspace
+from .workspace_metrics_collector import collect_workspace_metrics
+from .workspace_coding_handoff import prepare_workspace_coding_handoff
+from .workspace_code_writer import run_workspace_code_writer, validate_workspace_coding_result
+from .workspace_after_coding import run_workspace_after_coding
+from .workspace_next_gate import plan_next_workspace_trial
+from .workspace_result_cycle import process_workspace_result
+from .workspace_runner import run_workspace_pipeline
+from .demo_one_cycle import run_demo_one_cycle, watch_demo_agent
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -48,6 +58,15 @@ def main(argv: list[str] | None = None) -> int:
     p_start.add_argument("--metric", default="unknown")
     p_start.add_argument("--objective", choices=["maximize", "minimize"], default="maximize")
     p_start.add_argument("--trial", default="trial_001")
+
+    p_prepare_workspace = sub.add_parser("prepare-workspace")
+    p_prepare_workspace.add_argument("--competition", required=True)
+    p_prepare_workspace.add_argument("--source-path", default=None)
+    p_prepare_workspace.add_argument("--topic", default=None)
+    p_prepare_workspace.add_argument("--platform", choices=["kaggle", "dacon", "external", "local_research"], default="external")
+    p_prepare_workspace.add_argument("--metric", default="unknown")
+    p_prepare_workspace.add_argument("--objective", choices=["maximize", "minimize"], default="maximize")
+    p_prepare_workspace.add_argument("--python", dest="python_path", default=None)
 
     p_profile_data = sub.add_parser("profile-data")
     p_profile_data.add_argument("--competition", required=True)
@@ -82,6 +101,69 @@ def main(argv: list[str] | None = None) -> int:
     p_validate = sub.add_parser("validate-config")
     p_validate.add_argument("--competition", required=True)
     p_validate.add_argument("--trial", required=True)
+
+    p_validate_execution_profile = sub.add_parser("validate-execution-profile")
+    p_validate_execution_profile.add_argument("--competition", required=True)
+
+    p_run_workspace = sub.add_parser("run-workspace-pipeline")
+    p_run_workspace.add_argument("--competition", required=True)
+    p_run_workspace.add_argument("--trial", required=True)
+    p_run_workspace.add_argument("--run-now", action="store_true")
+
+    p_collect_workspace_metrics = sub.add_parser("collect-workspace-metrics")
+    p_collect_workspace_metrics.add_argument("--competition", required=True)
+    p_collect_workspace_metrics.add_argument("--trial", required=True)
+
+    p_process_workspace_result = sub.add_parser("process-workspace-result")
+    p_process_workspace_result.add_argument("--competition", required=True)
+    p_process_workspace_result.add_argument("--trial", required=True)
+
+    p_plan_next_workspace = sub.add_parser("plan-next-workspace-trial")
+    p_plan_next_workspace.add_argument("--competition", required=True)
+    p_plan_next_workspace.add_argument("--source-trial", required=True)
+    p_plan_next_workspace.add_argument("--next-trial", required=True)
+
+    p_prepare_workspace_handoff = sub.add_parser("prepare-workspace-handoff")
+    p_prepare_workspace_handoff.add_argument("--competition", required=True)
+    p_prepare_workspace_handoff.add_argument("--trial", required=True)
+
+    p_run_workspace_code_writer = sub.add_parser("run-workspace-code-writer")
+    p_run_workspace_code_writer.add_argument("--competition", required=True)
+    p_run_workspace_code_writer.add_argument("--trial", required=True)
+    p_run_workspace_code_writer.add_argument("--model", default="gpt-5")
+    p_run_workspace_code_writer.add_argument("--provider", choices=["openai", "anthropic"], default="openai")
+    p_run_workspace_code_writer.add_argument("--allow-api", action="store_true")
+    p_run_workspace_code_writer.add_argument("--trial-llm-calls", type=int, default=None)
+    p_run_workspace_code_writer.add_argument("--strategy-calls-today", type=int, default=None)
+    p_run_workspace_code_writer.add_argument("--mock-response-file", default=None)
+
+    p_validate_workspace_code = sub.add_parser("validate-workspace-coding-result")
+    p_validate_workspace_code.add_argument("--competition", required=True)
+    p_validate_workspace_code.add_argument("--trial", required=True)
+
+    p_run_workspace_after_coding = sub.add_parser("run-workspace-after-coding")
+    p_run_workspace_after_coding.add_argument("--competition", required=True)
+    p_run_workspace_after_coding.add_argument("--trial", required=True)
+    p_run_workspace_after_coding.add_argument("--run-now", action="store_true")
+
+    p_demo_one_cycle = sub.add_parser("demo-one-cycle")
+    p_demo_one_cycle.add_argument("--competition", required=True)
+    p_demo_one_cycle.add_argument("--trial", default="trial_001")
+    p_demo_one_cycle.add_argument("--model", default=None)
+    p_demo_one_cycle.add_argument("--provider", choices=["openai", "anthropic"], default=None)
+    p_demo_one_cycle.add_argument("--allow-api", action="store_true")
+    p_demo_one_cycle.add_argument("--mock-plan-file", default=None)
+    p_demo_one_cycle.add_argument("--mock-response-file", default=None)
+    p_demo_one_cycle.add_argument("--run-now", action="store_true")
+    p_demo_one_cycle.add_argument("--trial-llm-calls", type=int, default=None)
+    p_demo_one_cycle.add_argument("--strategy-calls-today", type=int, default=None)
+    p_demo_one_cycle.add_argument("--show-progress", action="store_true")
+
+    p_watch_demo_cycle = sub.add_parser("watch-demo-cycle")
+    p_watch_demo_cycle.add_argument("--competition", required=True)
+    p_watch_demo_cycle.add_argument("--trial", default="trial_001")
+    p_watch_demo_cycle.add_argument("--follow", action="store_true")
+    p_watch_demo_cycle.add_argument("--interval-seconds", type=float, default=1.0)
 
     p_cycle = sub.add_parser("cycle")
     p_cycle.add_argument("--competition", required=True)
@@ -142,8 +224,8 @@ def main(argv: list[str] | None = None) -> int:
     p_llm.add_argument("--competition", required=True)
     p_llm.add_argument("--trial", default=None)
     p_llm.add_argument("--reason", required=True)
-    p_llm.add_argument("--trial-llm-calls", type=int, default=0)
-    p_llm.add_argument("--strategy-calls-today", type=int, default=0)
+    p_llm.add_argument("--trial-llm-calls", type=int, default=None)
+    p_llm.add_argument("--strategy-calls-today", type=int, default=None)
     p_llm.add_argument("--prompt-summary-path", default=None)
 
     p_feedback = sub.add_parser("record-feedback")
@@ -243,8 +325,8 @@ def main(argv: list[str] | None = None) -> int:
     p_run_code_writer.add_argument("--trial", required=True)
     p_run_code_writer.add_argument("--model", default="gpt-5")
     p_run_code_writer.add_argument("--allow-api", action="store_true")
-    p_run_code_writer.add_argument("--trial-llm-calls", type=int, default=0)
-    p_run_code_writer.add_argument("--strategy-calls-today", type=int, default=0)
+    p_run_code_writer.add_argument("--trial-llm-calls", type=int, default=None)
+    p_run_code_writer.add_argument("--strategy-calls-today", type=int, default=None)
     p_run_code_writer.add_argument("--mock-response-file", default=None)
     p_run_code_writer.add_argument("--run-validation-commands", action="store_true")
 
@@ -264,8 +346,8 @@ def main(argv: list[str] | None = None) -> int:
     p_safe_chain.add_argument("--trial", required=True)
     p_safe_chain.add_argument("--model", default="gpt-5")
     p_safe_chain.add_argument("--allow-api", action="store_true")
-    p_safe_chain.add_argument("--trial-llm-calls", type=int, default=0)
-    p_safe_chain.add_argument("--strategy-calls-today", type=int, default=0)
+    p_safe_chain.add_argument("--trial-llm-calls", type=int, default=None)
+    p_safe_chain.add_argument("--strategy-calls-today", type=int, default=None)
     p_safe_chain.add_argument("--mock-response-file", default=None)
     p_safe_chain.add_argument("--backend", choices=["local", "colab"], default="local")
     p_safe_chain.add_argument("--run-now", action="store_true")
@@ -287,6 +369,19 @@ def main(argv: list[str] | None = None) -> int:
         result = start_competition(args.competition, metric=args.metric, objective=args.objective, trial_id=args.trial)
         print(f"Started competition: {result['competition_slug']} status={result['status']}")
         return 0 if result["status"] == "ready" else 1
+
+    if args.command == "prepare-workspace":
+        result = prepare_workspace(
+            args.competition,
+            source_path=args.source_path,
+            topic=args.topic,
+            platform=args.platform,
+            metric=args.metric,
+            objective=args.objective,
+            python_path=args.python_path,
+        )
+        print(f"Workspace preparation: {result['competition']} status={result['status']}")
+        return 1 if result["status"] == "blocked" else 0
 
     if args.command == "profile-data":
         result = profile_competition_data(args.competition)
@@ -335,6 +430,93 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print("Config is valid")
         return 0
+
+    if args.command == "validate-execution-profile":
+        result = validate_execution_profile(args.competition)
+        print(f"Execution profile: {result['competition']} status={result['status']}")
+        if result["issues"]:
+            print("\n".join(result["issues"]))
+        return 0 if result["status"] == "ready" else 1
+
+    if args.command == "run-workspace-pipeline":
+        result = run_workspace_pipeline(args.competition, args.trial, run_now=args.run_now)
+        print(f"Workspace pipeline: {result['competition']} {result['trial_id']} status={result['status']}")
+        return 0 if result["status"] in {"planned", "completed"} else 1
+
+    if args.command == "collect-workspace-metrics":
+        result = collect_workspace_metrics(args.competition, args.trial)
+        print(f"Workspace metrics: {result['competition']} {result['trial_id']} status={result['status']}")
+        return 0 if result["status"] == "collected" else 1
+
+    if args.command == "process-workspace-result":
+        result = process_workspace_result(args.competition, args.trial)
+        print(f"Workspace result: {result['competition']} {result['trial_id']} status={result['status']}")
+        return 1 if result["status"] == "blocked" else 0
+
+    if args.command == "plan-next-workspace-trial":
+        result = plan_next_workspace_trial(args.competition, args.source_trial, args.next_trial)
+        print(
+            "Workspace next gate: "
+            f"{result['competition']} {result['source_trial_id']} -> {result['next_trial_id']} "
+            f"status={result['status']}"
+        )
+        return 1 if result["status"].startswith("blocked") else 0
+
+    if args.command == "prepare-workspace-handoff":
+        result = prepare_workspace_coding_handoff(args.competition, args.trial)
+        print(f"Workspace handoff: {result['competition']} {result['trial_id']} status={result['status']}")
+        return 0 if result["status"] == "ready" else 1
+
+    if args.command == "run-workspace-code-writer":
+        client = FileResponseClient(args.mock_response_file) if args.mock_response_file else None
+        result = run_workspace_code_writer(
+            args.competition,
+            args.trial,
+            client=client,
+            model=args.model,
+            provider=args.provider,
+            allow_api=args.allow_api,
+            trial_llm_calls=args.trial_llm_calls,
+            strategy_calls_today=args.strategy_calls_today,
+        )
+        print(f"Workspace code writer: {result['trial_id']} status={result['status']}")
+        return 0 if result["status"] == "accepted" else 1
+
+    if args.command == "validate-workspace-coding-result":
+        result = validate_workspace_coding_result(args.competition, args.trial)
+        print(f"Workspace coding result validation: {result['trial_id']} status={result['status']}")
+        return 0 if result["status"] == "accepted" else 1
+
+    if args.command == "run-workspace-after-coding":
+        result = run_workspace_after_coding(args.competition, args.trial, run_now=args.run_now)
+        print(f"Workspace after coding: {result['trial_id']} status={result['status']}")
+        return 0 if result["status"] in {"ready_to_run", "completed"} else 1
+
+    if args.command == "demo-one-cycle":
+        result = run_demo_one_cycle(
+            args.competition,
+            args.trial,
+            model=args.model,
+            provider=args.provider,
+            allow_api=args.allow_api,
+            mock_plan_file=args.mock_plan_file,
+            mock_response_file=args.mock_response_file,
+            run_now=args.run_now,
+            trial_llm_calls=args.trial_llm_calls,
+            strategy_calls_today=args.strategy_calls_today,
+            show_progress=args.show_progress,
+        )
+        print(f"Demo one cycle: {result['competition']} {result['trial_id']} status={result['status']}")
+        return 0 if result["status"] in {"planned", "completed"} else 1
+
+    if args.command == "watch-demo-cycle":
+        status = watch_demo_agent(
+            args.competition,
+            args.trial,
+            follow=args.follow,
+            interval_seconds=args.interval_seconds,
+        )
+        return 0 if status.get("status") not in {"blocked", "failed", "invalid"} else 1
 
     if args.command == "cycle":
         result = run_cycle(
@@ -405,8 +587,8 @@ def main(argv: list[str] | None = None) -> int:
         result = build_research_protocol(args.competition, args.trial, args.next_trial)
         print(
             "Research protocol: "
-            f"{result['trial_id']} risk={result['risk']['level']} "
-            f"strategy={result['recommended_next_trial']['strategy']}"
+            f"{result['trial_id']} issues={len(result['issues'])} "
+            f"strategy={result['recommended_action']['strategy']}"
         )
         return 0
 

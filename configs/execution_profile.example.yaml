@@ -1,0 +1,30 @@
+schema_version: "1.0"
+competition: replace_with_workspace_name
+platform: external
+project_root: C:\absolute\path\to\project
+python: C:\absolute\path\to\python.exe
+commands:
+  test:
+    - "{python} -m pytest tests -q"
+  train:
+    - "{python} train.py"
+  predict:
+    - "{python} predict.py"
+artifacts:
+  metrics:
+    - outputs/metrics.json
+  submission:
+    - outputs/submission.csv
+metrics_contract:
+  source_key: validation.primary_score
+write_scope:
+  allowed:
+    - src/
+    - tests/
+    - train.py
+    - predict.py
+  forbidden:
+    - data/
+    - outputs/metrics.json
+    - outputs/submission.csv
+submission_mode: manual_external

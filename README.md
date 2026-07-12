@@ -34,7 +34,19 @@ Completed:
 - `run-auto-loop` can run a bounded safe research loop across multiple trials with a no-improvement stop policy and submission disabled by default.
 - `run-graph-cycle` exposes the same conservative one-trial flow through a LangGraph `StateGraph` orchestration layer while keeping the existing Python tools as graph nodes.
 - Policy files under `configs/policies/` control token use, execution decisions, and human-review decisions.
-- Research Operating Protocol now standardizes the agent's research style across competitions: current state, evidence, risk, safe/main/aggressive candidate actions, do-not-change constraints, user checks, and execution plan are written before code-oriented follow-up.
+- Research Operating Protocol now provides a small domain-neutral flow: current state, evidence, issues, candidate actions, constraints, user questions, and execution plan are written before code-oriented follow-up. Competition-specific checks are opt-in.
+- Execution Profile provides a competition-neutral contract for an external project root, Python runtime, test/train/predict commands, expected artifacts, and allowed/forbidden write scope. Validation does not execute the project.
+- `prepare-workspace` can initialize an isolated workspace from any local project path or research topic, create a bounded file inventory, draft an Execution Profile from conventional entrypoints, and surface uncertain fields as review questions without executing external code.
+- `run-workspace-pipeline` connects a ready Execution Profile to an explicitly approved local `test -> train -> predict` run, stops on the first failure, and records command logs plus expected-artifact checks without embedding competition-specific logic.
+- `collect-workspace-metrics` copies a completed run's JSON metrics into the trial contract, accepts either `cv_score` or an explicit dotted `metrics_contract.source_key`, and requests review instead of guessing ambiguous numeric fields.
+- `process-workspace-result` evaluates and diagnoses collected metrics, records trial memory idempotently, defers nonurgent Human Review until two comparable trials exist, and immediately escalates leakage, label ambiguity, safety false negatives, or missing required definitions.
+- `plan-next-workspace-trial` connects processed workspace results to the next experiment plan, registers user review requests, blocks urgent review states, and allows nonurgent review states to continue with explicit caution metadata.
+- `prepare-workspace-handoff` turns a workspace next-experiment plan into a scoped coding-agent request from the Execution Profile write scope without editing the external project.
+- `run-workspace-code-writer` applies mock/API code-writer file updates under the external `project_root` only when every changed path is project-root-relative, allowed by `allowed_write_paths`, and outside forbidden metric/submission artifacts.
+- `run-workspace-after-coding` requires an accepted workspace coding result, then re-enters the existing workspace pipeline, metrics collection, and result-cycle flow; without `--run-now` it records only the planned execution.
+- `demo-one-cycle` provides the two-week demo path for F-01/F-02/F-03/F-04/F-06 only: rule-based context loading, LLM/mock experiment planning, LLM/mock code writing, local execution, and file-based result recording without F-05 self-improvement, Human Review, submission, approval UI, or SQLite.
+- Demo observability is CMD-only for now: `demo-one-cycle --show-progress` prints live stage messages, while `watch-demo-cycle` reads `agent_status.json` and `agent_events.jsonl` to show whether the demo agent is running, blocked, planned, or completed.
+- Demo model selection is policy-based: `configs/policies/model_policy.yaml` routes high-cost planning/code-writing calls to Anthropic Claude Sonnet 5 and keeps low-cost summary-style calls on OpenAI `gpt-5.6-luna`.
 - The policy gate records local/Colab/wait/ask_user execution decisions and LLM call/skip decisions in `decision_log.jsonl`.
 - Human Review now has a closed feedback loop: `request-review` creates a review pack, `record-feedback` updates that pack, and `plan-next` can use recent user feedback.
 - Failed local runs now write `local_failure.json/md`, and the execution policy gate uses that structured artifact before falling back to raw log pattern matching.
@@ -87,6 +99,17 @@ start-competition / init
   -> apply patch plan
   -> prepare submission manifest
   -> submit after approval and leaderboard evidence
+
+two-week demo path:
+  demo-one-cycle
+    -> load context from Execution Profile and file memory
+    -> create one experiment plan through mock/API LLM
+    -> create scoped coding handoff and apply mock/API code updates
+    -> optionally run local test/train/predict with --run-now
+    -> collect metrics and write demo result record
+  watch-demo-cycle
+    -> read agent_status.json and agent_events.jsonl
+    -> print current stage/progress/recent events in CMD
 ```
 
 Still pending:
@@ -97,6 +120,7 @@ Still pending:
 - Automatic submission policy beyond `never` / `prepare_only`.
 - Real-world validation of the code-writer API path with a live key and a deliberately small approved patch.
 - Full LangGraph auto-loop replacement; the current graph command covers the one-trial cycle first.
+- SQLite remains postponed; current demo/state artifacts are intentionally file-based (`json`, `jsonl`, `md`) so they are easy to inspect and can be migrated later if needed.
 
 Latest verified baseline:
 
@@ -104,7 +128,7 @@ Latest verified baseline:
 python -B -m unittest discover -s tests -v
 ```
 
-Expected result: `137 tests`, `OK`.
+Expected result: `205 tests`, `OK`.
 
 ## Agent Architecture
 
@@ -158,7 +182,8 @@ Cost-efficient autonomous research is governed by policy documents before it is 
 - `docs/policies/review_pack_schema.ko.md`: 사람이 볼 자료, 질문, 답변 저장 형식
 - `docs/policies/coding_request_schema.ko.md`: Codex/API 코딩 작업자의 입력, 쓰기 범위, 결과 계약
 
-- `docs/policies/research_operating_protocol.ko.md`: risk-aware research flow, safe/main/aggressive candidate lanes, and user-check rules
+- `docs/policies/research_operating_protocol.ko.md`: minimal common research flow and optional competition policy extensions
+- `docs/policies/execution_profile_schema.ko.md`: external project execution contract and write-scope validation
 
 Machine-readable policy files live under `configs/policies/`:
 
@@ -167,6 +192,7 @@ Machine-readable policy files live under `configs/policies/`:
 - `human_review_policy.yaml`
 - `pipeline_improvement_policy.yaml`
 - `research_operating_policy.yaml`
+- `model_policy.yaml`
 
 The first rule-based policy gate is implemented in `kaggle_research_agent/agents/policy_gate.py`, and review pack creation is implemented in `kaggle_research_agent/agents/review_pack.py`.
 
@@ -176,6 +202,19 @@ Useful policy commands:
 python -B -m kaggle_research_agent.cli decide-llm --competition demo --trial trial_001 --reason human_review_needed
 python -B -m kaggle_research_agent.cli request-review --competition demo --trial trial_001
 python -B -m kaggle_research_agent.cli research-protocol --competition demo --trial trial_001 --next-trial trial_002
+python -B -m kaggle_research_agent.cli prepare-workspace --competition my_workspace --source-path "C:\path\to\project" --topic "Research objective"
+python -B -m kaggle_research_agent.cli validate-execution-profile --competition demo
+python -B -m kaggle_research_agent.cli run-workspace-pipeline --competition demo --trial trial_001
+python -B -m kaggle_research_agent.cli run-workspace-pipeline --competition demo --trial trial_001 --run-now
+python -B -m kaggle_research_agent.cli collect-workspace-metrics --competition demo --trial trial_001
+python -B -m kaggle_research_agent.cli process-workspace-result --competition demo --trial trial_001
+python -B -m kaggle_research_agent.cli plan-next-workspace-trial --competition demo --source-trial trial_001 --next-trial trial_002
+python -B -m kaggle_research_agent.cli prepare-workspace-handoff --competition demo --trial trial_002
+python -B -m kaggle_research_agent.cli run-workspace-code-writer --competition demo --trial trial_002 --mock-response-file mock_response.json
+python -B -m kaggle_research_agent.cli run-workspace-after-coding --competition demo --trial trial_002 --run-now
+python -B -m kaggle_research_agent.cli demo-one-cycle --competition demo --trial trial_001 --mock-plan-file mock_plan_response.json --mock-response-file mock_code_response.json --run-now --show-progress
+python -B -m kaggle_research_agent.cli watch-demo-cycle --competition demo --trial trial_001
+python -B -m kaggle_research_agent.cli watch-demo-cycle --competition demo --trial trial_001 --follow
 python -B -m kaggle_research_agent.cli plan-improvement --competition demo --trial trial_001
 python -B -m kaggle_research_agent.cli advise-models --competition demo --trial trial_001
 ```

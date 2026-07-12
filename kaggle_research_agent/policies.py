@@ -20,6 +20,7 @@ DEFAULT_POLICIES: dict[str, dict[str, Any]] = {
             "validation_suspected",
             "high_error_concentration",
             "human_review_needed",
+            "experiment_planning",
             "strategy_shift_required",
             "code_writing",
         ],
@@ -66,6 +67,15 @@ DEFAULT_POLICIES: dict[str, dict[str, Any]] = {
         ],
         "max_questions_per_review": 3,
         "default_review_action": "prepare_review_pack",
+        "review_timing": {
+            "minimum_completed_trials_for_nonurgent_review": 2,
+            "immediate_triggers": [
+                "validation_or_leakage_suspected",
+                "label_boundary_ambiguous",
+                "safety_false_negative",
+                "blocking_information_missing",
+            ],
+        },
     },
     "pipeline_improvement_policy": {
         "axes": [
@@ -107,23 +117,46 @@ DEFAULT_POLICIES: dict[str, dict[str, Any]] = {
         "required_output_sections": [
             "current_state",
             "evidence",
-            "risk",
+            "issues",
             "candidate_actions",
-            "recommended_next_trial",
-            "do_not_change",
-            "need_user_check",
+            "recommended_action",
+            "constraints",
+            "user_questions",
             "execution_plan",
         ],
-        "preserve_public_anchor_on_cv_lb_conflict": True,
-        "require_public_evidence_before_promoting_local_best": True,
-        "small_data_train_rows_threshold": 1000,
-        "small_subject_count_threshold": 20,
-        "candidate_lanes": ["safe", "main", "aggressive"],
-        "default_probability_checks": [
-            "Compare against the trusted baseline before submission.",
-            "Check per-target or per-segment movement when available.",
-            "Keep validation fixed unless the protocol selects validation review.",
-        ],
+        "one_primary_axis_per_trial": True,
+        "require_validation_before_execution": True,
+        "require_user_approval_for_expensive_or_external_actions": True,
+    },
+    "model_policy": {
+        "high_cost": {
+            "provider": "anthropic",
+            "api": "messages",
+            "model": "claude-sonnet-5",
+            "call_types": [
+                "experiment_planning",
+                "code_writing",
+                "workspace_code_writing",
+                "complex_diagnosis",
+                "research_strategy",
+            ],
+        },
+        "low_cost": {
+            "provider": "openai",
+            "api": "responses",
+            "model": "gpt-5.6-luna",
+            "call_types": [
+                "status_summary",
+                "log_summary",
+                "short_note_rewrite",
+                "simple_context_summary",
+            ],
+        },
+        "fallback": {
+            "provider": "openai",
+            "api": "responses",
+            "model": "gpt-5.6-luna",
+        },
     },
 }
 
@@ -136,6 +169,28 @@ def load_policy(name: str) -> dict[str, Any]:
     if not loaded:
         return dict(DEFAULT_POLICIES[name])
     return _deep_merge(DEFAULT_POLICIES[name], loaded)
+
+
+def select_model_for_call(call_type: str, *, policy: dict[str, Any] | None = None) -> dict[str, Any]:
+    model_policy = policy or load_policy("model_policy")
+    for tier in ("high_cost", "low_cost"):
+        section = model_policy.get(tier, {})
+        if call_type in section.get("call_types", []):
+            return {
+                "tier": tier,
+                "provider": section.get("provider"),
+                "api": section.get("api"),
+                "model": section.get("model"),
+                "call_type": call_type,
+            }
+    fallback = model_policy.get("fallback", {})
+    return {
+        "tier": "fallback",
+        "provider": fallback.get("provider"),
+        "api": fallback.get("api"),
+        "model": fallback.get("model"),
+        "call_type": call_type,
+    }
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

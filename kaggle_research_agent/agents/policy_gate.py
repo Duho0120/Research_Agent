@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from ..agents.memory import log_decision
+from ..paths import competition_memory_dir
 from ..paths import competition_jobs_dir, trial_dir
 from ..policies import load_policy
 
@@ -106,7 +108,13 @@ def classify_local_failure(log_path: str | Path, *, use_artifact: bool = True) -
     return {"failure_type": "unknown", "matched_pattern": None, "artifact_path": None}
 
 
-def decide_human_review(competition: str, trial_id: str, diagnosis: dict[str, Any]) -> dict[str, Any]:
+def decide_human_review(
+    competition: str,
+    trial_id: str,
+    diagnosis: dict[str, Any],
+    *,
+    pipeline_readiness: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     policy = load_policy("human_review_policy")
     issues = " ".join(diagnosis.get("issues", [])).casefold()
     questions = diagnosis.get("user_questions", [])
@@ -121,19 +129,57 @@ def decide_human_review(competition: str, trial_id: str, diagnosis: dict[str, An
         triggers.append("high_error_concentration")
     if "leakage" in issues or "cv/lb" in issues:
         triggers.append("validation_or_leakage_suspected")
+    if "label" in issues and ("ambiguous" in issues or "boundary" in issues):
+        triggers.append("label_boundary_ambiguous")
+    blocking_classes = [str(item).casefold() for item in policy.get("blocking_safety_classes", [])]
+    if "false negative" in issues and (
+        "safety" in issues or any(class_name in issues for class_name in blocking_classes)
+    ):
+        triggers.append("safety_false_negative")
+    if "missing" in issues and "required" in issues and any(
+        term in issues for term in ["metric", "label", "input", "definition"]
+    ):
+        triggers.append("blocking_information_missing")
     if strategy == "strategy_escalation" or recent_failures >= repeated_threshold:
         triggers.append("strategy_shift_required")
 
     decision = "no_review"
+    timing = "no_review"
+    urgent = False
+    mature = False
     next_action = "continue"
     if triggers:
-        decision = policy.get("default_review_action", "prepare_review_pack")
-        next_action = "request_user_review" if decision == "request_review" else decision
+        if pipeline_readiness is None:
+            timing = "request_now"
+        else:
+            timing_policy = policy.get("review_timing", {})
+            urgent_triggers = set(timing_policy.get("immediate_triggers", []))
+            urgent = bool(urgent_triggers.intersection(triggers))
+            minimum_trials = int(timing_policy.get("minimum_completed_trials_for_nonurgent_review", 2))
+            mature = (
+                bool(pipeline_readiness.get("execution_profile_ready"))
+                and bool(pipeline_readiness.get("workspace_run_completed"))
+                and bool(pipeline_readiness.get("metrics_collected"))
+                and not bool(pipeline_readiness.get("pending_user_review"))
+                and int(pipeline_readiness.get("completed_trial_count", 0)) >= minimum_trials
+            )
+            timing = "request_now" if urgent or mature else "defer"
+
+        if timing == "request_now":
+            decision = policy.get("default_review_action", "prepare_review_pack")
+            next_action = "request_user_review" if decision == "request_review" else decision
+        else:
+            decision = "defer_review"
+            next_action = "continue_until_pipeline_mature"
 
     result = {
         "competition": competition,
         "trial_id": trial_id,
         "decision": decision,
+        "timing": timing,
+        "urgent": urgent,
+        "pipeline_mature": mature,
+        "pipeline_readiness": pipeline_readiness,
         "triggers": triggers,
         "questions": questions[: int(policy.get("max_questions_per_review", 3))],
         "next_action": next_action,
@@ -144,24 +190,52 @@ def decide_human_review(competition: str, trial_id: str, diagnosis: dict[str, An
         decision_type="human_review",
         decision=decision,
         reason="Human review policy evaluated diagnosis.",
-        evidence={"triggers": triggers, "question_count": len(questions)},
+        evidence={
+            "triggers": triggers,
+            "question_count": len(questions),
+            "timing": timing,
+            "urgent": urgent,
+            "pipeline_mature": mature,
+            "pipeline_readiness": pipeline_readiness,
+        },
         user_input_used=False,
         next_action=next_action,
     )
     return result
 
 
-def should_call_llm(reason: str, *, trial_llm_calls: int = 0, strategy_calls_today: int = 0) -> dict[str, Any]:
+def should_call_llm(
+    reason: str,
+    *,
+    competition: str | None = None,
+    trial_id: str | None = None,
+    trial_llm_calls: int | None = None,
+    strategy_calls_today: int | None = None,
+) -> dict[str, Any]:
     policy = load_policy("token_policy")
+    counted_calls = count_llm_calls_from_decision_log(competition, trial_id) if competition else {}
+    resolved_trial_calls = (
+        int(trial_llm_calls)
+        if trial_llm_calls is not None
+        else int(counted_calls.get("trial_llm_calls", 0))
+    )
+    resolved_strategy_calls = (
+        int(strategy_calls_today)
+        if strategy_calls_today is not None
+        else int(counted_calls.get("strategy_calls_today", 0))
+    )
     allowed_reasons = set(policy.get("call_llm_when", []))
     within_budget = (
-        trial_llm_calls < int(policy.get("max_llm_calls_per_trial", 4))
-        and strategy_calls_today < int(policy.get("max_strategy_calls_per_day", 20))
+        resolved_trial_calls < int(policy.get("max_llm_calls_per_trial", 4))
+        and resolved_strategy_calls < int(policy.get("max_strategy_calls_per_day", 20))
     )
     return {
         "decision": "call_llm" if reason in allowed_reasons and within_budget else "skip_llm",
         "reason": reason,
         "within_budget": within_budget,
+        "trial_llm_calls": resolved_trial_calls,
+        "strategy_calls_today": resolved_strategy_calls,
+        "counts_source": counted_calls.get("source", "manual") if competition else "manual",
         "summarize_logs_before_llm": bool(policy.get("summarize_logs_before_llm", True)),
         "avoid_raw_training_logs_in_prompt": bool(policy.get("avoid_raw_training_logs_in_prompt", True)),
     }
@@ -172,12 +246,14 @@ def log_llm_decision(
     trial_id: str | None,
     reason: str,
     *,
-    trial_llm_calls: int = 0,
-    strategy_calls_today: int = 0,
+    trial_llm_calls: int | None = None,
+    strategy_calls_today: int | None = None,
     prompt_summary_path: str | None = None,
 ) -> dict[str, Any]:
     decision = should_call_llm(
         reason,
+        competition=competition,
+        trial_id=trial_id,
         trial_llm_calls=trial_llm_calls,
         strategy_calls_today=strategy_calls_today,
     )
@@ -189,8 +265,9 @@ def log_llm_decision(
         reason=f"Token policy evaluated LLM reason: {reason}.",
         evidence={
             "llm_reason": reason,
-            "trial_llm_calls": trial_llm_calls,
-            "strategy_calls_today": strategy_calls_today,
+            "trial_llm_calls": decision["trial_llm_calls"],
+            "strategy_calls_today": decision["strategy_calls_today"],
+            "counts_source": decision["counts_source"],
             "within_budget": decision["within_budget"],
             "summarize_logs_before_llm": decision["summarize_logs_before_llm"],
             "avoid_raw_training_logs_in_prompt": decision["avoid_raw_training_logs_in_prompt"],
@@ -200,6 +277,53 @@ def log_llm_decision(
         next_action="call-llm" if decision["decision"] == "call_llm" else "use-rule-based-path",
     )
     return {**decision, "log": row}
+
+
+def count_llm_calls_from_decision_log(
+    competition: str | None,
+    trial_id: str | None = None,
+    *,
+    today: str | None = None,
+) -> dict[str, Any]:
+    if not competition:
+        return {"trial_llm_calls": 0, "strategy_calls_today": 0, "source": "none"}
+    path = competition_memory_dir(competition) / "decision_log.jsonl"
+    if not path.exists():
+        return {"trial_llm_calls": 0, "strategy_calls_today": 0, "source": "decision_log"}
+
+    current_day = today or datetime.now(timezone.utc).date().isoformat()
+    trial_count = 0
+    today_count = 0
+    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not _row_counts_as_llm_call(row):
+            continue
+        if trial_id is not None and row.get("trial_id") == trial_id:
+            trial_count += 1
+        if str(row.get("time", "")).startswith(current_day):
+            today_count += 1
+    return {
+        "trial_llm_calls": trial_count,
+        "strategy_calls_today": today_count,
+        "source": "decision_log",
+        "decision_log_path": str(path.as_posix()),
+        "date": current_day,
+    }
+
+
+def _row_counts_as_llm_call(row: dict[str, Any]) -> bool:
+    if row.get("decision_type") == "llm_call" and row.get("decision") == "call_llm":
+        return True
+    evidence = row.get("evidence", {})
+    if not isinstance(evidence, dict):
+        return False
+    token_decision = evidence.get("token_decision", {})
+    return isinstance(token_decision, dict) and token_decision.get("decision") == "call_llm"
 
 
 def _decision(decision: str, reason: str, evidence: dict[str, Any], next_action: str) -> dict[str, Any]:

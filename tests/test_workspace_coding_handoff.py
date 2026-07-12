@@ -1,0 +1,171 @@
+import io
+import json
+import tempfile
+import unittest
+from contextlib import redirect_stdout
+from pathlib import Path
+from unittest.mock import patch
+
+from kaggle_research_agent import simple_yaml
+from kaggle_research_agent.cli import main
+from kaggle_research_agent.workspace_coding_handoff import prepare_workspace_coding_handoff
+
+
+class WorkspaceCodingHandoffTest(unittest.TestCase):
+    def test_prepare_workspace_coding_handoff_writes_scoped_request(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_execution_profile(root, project)
+            self._write_next_trial(root, continuation_mode="continue_with_caution")
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = prepare_workspace_coding_handoff("demo", "trial_002")
+
+            trial = root / "experiments" / "demo" / "trial_002"
+            self.assertEqual("ready", result["status"])
+            self.assertEqual("workspace_coding_agent_request", result["handoff_type"])
+            self.assertEqual(str(project), result["project_root"])
+            self.assertEqual(["src/", "tests/", "train.py"], result["allowed_write_paths"])
+            self.assertIn("outputs/metrics.json", result["forbidden_paths"])
+            self.assertIn("outputs/submission.csv", result["forbidden_paths"])
+            self.assertTrue(result["execution_constraints"]["do_not_run_training"])
+            self.assertTrue(result["execution_constraints"]["do_not_submit"])
+            self.assertTrue(result["execution_constraints"]["do_not_edit_data_or_outputs"])
+            self.assertTrue(result["pending_human_review"])
+            self.assertIn("experiments/demo/trial_002/next_experiment.md", result["context_files"])
+            self.assertTrue((trial / "workspace_coding_handoff.json").exists())
+            request = trial / "workspace_coding_agent_request.md"
+            self.assertTrue(request.exists())
+            text = request.read_text(encoding="utf-8")
+            self.assertIn("Allowed External Write Paths", text)
+            self.assertIn("src/", text)
+            self.assertIn("Do not run training", text)
+            log = root / "memory" / "demo" / "decision_log.jsonl"
+            last = json.loads(log.read_text(encoding="utf-8").splitlines()[-1])
+            self.assertEqual("workspace_coding_handoff", last["decision_type"])
+            self.assertEqual("ready", last["decision"])
+
+    def test_prepare_workspace_coding_handoff_blocks_must_wait_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_execution_profile(root, project)
+            self._write_next_trial(root, continuation_mode="must_wait")
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = prepare_workspace_coding_handoff("demo", "trial_002")
+
+            trial = root / "experiments" / "demo" / "trial_002"
+            self.assertEqual("blocked", result["status"])
+            self.assertIn("continuation_requires_user_feedback", result["blocking_issues"])
+            self.assertTrue((trial / "workspace_coding_handoff.json").exists())
+            self.assertFalse((trial / "workspace_coding_agent_request.md").exists())
+
+    def test_prepare_workspace_coding_handoff_blocks_invalid_execution_profile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_next_trial(root, continuation_mode="can_continue")
+            comp = root / "competitions" / "demo"
+            comp.mkdir(parents=True)
+            simple_yaml.dump(
+                {
+                    "schema_version": "1.0",
+                    "competition": "demo",
+                    "platform": "external",
+                    "project_root": str(root / "missing_project"),
+                    "python": str(root / "missing_python.exe"),
+                    "commands": {"test": ["{python} -m pytest"], "train": ["{python} train.py"]},
+                    "artifacts": {"metrics": ["outputs/metrics.json"], "submission": ["outputs/submission.csv"]},
+                    "write_scope": {"allowed": ["src/"], "forbidden": ["outputs/"]},
+                },
+                comp / "execution_profile.yaml",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = prepare_workspace_coding_handoff("demo", "trial_002")
+
+            self.assertEqual("blocked", result["status"])
+            self.assertIn("execution_profile_not_ready", result["blocking_issues"])
+
+    def test_prepare_workspace_handoff_cli(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_execution_profile(root, project)
+            self._write_next_trial(root, continuation_mode="can_continue")
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with redirect_stdout(io.StringIO()):
+                    code = main(["prepare-workspace-handoff", "--competition", "demo", "--trial", "trial_002"])
+
+            self.assertEqual(0, code)
+            self.assertTrue(
+                (root / "experiments" / "demo" / "trial_002" / "workspace_coding_handoff.json").exists()
+            )
+
+    def _write_project(self, root: Path) -> Path:
+        project = root / "external_project"
+        (project / "src").mkdir(parents=True)
+        (project / "tests").mkdir()
+        (project / "outputs").mkdir()
+        (project / "train.py").write_text("print('train')\n", encoding="utf-8")
+        (project / "src" / "model.py").write_text("MODEL = 'baseline'\n", encoding="utf-8")
+        (project / "tests" / "test_model.py").write_text("def test_placeholder():\n    assert True\n", encoding="utf-8")
+        (project / "outputs" / "metrics.json").write_text("{}", encoding="utf-8")
+        (project / "outputs" / "submission.csv").write_text("id,target\n1,0\n", encoding="utf-8")
+        python = root / "python.exe"
+        python.write_text("fake python", encoding="utf-8")
+        return project
+
+    def _write_execution_profile(self, root: Path, project: Path) -> None:
+        comp = root / "competitions" / "demo"
+        comp.mkdir(parents=True)
+        simple_yaml.dump(
+            {
+                "schema_version": "1.0",
+                "competition": "demo",
+                "platform": "external",
+                "project_root": str(project),
+                "python": str(root / "python.exe"),
+                "commands": {
+                    "test": ["{python} -m pytest tests -q"],
+                    "train": ["{python} train.py"],
+                    "predict": ["{python} predict.py"],
+                },
+                "artifacts": {"metrics": ["outputs/metrics.json"], "submission": ["outputs/submission.csv"]},
+                "write_scope": {
+                    "allowed": ["src/", "tests/", "train.py"],
+                    "forbidden": ["data/", "outputs/metrics.json", "outputs/submission.csv"],
+                },
+                "submission_mode": "manual_external",
+            },
+            comp / "execution_profile.yaml",
+        )
+
+    def _write_next_trial(self, root: Path, *, continuation_mode: str) -> None:
+        trial = root / "experiments" / "demo" / "trial_002"
+        trial.mkdir(parents=True)
+        (trial / "next_experiment.md").write_text(
+            "# trial_002 Next Experiment\n\nTry a controlled feature cleanup.\n",
+            encoding="utf-8",
+        )
+        (trial / "continuation_context.json").write_text(
+            json.dumps(
+                {
+                    "competition": "demo",
+                    "source_trial_id": "trial_001",
+                    "next_trial_id": "trial_002",
+                    "continuation_mode": continuation_mode,
+                    "pending_human_review": continuation_mode == "continue_with_caution",
+                    "review_source_trial": "trial_001" if continuation_mode == "continue_with_caution" else None,
+                    "allowed_topics": ["controlled_refinement"],
+                    "blocked_topics": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

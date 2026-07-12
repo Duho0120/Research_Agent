@@ -10,5 +10,6 @@ call_llm_when:
   - validation_suspected
   - high_error_concentration
   - human_review_needed
+  - experiment_planning
   - strategy_shift_required
   - code_writing

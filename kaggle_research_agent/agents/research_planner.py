@@ -142,8 +142,6 @@ def propose_next_experiment(competition: str, source_trial_id: str, next_trial_i
     issues = diagnosis.get("evidence", {}).get("issues", [])
 
     strategy = _choose_strategy(strategy_hint, failures, submission, user_feedback, pipeline_plan)
-    if research_protocol and strategy == "controlled_refinement":
-        strategy = research_protocol.get("recommended_next_trial", {}).get("strategy") or strategy
     plan = {
         "competition": competition,
         "source_trial_id": source_trial_id,
@@ -190,12 +188,13 @@ def render_next_experiment(plan: dict[str, Any]) -> str:
     protocol = plan["evidence_used"].get("research_protocol", {})
     if protocol:
         lines.extend(["", "## Research Protocol", ""])
-        lines.append(f"- risk_level: {protocol.get('risk', {}).get('level')}")
-        lines.append(f"- protocol_strategy: {protocol.get('recommended_next_trial', {}).get('strategy')}")
-        lines.extend(["", "### Do Not Change", ""])
-        lines.extend(f"- {item}" for item in protocol.get("do_not_change", []))
-        lines.extend(["", "### Need User Check", ""])
-        lines.extend(f"- {item}" for item in protocol.get("need_user_check", []) or ["No immediate user check required."])
+        lines.append(f"- protocol_strategy: {protocol.get('recommended_action', {}).get('strategy')}")
+        lines.extend(["", "### Issues", ""])
+        lines.extend(f"- {item}" for item in protocol.get("issues", []) or ["No major issue detected."])
+        lines.extend(["", "### Constraints", ""])
+        lines.extend(f"- {item}" for item in protocol.get("constraints", []))
+        lines.extend(["", "### User Questions", ""])
+        lines.extend(f"- {item}" for item in protocol.get("user_questions", []) or ["No immediate user question required."])
     lines.extend(
         [
             "",
@@ -372,10 +371,11 @@ def _compact_protocol(protocol: dict[str, Any] | None) -> dict[str, Any]:
     if not protocol:
         return {}
     return {
-        "risk": protocol.get("risk"),
-        "recommended_next_trial": protocol.get("recommended_next_trial"),
-        "need_user_check": protocol.get("need_user_check"),
-        "do_not_change": protocol.get("do_not_change"),
+        "issues": protocol.get("issues", []),
+        "recommended_action": protocol.get("recommended_action"),
+        "user_questions": protocol.get("user_questions", []),
+        "constraints": protocol.get("constraints", []),
+        "enabled_extensions": protocol.get("enabled_extensions", []),
     }
 
 

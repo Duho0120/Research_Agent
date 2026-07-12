@@ -1562,3 +1562,463 @@ ETRI V16 결과:
 - risk: `medium`
 - strategy: `safe_submission_or_holdout_confirmation`
 - 이유: local best지만 Public LB가 없고, validation suspected/small data/manual external submission 리스크가 있음
+
+## 2026-06-09 KST
+
+### 2차 진행: LLM 호출 수 자동 집계 23차 구현
+
+요약:
+
+- 토큰 비용 폭주를 줄이기 위한 1차 수정으로, `decision_log.jsonl` 기반 LLM 호출 수 자동 집계를 추가했다.
+- 기존 CLI 인자로 `--trial-llm-calls`, `--strategy-calls-today`를 직접 넘기는 방식은 유지하되, 값을 생략하면 memory의 decision log에서 자동 계산한다.
+- code writer / safe execution chain도 같은 token policy gate를 사용하도록 연결했다.
+
+주요 변경:
+
+- `kaggle_research_agent/agents/policy_gate.py`
+  - `count_llm_calls_from_decision_log` 추가
+  - `should_call_llm`이 competition/trial_id를 받으면 자동 집계 사용
+  - `log_llm_decision`이 자동 집계 결과를 evidence에 기록
+- `kaggle_research_agent/agents/code_writer_adapter.py`
+  - code writing LLM 호출 전 자동 집계 기반 token gate 사용
+- `kaggle_research_agent/agents/safe_execution_chain.py`
+  - safe chain의 LLM call counter 인자를 optional로 변경
+- `kaggle_research_agent/cli.py`
+  - LLM call counter CLI 기본값을 `None`으로 변경하여 생략 시 자동 집계 활성화
+- `tests/test_policy_gate.py`
+  - decision log 자동 집계 테스트 추가
+  - 수동 카운터 override 테스트 추가
+  - code writer token decision 집계 테스트 추가
+
+검증:
+
+```powershell
+python -B -m pytest tests/test_policy_gate.py -q
+python -B -m pytest -q
+```
+
+결과:
+
+- `tests/test_policy_gate.py`: 11 passed
+- 전체 테스트: 140 passed
+- `.pytest_cache` 쓰기 권한 warning 2개가 있었지만 테스트 실패는 없음
+
+효과:
+
+- trial별 LLM 호출 수와 일일 strategy call 수를 사용자가 매번 직접 입력하지 않아도 된다.
+- 반복 연구 루프에서 token policy가 실제 memory 기록을 기준으로 동작할 수 있게 되었다.
+- 기존 수동 입력 방식은 유지되어, 필요한 경우 명시 카운터로 override 가능하다.
+
+### 2차 진행: Trial별 Token Usage 기록 24차 구현
+
+요약:
+
+- 토큰 절감 기능을 무리하게 더 넣기 전에, 실제 API 응답의 token usage를 관찰할 수 있는 계량 장치를 추가했다.
+- code writer API 응답에 `usage` 필드가 있으면 `memory/<competition>/token_usage.jsonl`에 기록한다.
+- 응답에 usage가 없는 경우 기존 흐름은 그대로 유지된다.
+
+주요 변경:
+
+- `kaggle_research_agent/agents/memory.py`
+  - `log_token_usage` 추가
+  - `normalize_token_usage` 추가
+  - OpenAI Responses 형식(`input_tokens`, `output_tokens`, `total_tokens`)과 Chat Completions식 형식(`prompt_tokens`, `completion_tokens`)을 모두 정규화
+- `kaggle_research_agent/agents/code_writer_adapter.py`
+  - code writer API 응답 저장 후 usage가 있으면 token usage log 기록
+  - code writer decision evidence에 `token_usage` 추가
+- `tests/test_code_writer_adapter.py`
+  - mock API response usage가 `token_usage.jsonl`에 기록되는지 검증
+- `tests/test_memory_review.py`
+  - token usage normalization과 JSONL append 검증
+
+검증:
+
+```powershell
+python -B -m pytest tests/test_code_writer_adapter.py tests/test_memory_review.py -q
+python -B -m pytest -q
+```
+
+결과:
+
+- 관련 테스트: 8 passed
+- 전체 테스트: 142 passed
+- `.pytest_cache` 쓰기 권한 warning 2개가 있었지만 테스트 실패는 없음
+
+효과:
+
+- token usage 기록은 직접 비용을 줄이지는 않지만, 어떤 trial/call_type/model에서 비용이 발생하는지 추적할 수 있게 한다.
+- 향후 context 상한선, prompt summary, 모델 등급 분리 정책을 실제 사용량 근거로 결정할 수 있다.
+
+## 2026-07-06 KST
+
+### 전역 Research Protocol 단순화
+
+요약:
+
+- ETRI 연구 과정에서 사용한 CV/LB, public baseline, safe/main/aggressive 후보 구분이 전역 Research Protocol에 과하게 반영된 문제를 수정했다.
+- 전역 프로토콜은 어떤 주제에도 적용 가능한 최소 공통 연구 흐름만 유지한다.
+- leaderboard 비교 같은 심화 판단은 `configs/<competition>/research_policy.yaml`에서 명시적으로 켠 경우에만 동작한다.
+
+전역 출력:
+
+```text
+Current State
+Evidence
+Issues
+Candidate Actions
+Recommended Action
+Constraints
+User Questions
+Execution Plan
+```
+
+주요 변경:
+
+- safe/main/aggressive 후보 강제 제거
+- 전역 CV/LB conflict 판단 제거
+- `diagnose_trial`의 leaderboard 비교를 대회별 선택 정책으로 변경
+- 대회 특화 판단은 필요한 competition workspace에서만 별도 `research_policy.yaml`로 활성화 가능
+- `plan-next`는 단순화된 protocol 정보를 참고 자료로 포함하되 기존 전략 선택을 덮어쓰지 않음
+
+### 범용 Execution Profile 1차 구현
+
+요약:
+
+- 특정 대회나 기존 프로젝트를 구현 기준으로 사용하지 않고, 사용자가 나중에 지정하는 임의의 대회/연구 프로젝트 경로를 연결하는 범용 계약을 추가했다.
+- 이번 단계에서는 외부 코드를 실행하거나 수정하지 않고 profile 형식과 안전성만 검증한다.
+
+주요 변경:
+
+- `kaggle_research_agent/execution_profile.py`
+  - profile load
+  - 필수 필드 검증
+  - 절대 project/Python 경로 검증
+  - test/train/predict 명령 형식 검증
+  - metrics/submission artifact 경로 검증
+  - allowed/forbidden write scope 충돌 차단
+- `validate-execution-profile` CLI 추가
+- `configs/execution_profile.example.yaml` 범용 예시 추가
+- `docs/policies/execution_profile_schema.ko.md` 추가
+- 특정 대회의 실행 profile은 추가하지 않음
+
+검증 결과 파일:
+
+```text
+competitions/<workspace>/execution_profile_validation.json
+competitions/<workspace>/execution_profile_validation.md
+```
+
+### 범용 Workspace 준비 2차 구현
+
+요약:
+
+- 사용자가 지정한 임의의 로컬 프로젝트 경로나 연구 주제를 대회별 독립 workspace로 준비하는 `prepare-workspace` 기능을 추가했다.
+- 특정 대회의 코드, 모델, metric, validation 방식을 전역 구현에 하드코딩하지 않는다.
+- 자동 탐지는 초안만 만들며 외부 코드를 실행하거나 수정하지 않는다.
+
+주요 기능:
+
+- source path와 topic 기록
+- 제한 깊이·파일 수 기반 workspace inventory 생성
+- 관례적 test/train/predict entrypoint 감지
+- metrics/submission artifact 후보 감지
+- 코드 수정 허용 후보와 데이터/artifact 보호 경로 초안 생성
+- 불확실한 항목은 `needs_review` 질문으로 기록
+- topic만 있으면 `needs_project_path` 상태로 workspace 생성
+
+CLI:
+
+```powershell
+python -B -m kaggle_research_agent.cli prepare-workspace --competition <workspace> --source-path "<path>" --topic "<objective>"
+```
+
+산출물:
+
+```text
+workspace_source.json/md
+workspace_inventory.json/md
+workspace_preparation.json/md
+execution_profile.yaml
+execution_profile_validation.json/md
+```
+
+### 범용 Workspace Pipeline 실행 3차 구현
+
+요약:
+
+- 검증된 Execution Profile을 실제 로컬 실행에 연결하는 `workspace_runner`를 추가했다.
+- 특정 대회, 데이터 형식, 모델 종류를 전역 실행 로직에 포함하지 않았다.
+- `--run-now`가 없는 호출은 계획과 판단 근거만 기록하고 외부 명령을 실행하지 않는다.
+- 승인된 호출은 `test -> train -> predict` 순서로 실행하며 첫 실패에서 중단한다.
+- profile validation 실패, 명령 실패, 산출물 누락을 서로 다른 상태로 기록한다.
+
+CLI:
+
+```powershell
+python -B -m kaggle_research_agent.cli run-workspace-pipeline --competition <workspace> --trial trial_001
+python -B -m kaggle_research_agent.cli run-workspace-pipeline --competition <workspace> --trial trial_001 --run-now
+```
+
+주요 산출물:
+
+```text
+experiments/<workspace>/<trial>/workspace_run.json
+experiments/<workspace>/<trial>/workspace_run.md
+experiments/<workspace>/<trial>/workspace_logs/*.log
+memory/<workspace>/decision_log.jsonl
+```
+
+상태:
+
+- `planned`: 실행 승인 대기
+- `blocked`: profile validation 실패
+- `failed`: 명령 실행 실패
+- `incomplete_artifacts`: 예상 산출물 누락
+- `completed`: 명령과 산출물 검사 통과
+
+다음 단계:
+
+- metrics 산출물의 범용 schema 검증 및 trial 수집 연결
+- 제출은 이번 단계에서 실행하지 않음
+
+### 범용 Workspace Metrics 수집 4차 구현
+
+요약:
+
+- 완료된 workspace pipeline의 JSON metrics를 trial 표준 `metrics.json`으로 수집하는 collector를 추가했다.
+- 외부 metrics 원본은 수정하지 않고 원본 필드를 trial 복사본에 보존한다.
+- 외부 JSON의 `cv_score`를 우선 사용하고, 없으면 선택적 `metrics_contract.source_key` dot path를 사용한다.
+- 숫자 필드를 임의 추측하지 않으며 mapping이 불명확하면 `needs_review`로 전환한다.
+- Kaggle/DACON 로컬 metrics 수집은 공통 처리하고 leaderboard 점수 수집은 submission 계층에 남긴다.
+
+CLI:
+
+```powershell
+python -B -m kaggle_research_agent.cli collect-workspace-metrics --competition <workspace> --trial trial_001
+```
+
+상태:
+
+- `collected`: trial 표준 metrics 생성
+- `needs_review`: 대표 점수 key 확인 필요
+- `blocked`: 실행/profile/artifact/JSON 문제
+
+산출물:
+
+```text
+experiments/<workspace>/<trial>/metrics.json
+experiments/<workspace>/<trial>/metrics_collection.json
+experiments/<workspace>/<trial>/metrics_collection.md
+memory/<workspace>/decision_log.jsonl
+```
+
+다음 단계:
+
+- 수집된 표준 metrics를 `evaluate -> diagnose -> remember` 흐름에 안전하게 연결
+- leaderboard 수집과 submission 실행은 4차 범위에 포함하지 않음
+
+## 2026-07-07 KST
+
+### Workspace Result Cycle 5차 구현
+
+요약:
+
+- 수집된 표준 metrics를 `evaluate -> diagnose -> remember`에 연결했다.
+- Human Review를 매 trial마다 요청하지 않고 `request_now / defer / no_review` timing으로 분리했다.
+- 비긴급 review는 정상 완료 trial 2개 이상일 때 요청하고, 첫 baseline에서는 competition queue에 누적한다.
+- validation/leakage, label 경계 모호성, 안전 중요 false negative, 필수 정보 누락은 성숙도와 무관하게 즉시 요청한다.
+- review timing과 무관하게 객관적 trial 결과는 memory에 기록한다.
+- 동일 trial의 memory 중복 기록을 차단한다.
+- 기존 review pack이 사용자 피드백 대기 중이면 후속 비긴급 review 요청을 queue로 보낸다.
+
+CLI:
+
+```powershell
+python -B -m kaggle_research_agent.cli process-workspace-result --competition <workspace> --trial trial_001
+```
+
+상태:
+
+- `completed`
+- `completed_review_deferred`
+- `awaiting_human_review`
+- `already_processed`
+- `blocked`
+
+산출물:
+
+```text
+experiments/<competition>/<trial>/workspace_result_cycle.json
+experiments/<competition>/<trial>/workspace_result_cycle.md
+memory/<competition>/deferred_review_queue.json
+```
+
+## 2026-07-09 KST
+
+### Workspace Next Experiment Gate 6차 구현
+
+요약:
+
+- `process-workspace-result` 이후 다음 trial 계획으로 넘어갈지 판단하는 workspace 전용 gate를 추가했다.
+- Human Review가 필요한 경우에도 항상 전체 루프를 멈추지 않고, review 성격에 따라 `can_continue / continue_with_caution / must_wait`로 분기한다.
+- non-urgent review는 `user_review_request.md`를 생성한 뒤 다음 실험 계획을 계속 만들 수 있게 했다.
+- urgent 또는 blocking review는 `user_review_request.md`를 생성하고 다음 trial 계획 생성을 차단한다.
+- 다음 trial에는 `continuation_context.md/json`을 남겨 pending review 상태에서 생성된 계획임을 명시한다.
+
+주요 파일:
+
+- `kaggle_research_agent/workspace_next_gate.py`
+- `tests/test_workspace_next_gate.py`
+- `docs/workspace_next_experiment_gate.ko.md`
+- `docs/superpowers/plans/2026-07-09-workspace-next-experiment-gate.md`
+
+CLI:
+
+```powershell
+python -B -m kaggle_research_agent.cli plan-next-workspace-trial --competition <workspace> --source-trial trial_001 --next-trial trial_002
+```
+
+산출물:
+
+```text
+experiments/<workspace>/<source-trial>/workspace_next_gate.json
+experiments/<workspace>/<source-trial>/workspace_next_gate.md
+experiments/<workspace>/<source-trial>/user_review_request.md
+experiments/<workspace>/<next-trial>/next_experiment.md
+experiments/<workspace>/<next-trial>/continuation_context.json
+experiments/<workspace>/<next-trial>/continuation_context.md
+memory/<workspace>/decision_log.jsonl
+```
+
+상태:
+
+- `planned`: review 없이 다음 trial 계획 생성
+- `planned_with_deferred_review`: deferred review를 가진 채 다음 trial 계획 생성
+- `planned_with_pending_review`: 사용자 피드백 요청을 남긴 채 caution mode로 다음 trial 계획 생성
+- `blocked_human_review`: 사용자 판단 전에는 다음 trial 계획 생성을 차단
+- `blocked_missing_result_cycle`: 선행 result-cycle 산출물 없음
+
+다음 단계:
+
+- 다음 trial 계획을 코드 수정 handoff로 넘기는 workspace용 연결 단계를 추가한다.
+
+### Workspace Coding Handoff 7차 구현
+
+요약:
+
+- `plan-next-workspace-trial`이 만든 다음 trial 계획을 외부 프로젝트 코드 수정 요청서로 변환하는 `prepare-workspace-handoff` CLI를 추가했다.
+- 이 단계는 외부 프로젝트 파일을 수정하지 않고, Execution Profile의 `write_scope`를 기준으로 코딩 에이전트 요청 계약만 생성한다.
+- `continuation_mode == must_wait`이면 사용자 피드백 전에는 handoff 생성을 차단한다.
+- Execution Profile validation이 ready가 아니면 handoff를 차단한다.
+- metrics/submission artifact는 `forbidden_paths`에 자동 포함해 코드 작성 에이전트가 결과/제출 파일을 덮어쓰지 않게 했다.
+
+주요 파일:
+
+- `kaggle_research_agent/workspace_coding_handoff.py`
+- `tests/test_workspace_coding_handoff.py`
+- `docs/workspace_coding_handoff.ko.md`
+- `docs/superpowers/plans/2026-07-09-workspace-coding-handoff.md`
+
+CLI:
+
+```powershell
+python -B -m kaggle_research_agent.cli prepare-workspace-handoff --competition <workspace> --trial trial_002
+```
+
+산출물:
+
+```text
+experiments/<workspace>/<trial>/workspace_coding_handoff.json
+experiments/<workspace>/<trial>/workspace_coding_agent_request.md
+memory/<workspace>/decision_log.jsonl
+```
+
+다음 단계:
+
+- workspace coding handoff를 mock/API code writer로 연결하고, 결과 검증 단계에서 허용 scope를 다시 확인한다.
+
+### Workspace Code Writer 8차 구현
+
+요약:
+
+- `workspace_coding_handoff.json`을 받아 mock/API code writer 응답을 처리하는 `run-workspace-code-writer` CLI를 추가했다.
+- code writer 응답의 `changed_files`와 `file_updates[].path`는 Execution Profile의 `project_root` 기준 상대 경로로 해석한다.
+- 허용 경로는 `allowed_write_paths`, 금지 경로는 `forbidden_paths`를 기준으로 검증한다.
+- 절대 경로, `..` 포함 경로, Windows drive absolute 경로, metric/submission artifact 수정은 차단한다.
+- 허용된 `file_updates`만 외부 프로젝트에 적용하고, 결과를 `workspace_coding_result_validation`으로 다시 검증한다.
+- mock response file을 통해 API 호출 없이도 code writer 경로를 재현할 수 있게 했다.
+
+주요 파일:
+
+- `kaggle_research_agent/workspace_code_writer.py`
+- `tests/test_workspace_code_writer.py`
+- `docs/workspace_code_writer.ko.md`
+- `docs/superpowers/plans/2026-07-09-workspace-code-writer.md`
+
+CLI:
+
+```powershell
+python -B -m kaggle_research_agent.cli run-workspace-code-writer --competition <workspace> --trial trial_002 --mock-response-file mock_response.json
+python -B -m kaggle_research_agent.cli validate-workspace-coding-result --competition <workspace> --trial trial_002
+```
+
+산출물:
+
+```text
+experiments/<workspace>/<trial>/workspace_coding_api_request.json
+experiments/<workspace>/<trial>/workspace_coding_api_response.json
+experiments/<workspace>/<trial>/workspace_coding_result.json
+experiments/<workspace>/<trial>/workspace_coding_result.md
+experiments/<workspace>/<trial>/workspace_coding_result_validation.json
+experiments/<workspace>/<trial>/workspace_coding_result_validation.md
+memory/<workspace>/decision_log.jsonl
+memory/<workspace>/token_usage.jsonl
+```
+
+다음 단계:
+
+- accepted workspace coding result 이후 validation command 실행과 workspace pipeline 재실행으로 연결한다.
+
+### Workspace After-Coding Cycle 9차 구현
+
+요약:
+
+- accepted workspace code result 이후 실행/평가 루프로 재진입하는 `run-workspace-after-coding` CLI를 추가했다.
+- `workspace_coding_result_validation.status == accepted`가 아니면 외부 workspace command를 실행하지 않고 차단한다.
+- `--run-now`가 없으면 dry-run으로 `workspace_run.status == planned`까지만 기록한다.
+- `--run-now`가 있으면 기존 `run_workspace_pipeline -> collect_workspace_metrics -> process_workspace_result`를 순서대로 호출한다.
+- 이 단계까지 오면 코드 수정 이후 metrics 수집, 평가/진단, memory 업데이트로 돌아오는 1차 실험 루프가 닫힌다.
+
+주요 파일:
+
+- `kaggle_research_agent/workspace_after_coding.py`
+- `tests/test_workspace_after_coding.py`
+- `docs/workspace_after_coding_cycle.ko.md`
+- `docs/superpowers/plans/2026-07-09-workspace-after-coding-cycle.md`
+
+CLI:
+
+```powershell
+python -B -m kaggle_research_agent.cli run-workspace-after-coding --competition <workspace> --trial trial_002
+python -B -m kaggle_research_agent.cli run-workspace-after-coding --competition <workspace> --trial trial_002 --run-now
+```
+
+산출물:
+
+```text
+experiments/<workspace>/<trial>/workspace_after_coding_cycle.json
+experiments/<workspace>/<trial>/workspace_after_coding_cycle.md
+experiments/<workspace>/<trial>/workspace_run.json
+experiments/<workspace>/<trial>/metrics_collection.json
+experiments/<workspace>/<trial>/workspace_result_cycle.json
+memory/<workspace>/decision_log.jsonl
+```
+
+다음 단계:
+
+- 데모/운영 편의를 위해 1-cycle 명령을 얇게 묶고, 각 gate 결과를 한 화면 또는 요약 파일로 보여준다.
+
+다음 단계:
+
+- `plan-next-experiment`를 result-cycle 상태와 연결
+- `awaiting_human_review`에서는 사용자 피드백 전까지 다음 계획을 차단
