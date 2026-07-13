@@ -10,13 +10,13 @@ from .agents.result_analyst import diagnose_trial, evaluate_trial
 from .agents.review_pack import prepare_review_pack
 from .paths import competition_memory_dir, experiment_dir, trial_dir
 from .store import load_trial_index, write_text
+from .trial_artifacts import read_trial_json
 
 
 def process_workspace_result(competition: str, trial_id: str) -> dict[str, Any]:
     out_dir = trial_dir(competition, trial_id)
-    try:
-        collection = json.loads((out_dir / "metrics_collection.json").read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
+    collection = read_trial_json(out_dir, "metrics_collection.json")
+    if not collection:
         return _finish(
             out_dir,
             {
@@ -28,7 +28,7 @@ def process_workspace_result(competition: str, trial_id: str) -> dict[str, Any]:
                 "next_action": "collect-workspace-metrics",
             },
         )
-    if not isinstance(collection, dict) or collection.get("status") != "collected":
+    if collection.get("status") != "collected":
         return _finish(
             out_dir,
             {

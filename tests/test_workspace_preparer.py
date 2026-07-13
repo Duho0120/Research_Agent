@@ -1,3 +1,6 @@
+import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -70,6 +73,78 @@ class WorkspacePreparerTest(unittest.TestCase):
             self.assertTrue((root / "competitions" / "topic_demo" / "workspace_source.json").exists())
             self.assertFalse((root / "competitions" / "topic_demo" / "execution_profile.yaml").exists())
 
+    def test_create_workspace_scaffolds_local_project_and_waits_for_manual_data(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            root.mkdir()
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = prepare_workspace(
+                    "titanic_demo",
+                    topic="Titanic survival prediction",
+                    platform="kaggle",
+                    metric="accuracy",
+                    objective="maximize",
+                    create_workspace=True,
+                    target_column="Survived",
+                    id_column="PassengerId",
+                    required_data_files=["train.csv", "test.csv", "gender_submission.csv"],
+                )
+
+            source = root / "demo_workspaces" / "titanic_demo"
+            self.assertEqual("needs_data", result["status"])
+            self.assertEqual(["train.csv", "test.csv", "gender_submission.csv"], result["data_check"]["missing_files"])
+            self.assertTrue((source / "data").is_dir())
+            self.assertTrue((source / "src" / "baseline.py").exists())
+            self.assertTrue((source / "train_step.py").exists())
+            self.assertTrue((source / "predict_step.py").exists())
+            profile = simple_yaml.load(root / "competitions" / "titanic_demo" / "execution_profile.yaml")
+            self.assertEqual(str(source.resolve()), profile["project_root"])
+            self.assertEqual(["{python} train_step.py"], profile["commands"]["train"])
+            self.assertEqual(["outputs/metrics.json"], profile["artifacts"]["metrics"])
+            self.assertIn("data/", profile["write_scope"]["forbidden"])
+
+    def test_scaffolded_workspace_runs_after_user_adds_data(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            root.mkdir()
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = prepare_workspace(
+                    "titanic_demo",
+                    topic="Titanic survival prediction",
+                    platform="kaggle",
+                    metric="accuracy",
+                    objective="maximize",
+                    create_workspace=True,
+                    target_column="Survived",
+                    id_column="PassengerId",
+                    required_data_files=["train.csv", "test.csv"],
+                )
+            source = Path(result["source_path"])
+            (source / "data" / "train.csv").write_text(
+                "PassengerId,Survived,Sex\n1,0,male\n2,1,female\n3,1,female\n4,0,male\n5,1,female\n",
+                encoding="utf-8",
+            )
+            (source / "data" / "test.csv").write_text(
+                "PassengerId,Sex\n6,male\n7,female\n",
+                encoding="utf-8",
+            )
+
+            for command in [["test_step.py"], ["train_step.py"], ["predict_step.py"]]:
+                completed = subprocess.run(
+                    [sys.executable, *command],
+                    cwd=source,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+
+            metrics = json.loads((source / "outputs" / "metrics.json").read_text(encoding="utf-8"))
+            submission = (source / "outputs" / "submission.csv").read_text(encoding="utf-8")
+            self.assertEqual("accuracy", metrics["metric"])
+            self.assertIn("PassengerId,Survived", submission)
+
     def test_prepare_workspace_cli(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "agent"
@@ -91,6 +166,39 @@ class WorkspacePreparerTest(unittest.TestCase):
 
             self.assertEqual(0, code)
             self.assertTrue((root / "competitions" / "demo" / "workspace_source.json").exists())
+
+    def test_prepare_workspace_cli_can_create_workspace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            root.mkdir()
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                code = main(
+                    [
+                        "prepare-workspace",
+                        "--competition",
+                        "titanic_demo",
+                        "--topic",
+                        "Titanic survival prediction",
+                        "--platform",
+                        "kaggle",
+                        "--metric",
+                        "accuracy",
+                        "--objective",
+                        "maximize",
+                        "--create-workspace",
+                        "--target-column",
+                        "Survived",
+                        "--id-column",
+                        "PassengerId",
+                        "--required-data-file",
+                        "train.csv",
+                        "--required-data-file",
+                        "test.csv",
+                    ]
+                )
+
+            self.assertEqual(0, code)
+            self.assertTrue((root / "demo_workspaces" / "titanic_demo" / "workspace_config.json").exists())
 
 
 if __name__ == "__main__":

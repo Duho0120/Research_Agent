@@ -83,6 +83,11 @@ def _build_handoff(
     if isinstance(commands, dict):
         validation_commands = list(commands.get("test", []))
     next_action = "send-to-workspace-coding-agent" if status == "ready" else "resolve-workspace-handoff-blockers"
+    metrics_paths = artifacts.get("metrics", []) if isinstance(artifacts, dict) else []
+    metrics_path = metrics_paths[0] if metrics_paths else "outputs/metrics.json"
+    context_files = _context_files(competition, trial_id)
+    if status == "ready" and profile:
+        context_files.extend(_write_workspace_context_snapshot(competition, trial_id, profile, continuation))
     return {
         "schema_version": "1.0",
         "request_id": f"{competition}:{trial_id}:workspace-coding",
@@ -96,7 +101,7 @@ def _build_handoff(
         "continuation_mode": continuation.get("continuation_mode"),
         "pending_human_review": bool(continuation.get("pending_human_review")),
         "review_source_trial": continuation.get("review_source_trial"),
-        "context_files": _context_files(competition, trial_id),
+        "context_files": context_files,
         "allowed_write_paths": allowed,
         "forbidden_paths": forbidden,
         "validation_commands": validation_commands,
@@ -106,6 +111,17 @@ def _build_handoff(
             "do_not_edit_data_or_outputs": True,
             "do_not_write_outside_allowed_paths": True,
             "use_project_root_as_cwd": True,
+        },
+        "metrics_output_contract": {
+            "path": metrics_path,
+            "score_key": "cv_score",
+            "required_keys": ["cv_score", "metric", "objective"],
+            "notes": [
+                "Training code must write a finite numeric cv_score to the metrics artifact.",
+                "metric should match the competition metric name when known.",
+                "objective must be maximize or minimize.",
+                "Additional diagnostic keys such as validation_accuracy are allowed, but cv_score is the canonical score.",
+            ],
         },
         "required_output": {
             "json_file": f"experiments/{competition}/{trial_id}/workspace_coding_result.json",
@@ -159,6 +175,20 @@ def render_workspace_coding_request(handoff: dict[str, Any], next_experiment: st
         ]
     )
     lines.extend(f"```powershell\n{command}\n```" for command in handoff["validation_commands"] or ["No validation command declared."])
+    metrics_contract = handoff["metrics_output_contract"]
+    lines.extend(
+        [
+            "",
+            "## Metrics Output Contract",
+            "",
+            f"- path: {metrics_contract['path']}",
+            f"- score_key: {metrics_contract['score_key']}",
+            "- required_keys:",
+        ]
+    )
+    lines.extend(f"  - {field}" for field in metrics_contract["required_keys"])
+    lines.extend(["- notes:"])
+    lines.extend(f"  - {note}" for note in metrics_contract["notes"])
     required = handoff["required_output"]
     lines.extend(
         [
@@ -187,6 +217,172 @@ def _context_files(competition: str, trial_id: str) -> list[str]:
         "continuation_context.md",
     ]
     return [f"experiments/{competition}/{trial_id}/{name}" for name in candidates if (out_dir / name).exists()]
+
+
+def _write_workspace_context_snapshot(
+    competition: str,
+    trial_id: str,
+    profile: dict[str, Any],
+    continuation: dict[str, Any],
+) -> list[str]:
+    out_dir = trial_dir(competition, trial_id)
+    source_trial_id = continuation.get("source_trial_id")
+    content = render_workspace_context_snapshot(
+        competition,
+        trial_id,
+        profile=profile,
+        source_trial_id=str(source_trial_id) if source_trial_id else None,
+    )
+    path = out_dir / "workspace_context_snapshot.md"
+    write_text(path, content)
+    return [f"experiments/{competition}/{trial_id}/workspace_context_snapshot.md"]
+
+
+def render_workspace_context_snapshot(
+    competition: str,
+    trial_id: str,
+    *,
+    profile: dict[str, Any],
+    source_trial_id: str | None,
+    max_files: int = 16,
+    max_chars_per_file: int = 6000,
+    max_total_chars: int = 24000,
+) -> str:
+    lines = [
+        f"# {trial_id} Workspace Context Snapshot",
+        "",
+        "This file gives the coding agent the current project code and previous trial evidence.",
+        "Modify the existing pipeline incrementally unless the next experiment explicitly asks for a replacement.",
+        "",
+        "## Previous Trial Evidence",
+        "",
+    ]
+    lines.extend(_previous_trial_evidence(competition, source_trial_id))
+    lines.extend(["", "## Current Project Code", ""])
+    code_sections = _current_code_sections(
+        profile,
+        max_files=max_files,
+        max_chars_per_file=max_chars_per_file,
+        max_total_chars=max_total_chars,
+    )
+    lines.extend(code_sections or ["- No readable code files were found in the allowed write scope."])
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _previous_trial_evidence(competition: str, source_trial_id: str | None) -> list[str]:
+    if not source_trial_id:
+        return ["- No source trial was declared."]
+    source_dir = trial_dir(competition, source_trial_id)
+    lines = [f"- source_trial_id: {source_trial_id}"]
+    for name in [
+        "metrics.json",
+        "evaluation.md",
+        "diagnosis.md",
+        "pipeline_improvement_plan.md",
+        "research_protocol.md",
+        "workspace_result_cycle.md",
+        "internal/pipeline_structure.json",
+        "user_view/02_pipeline_structure.ko.md",
+        "user_view/04_result.ko.md",
+        "user_view/03_result.ko.md",
+    ]:
+        path = source_dir / name
+        text = read_text(path, default="").strip()
+        if not text:
+            continue
+        lines.extend([f"", f"### {name}", "", _fenced_content(name, text[:5000])])
+    if len(lines) == 1:
+        lines.append("- No previous trial evidence files were found.")
+    return lines
+
+
+def _current_code_sections(
+    profile: dict[str, Any],
+    *,
+    max_files: int,
+    max_chars_per_file: int,
+    max_total_chars: int,
+) -> list[str]:
+    project_root = Path(str(profile.get("project_root", "")))
+    if not project_root.is_dir():
+        return []
+    files = _allowed_readable_files(project_root, profile.get("write_scope", {}).get("allowed", []), max_files=max_files)
+    sections: list[str] = []
+    total = 0
+    for path in files:
+        relative = path.relative_to(project_root).as_posix()
+        text = read_text(path, default="")
+        if not text:
+            continue
+        snippet = text[:max_chars_per_file]
+        if total + len(snippet) > max_total_chars:
+            remaining = max_total_chars - total
+            if remaining <= 0:
+                break
+            snippet = snippet[:remaining]
+        total += len(snippet)
+        sections.extend([f"### {relative}", "", _fenced_content(relative, snippet), ""])
+    return sections
+
+
+def _allowed_readable_files(project_root: Path, allowed_paths: list[str], *, max_files: int) -> list[Path]:
+    collected: list[Path] = []
+    for item in allowed_paths:
+        if not isinstance(item, str) or not item.strip():
+            continue
+        normalized = item.replace("\\", "/").strip("/")
+        if not normalized or ".." in Path(normalized).parts:
+            continue
+        path = project_root / normalized
+        if path.is_file() and _is_text_code_file(path):
+            collected.append(path)
+        elif path.is_dir():
+            for child in sorted(path.rglob("*")):
+                if child.is_file() and _is_text_code_file(child):
+                    collected.append(child)
+                if len(collected) >= max_files:
+                    return _unique_paths(collected)
+    return _unique_paths(collected)[:max_files]
+
+
+def _is_text_code_file(path: Path) -> bool:
+    return path.suffix.lower() in {
+        ".py",
+        ".md",
+        ".txt",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".cfg",
+        ".ini",
+    }
+
+
+def _fenced_content(name: str, text: str) -> str:
+    suffix = Path(name).suffix.lower()
+    language = {
+        ".py": "python",
+        ".json": "json",
+        ".yaml": "yaml",
+        ".yml": "yaml",
+        ".toml": "toml",
+        ".md": "markdown",
+    }.get(suffix, "")
+    return f"```{language}\n{text.rstrip()}\n```"
+
+
+def _unique_paths(paths: list[Path]) -> list[Path]:
+    result: list[Path] = []
+    seen: set[str] = set()
+    for path in paths:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(path)
+    return result
 
 
 def _load_json_object(path: Path) -> dict[str, Any] | None:

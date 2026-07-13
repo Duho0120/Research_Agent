@@ -12,8 +12,9 @@ from .agents.policy_gate import log_llm_decision
 from .execution_profile import load_execution_profile, validate_execution_profile
 from .paths import competition_dir, competition_memory_dir, trial_dir
 from .policies import load_policy, select_model_for_call
-from .store import load_recent_trials, load_state, now_iso, write_text
-from .workspace_code_writer import run_workspace_code_writer
+from .store import load_recent_trials, load_state, now_iso, read_text, write_text
+from .trial_artifacts import organize_trial_artifacts, trial_artifact_path
+from .workspace_code_writer import run_workspace_code_writer, validate_workspace_coding_result
 from .workspace_coding_handoff import prepare_workspace_coding_handoff
 from .workspace_metrics_collector import collect_workspace_metrics
 from .workspace_runner import run_workspace_pipeline
@@ -71,19 +72,28 @@ def run_demo_one_cycle(
         "F-01",
         f"Context ready: metric={context.get('metric')} objective={context.get('objective')}.",
         next_action="create-demo-experiment-plan",
+        details={
+            "metric": context.get("metric"),
+            "objective": context.get("objective"),
+            "platform": context.get("platform"),
+        },
     )
 
     reporter.start("F-02", "Planning one experiment", 2, "Calling mock/API LLM for one practical first-cycle plan.")
-    plan = create_demo_experiment_plan(
-        competition,
-        trial_id,
-        context,
-        model_config=model_policy["experiment_planning"],
-        allow_api=allow_api,
-        mock_plan_file=mock_plan_file,
-        trial_llm_calls=trial_llm_calls,
-        strategy_calls_today=strategy_calls_today,
-    )
+    plan = None if mock_plan_file else _load_ready_demo_plan(out_dir)
+    if plan is None:
+        plan = create_demo_experiment_plan(
+            competition,
+            trial_id,
+            context,
+            model_config=model_policy["experiment_planning"],
+            allow_api=allow_api,
+            mock_plan_file=mock_plan_file,
+            trial_llm_calls=trial_llm_calls,
+            strategy_calls_today=strategy_calls_today,
+        )
+    else:
+        plan["resumed_from_existing_artifact"] = True
     if plan["status"] != "ready":
         reporter.fail("F-02", "Experiment planning is blocked.", next_action=plan["next_action"])
         return _finish(
@@ -143,17 +153,19 @@ def run_demo_one_cycle(
             reporter=reporter,
         )
 
-    client = FileResponseClient(mock_response_file) if mock_response_file else None
-    code_writer = run_workspace_code_writer(
-        competition,
-        trial_id,
-        client=client,
-        model=model_policy["workspace_code_writing"]["model"],
-        provider=model_policy["workspace_code_writing"]["provider"],
-        allow_api=allow_api,
-        trial_llm_calls=trial_llm_calls,
-        strategy_calls_today=strategy_calls_today,
-    )
+    code_writer = None if mock_response_file else _load_accepted_workspace_code_writer(competition, trial_id)
+    if code_writer is None:
+        client = FileResponseClient(mock_response_file) if mock_response_file else None
+        code_writer = run_workspace_code_writer(
+            competition,
+            trial_id,
+            client=client,
+            model=model_policy["workspace_code_writing"]["model"],
+            provider=model_policy["workspace_code_writing"]["provider"],
+            allow_api=allow_api,
+            trial_llm_calls=trial_llm_calls,
+            strategy_calls_today=strategy_calls_today,
+        )
     if code_writer["status"] != "accepted":
         reporter.fail("F-03", "Code writer result is blocked.", next_action=code_writer["next_action"])
         return _finish(
@@ -182,6 +194,7 @@ def run_demo_one_cycle(
         "F-03",
         f"Code accepted: changed_files={', '.join(code_writer.get('changed_files', []) or ['None'])}.",
         next_action="run-local-pipeline",
+        details={"changed_files": code_writer.get("changed_files", [])},
     )
 
     reporter.start("F-04", "Running local pipeline", 4, "Processing test/train/predict commands from the Execution Profile.")
@@ -193,7 +206,12 @@ def run_demo_one_cycle(
     next_action = "rerun-demo-one-cycle-with-run-now"
     if run_now:
         if workspace_run["status"] == "completed":
-            reporter.complete("F-04", "Local pipeline completed.", next_action="record-demo-result")
+            reporter.complete(
+                "F-04",
+                "Local pipeline completed.",
+                next_action="record-demo-result",
+                details={"commands": [item.get("name") for item in workspace_run.get("command_results", [])]},
+            )
             reporter.start("F-06", "Recording result", 5, "Collecting metrics and writing demo result files.")
             metrics_collection = collect_workspace_metrics(competition, trial_id)
             if metrics_collection["status"] == "collected":
@@ -212,6 +230,11 @@ def run_demo_one_cycle(
                     "F-06",
                     f"Result recorded: local_score={record.get('local_score')}.",
                     next_action=next_action,
+                    details={
+                        "metric": record.get("metric"),
+                        "local_score": record.get("local_score"),
+                        "user_view": f"runs/{competition}/{trial_id}",
+                    },
                 )
             else:
                 status = "blocked"
@@ -396,6 +419,59 @@ def read_demo_agent_events(competition: str, trial_id: str, *, limit: int = 8) -
     return rows[-limit:]
 
 
+def _load_ready_demo_plan(out_dir: Path) -> dict[str, Any] | None:
+    plan = _load_json(trial_artifact_path(out_dir, "demo_experiment_plan.json"), default={})
+    if isinstance(plan, dict) and plan.get("status") == "ready":
+        return plan
+    return None
+
+
+def _load_accepted_workspace_code_writer(competition: str, trial_id: str) -> dict[str, Any] | None:
+    out_dir = trial_dir(competition, trial_id)
+    existing_validation = _load_json(
+        trial_artifact_path(out_dir, "workspace_coding_result_validation.json"),
+        default={},
+    )
+    if isinstance(existing_validation, dict) and existing_validation.get("status") == "accepted":
+        return {
+            "competition": competition,
+            "trial_id": trial_id,
+            "status": "accepted",
+            "issues": existing_validation.get("issues", []),
+            "coding_result_status": existing_validation.get("coding_result_status"),
+            "changed_files": existing_validation.get("changed_files", []),
+            "allowed_write_paths": existing_validation.get("allowed_write_paths", []),
+            "forbidden_paths": existing_validation.get("forbidden_paths", []),
+            "blocking_issues": [],
+            "next_action": "run-workspace-validation-commands",
+            "resumed_from_existing_artifact": True,
+            "resume_source": "workspace_coding_result_validation",
+        }
+    result_path = trial_artifact_path(out_dir, "workspace_coding_result.json")
+    if not result_path.exists():
+        return None
+    try:
+        validation = validate_workspace_coding_result(competition, trial_id)
+    except (FileNotFoundError, json.JSONDecodeError, ValueError):
+        return None
+    if validation.get("status") != "accepted":
+        return None
+    coding_result = _load_json(result_path, default={})
+    return {
+        "competition": competition,
+        "trial_id": trial_id,
+        "status": "accepted",
+        "issues": validation.get("issues", []),
+        "coding_result_status": validation.get("coding_result_status"),
+        "changed_files": validation.get("changed_files", []),
+        "allowed_write_paths": validation.get("allowed_write_paths", []),
+        "forbidden_paths": validation.get("forbidden_paths", []),
+        "blocking_issues": coding_result.get("blocking_issues", []) if isinstance(coding_result, dict) else [],
+        "next_action": "run-workspace-validation-commands",
+        "resumed_from_existing_artifact": True,
+    }
+
+
 def resolve_demo_model_policy(
     *,
     model_override: str | None = None,
@@ -432,22 +508,21 @@ def render_demo_agent_watch(competition: str, trial_id: str, *, event_limit: int
     status = read_demo_agent_status(competition, trial_id)
     events = read_demo_agent_events(competition, trial_id, limit=event_limit)
     lines = [
-        f"Demo agent status: {competition} / {trial_id}",
-        f"status        : {status.get('status')}",
-        f"stage         : {status.get('current_stage', '-')}",
-        f"progress      : {status.get('progress', 0)}/{status.get('total_steps', 5)}",
-        f"message       : {status.get('message', '')}",
-        f"next_action   : {status.get('next_action')}",
-        f"updated_at    : {status.get('updated_at', '-')}",
-        f"pid           : {status.get('pid', '-')}",
-        f"status_file   : {status.get('status_path')}",
+        f"데모 에이전트 상태: {competition} / {trial_id}",
+        f"- 전체 상태: {_status_label_ko(str(status.get('status', '-')))}",
+        f"- 현재 단계: {_stage_name_ko(str(status.get('current_stage', '-')))}",
+        f"- 진행률: {status.get('progress', 0)}/{status.get('total_steps', 5)}",
+        f"- 다음 행동: {status.get('next_action')}",
+        f"- 갱신 시각: {status.get('updated_at', '-')}",
+        f"- 프로세스 ID: {status.get('pid', '-')}",
+        f"- 상태 파일: {status.get('status_path')}",
         "",
-        "Recent events:",
+        "최근 진행 기록:",
     ]
     if events:
         lines.extend(f"- {format_demo_event(event)}" for event in events)
     else:
-        lines.append("- No events recorded yet.")
+        lines.append("- 아직 기록된 이벤트가 없습니다.")
     return "\n".join(lines)
 
 
@@ -478,13 +553,95 @@ def watch_demo_agent(
 def format_demo_event(row: dict[str, Any]) -> str:
     event = str(row.get("event", "event"))
     stage = str(row.get("current_stage", "-"))
-    message = str(row.get("message", ""))
     status = str(row.get("status", "-"))
     progress = f"{row.get('progress', 0)}/{row.get('total_steps', 5)}"
-    prefix = "[OK]" if event in {"stage_completed", "cycle_completed"} else "[RUN]"
+    prefix = "[완료]" if event in {"stage_completed", "cycle_completed"} else "[진행]"
     if event in {"stage_failed", "cycle_blocked"} or status in {"blocked", "failed"}:
-        prefix = "[STOP]"
-    return f"{prefix} {stage} {progress} {event}: {message}"
+        prefix = "[중단]"
+    return f"{prefix} {progress} {stage} {_stage_name_ko(stage)} - {_event_summary_ko(row)}"
+
+
+def _stage_name_ko(stage: str) -> str:
+    return {
+        "F-01": "대회/데이터 맥락 확인",
+        "F-02": "실험 계획 생성",
+        "F-03": "파이프라인 코드 작성",
+        "F-04": "로컬 실행",
+        "F-06": "결과 기록",
+        "done": "1회 실험 종료",
+    }.get(stage, stage or "-")
+
+
+def _status_label_ko(status: str) -> str:
+    return {
+        "running": "진행 중",
+        "completed": "완료",
+        "planned": "실행 대기",
+        "blocked": "중단됨",
+        "failed": "실패",
+        "missing": "상태 파일 없음",
+        "invalid": "상태 파일 오류",
+    }.get(status, status)
+
+
+def _event_summary_ko(row: dict[str, Any]) -> str:
+    event = str(row.get("event", "event"))
+    stage = str(row.get("current_stage", "-"))
+    details = row.get("details") if isinstance(row.get("details"), dict) else {}
+    message = str(row.get("message", "")).strip()
+    if event == "stage_started":
+        return {
+            "F-01": "설정, 데이터 목록, 이전 실험 기록을 읽는 중",
+            "F-02": "LLM으로 첫 실험 계획 1개를 만드는 중",
+            "F-03": "계획을 코드 변경으로 변환하는 중",
+            "F-04": "로컬에서 테스트/학습/예측 명령을 실행하는 중",
+            "F-06": "점수와 산출물 경로를 저장하는 중",
+        }.get(stage, message or "진행 중")
+    if event == "stage_completed":
+        return _stage_completion_summary_ko(stage, details, message)
+    if event == "cycle_completed":
+        return "1회 실험 사이클이 완료되었습니다."
+    if event in {"stage_failed", "cycle_blocked"}:
+        next_action = row.get("next_action")
+        suffix = f" 다음 조치: {next_action}" if next_action else ""
+        return f"{message or '진행이 중단되었습니다.'}{suffix}"
+    return message or event
+
+
+def _stage_completion_summary_ko(stage: str, details: dict[str, Any], message: str) -> str:
+    if stage == "F-01":
+        metric = details.get("metric", "-")
+        objective = details.get("objective", "-")
+        platform = details.get("platform", "-")
+        return f"준비 완료: platform={platform}, metric={metric}, objective={objective}"
+    if stage == "F-02":
+        usage = details.get("token_usage") or {}
+        token_text = ""
+        if isinstance(usage, dict) and usage:
+            total = usage.get("total_tokens")
+            token_text = f", tokens={total}" if total is not None else ""
+        return f"계획 생성 완료{token_text}"
+    if stage == "F-03":
+        changed = details.get("changed_files") or []
+        if not changed:
+            return "코드 변경 완료: 변경 파일 없음"
+        preview = ", ".join(str(item) for item in changed[:3])
+        more = f" 외 {len(changed) - 3}개" if len(changed) > 3 else ""
+        return f"코드 변경 완료: {preview}{more}"
+    if stage == "F-04":
+        commands = [str(item) for item in details.get("commands", []) if item]
+        return "로컬 실행 완료" + (f": {', '.join(commands)} 성공" if commands else "")
+    if stage == "F-06":
+        score = details.get("local_score")
+        metric = details.get("metric")
+        user_view = details.get("user_view")
+        parts = ["결과 저장 완료"]
+        if metric or score is not None:
+            parts.append(f"{metric or 'score'}={score}")
+        if user_view:
+            parts.append(f"확인 폴더={user_view}")
+        return ", ".join(parts)
+    return message or "완료"
 
 
 def load_demo_context(competition: str, trial_id: str) -> dict[str, Any]:
@@ -495,6 +652,7 @@ def load_demo_context(competition: str, trial_id: str) -> dict[str, Any]:
     state = load_state(competition)
     inventory = _load_json(competition_dir(competition) / "workspace_inventory.json", default={})
     recent_trials = load_recent_trials(competition, limit=3)
+    competition_docs = _load_demo_competition_docs(competition)
     context = {
         "competition": competition,
         "trial_id": trial_id,
@@ -509,6 +667,7 @@ def load_demo_context(competition: str, trial_id: str) -> dict[str, Any]:
         "write_scope": profile.get("write_scope", {}),
         "metrics_contract": profile.get("metrics_contract", {}),
         "inventory_summary": _inventory_summary(inventory),
+        "competition_docs": competition_docs,
         "recent_trials": recent_trials,
         "llm_call": False,
     }
@@ -526,6 +685,7 @@ def load_demo_context(competition: str, trial_id: str) -> dict[str, Any]:
             "objective": context["objective"],
             "profile_status": validation["status"],
             "recent_trial_count": len(recent_trials),
+            "competition_doc_count": len([value for value in competition_docs.values() if value]),
         },
         next_action="create-demo-experiment-plan" if context["status"] == "ready" else "fix-execution-profile",
     )
@@ -741,6 +901,13 @@ def render_demo_context(context: dict[str, Any]) -> str:
     lines.extend(["", "## Artifacts", ""])
     for kind, values in context.get("artifacts", {}).items():
         lines.extend(f"- {kind}: {value}" for value in values)
+    lines.extend(["", "## Competition Documents", ""])
+    competition_docs = context.get("competition_docs", {})
+    if competition_docs:
+        for name, content in competition_docs.items():
+            lines.extend([f"### {name}", "", content or "Not provided.", ""])
+    else:
+        lines.append("- None")
     lines.extend(["", "## Recent Trials", ""])
     recent_trials = context.get("recent_trials", [])
     if recent_trials:
@@ -861,6 +1028,9 @@ def _finish(
     out_dir = trial_dir(competition, trial_id)
     write_text(out_dir / "demo_one_cycle.json", json.dumps(result, ensure_ascii=False, indent=2) + "\n")
     write_text(out_dir / "demo_one_cycle.md", render_demo_cycle(result))
+    artifact_summary = None
+    if result.get("status") == "completed":
+        artifact_summary = organize_trial_artifacts(competition, trial_id)
     if reporter is not None:
         reporter.finish(result["status"], f"Demo one-cycle finished with status={result['status']}.", next_action=result["next_action"])
     log_decision(
@@ -872,6 +1042,8 @@ def _finish(
         evidence={"steps": result.get("steps", []), "issues": result.get("issues", [])},
         next_action=result["next_action"],
     )
+    if artifact_summary is not None:
+        result["artifact_summary"] = artifact_summary
     return result
 
 
@@ -898,6 +1070,16 @@ def _write_continuation_context(competition: str, trial_id: str) -> None:
             ]
         ),
     )
+
+
+def _load_demo_competition_docs(competition: str, *, max_chars_per_file: int = 3000) -> dict[str, str]:
+    root = competition_dir(competition)
+    docs = {}
+    for name in ["overview.md", "data_notes.md", "metric.md", "source_materials.md"]:
+        content = read_text(root / name, default="").strip()
+        if content:
+            docs[name] = content[:max_chars_per_file]
+    return docs
 
 
 def _extract_plan(raw_response: dict[str, Any]) -> dict[str, Any]:

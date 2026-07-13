@@ -10,6 +10,7 @@ from unittest.mock import patch
 from kaggle_research_agent import simple_yaml
 from kaggle_research_agent.cli import main
 from kaggle_research_agent.demo_one_cycle import run_demo_one_cycle
+from kaggle_research_agent.trial_artifacts import trial_artifact_exists
 
 
 class DemoOneCycleTest(unittest.TestCase):
@@ -43,9 +44,9 @@ class DemoOneCycleTest(unittest.TestCase):
             self.assertEqual(0.88, result["record"]["local_score"])
             self.assertTrue((trial / "demo_context.md").exists())
             self.assertTrue((trial / "next_experiment.md").exists())
-            self.assertTrue((trial / "workspace_coding_result.json").exists())
-            self.assertTrue((trial / "workspace_run.json").exists())
-            self.assertTrue((trial / "demo_cycle_record.json").exists())
+            self.assertTrue(trial_artifact_exists(trial, "workspace_coding_result.json"))
+            self.assertTrue(trial_artifact_exists(trial, "workspace_run.json"))
+            self.assertTrue(trial_artifact_exists(trial, "demo_cycle_record.json"))
             self.assertTrue((trial / "agent_status.json").exists())
             self.assertTrue((trial / "agent_events.jsonl").exists())
             status = json.loads((trial / "agent_status.json").read_text(encoding="utf-8"))
@@ -59,10 +60,125 @@ class DemoOneCycleTest(unittest.TestCase):
             self.assertEqual(2, len(usage_lines))
             usages = [json.loads(line) for line in usage_lines]
             self.assertEqual(["experiment_planning", "workspace_code_writing"], [row["call_type"] for row in usages])
-            self.assertEqual({"anthropic_messages"}, {row["provider"] for row in usages})
-            self.assertEqual({"claude-sonnet-5"}, {row["model"] for row in usages})
+            self.assertEqual({"openai_responses"}, {row["provider"] for row in usages})
+            self.assertEqual({"gpt-5.5"}, {row["model"] for row in usages})
             self.assertEqual("gpt-5.6-luna", result["model_policy"]["low_cost"]["model"])
             self.assertIn("improved", (project / "train_step.py").read_text(encoding="utf-8"))
+
+    def test_demo_one_cycle_resumes_from_completed_plan_and_code_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            project = Path(tmp) / "project"
+            root.mkdir()
+            project.mkdir()
+            self._write_state(root)
+            self._write_profile(root, project)
+            self._write_project_scripts(project)
+            trial = root / "experiments" / "demo" / "trial_001"
+            trial.mkdir(parents=True)
+            plan = {
+                "schema_version": "1.0",
+                "competition": "demo",
+                "trial_id": "trial_001",
+                "status": "ready",
+                "plan_title": "Existing first-cycle plan",
+                "objective": "Resume from an already prepared plan.",
+                "rationale": "The previous run completed planning.",
+                "implementation_notes": ["Reuse existing code result."],
+                "expected_outputs": ["outputs/metrics.json", "outputs/submission.csv"],
+                "issues": [],
+                "next_action": "prepare-workspace-handoff",
+            }
+            (trial / "demo_experiment_plan.json").write_text(json.dumps(plan), encoding="utf-8")
+            (trial / "next_experiment.md").write_text("# Existing first-cycle plan\n", encoding="utf-8")
+            (trial / "workspace_coding_result.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "summary": "Existing code change already accepted.",
+                        "changed_files": ["train_step.py"],
+                        "validation_results": {
+                            "commands": [{"command": "{python} test_step.py", "status": "not_run"}]
+                        },
+                        "blocking_issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = run_demo_one_cycle("demo", "trial_001", run_now=True)
+
+            self.assertEqual("completed", result["status"])
+            self.assertTrue(result["plan"]["resumed_from_existing_artifact"])
+            self.assertTrue(result["code_writer"]["resumed_from_existing_artifact"])
+            self.assertEqual("completed", result["workspace_run"]["status"])
+            self.assertEqual("collected", result["metrics_collection"]["status"])
+            self.assertEqual(0.5, result["record"]["local_score"])
+            self.assertFalse((root / "memory" / "demo" / "token_usage.jsonl").exists())
+
+    def test_demo_one_cycle_resumes_from_existing_accepted_code_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            project = Path(tmp) / "project"
+            root.mkdir()
+            project.mkdir()
+            self._write_state(root)
+            self._write_profile(root, project)
+            self._write_project_scripts(project)
+            trial = root / "experiments" / "demo" / "trial_001"
+            trial.mkdir(parents=True)
+            plan = {
+                "schema_version": "1.0",
+                "competition": "demo",
+                "trial_id": "trial_001",
+                "status": "ready",
+                "plan_title": "Existing first-cycle plan",
+                "objective": "Resume from an already prepared plan.",
+                "rationale": "The previous run completed planning.",
+                "implementation_notes": ["Reuse existing accepted validation."],
+                "expected_outputs": ["outputs/metrics.json", "outputs/submission.csv"],
+                "issues": [],
+                "next_action": "prepare-workspace-handoff",
+            }
+            (trial / "demo_experiment_plan.json").write_text(json.dumps(plan), encoding="utf-8")
+            (trial / "next_experiment.md").write_text("# Existing first-cycle plan\n", encoding="utf-8")
+            (trial / "workspace_coding_result.json").write_text(
+                json.dumps(
+                    {
+                        "status": "blocked",
+                        "summary": "A later retry was blocked by token policy.",
+                        "changed_files": [],
+                        "validation_results": [],
+                        "blocking_issues": ["token_policy_blocked"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (trial / "workspace_coding_result_validation.json").write_text(
+                json.dumps(
+                    {
+                        "competition": "demo",
+                        "trial_id": "trial_001",
+                        "status": "accepted",
+                        "issues": [],
+                        "coding_result_status": "completed",
+                        "changed_files": ["train_step.py"],
+                        "allowed_write_paths": ["src/", "tests/", "train_step.py"],
+                        "forbidden_paths": ["data/", "outputs/metrics.json", "outputs/submission.csv"],
+                        "next_action": "run-workspace-validation-commands",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = run_demo_one_cycle("demo", "trial_001", run_now=True)
+
+            self.assertEqual("completed", result["status"])
+            self.assertEqual("workspace_coding_result_validation", result["code_writer"]["resume_source"])
+            self.assertEqual(["train_step.py"], result["code_writer"]["changed_files"])
+            self.assertEqual("completed", result["workspace_run"]["status"])
 
     def test_demo_one_cycle_blocks_without_plan_api_or_mock(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -112,9 +228,10 @@ class DemoOneCycleTest(unittest.TestCase):
                     )
 
             self.assertEqual(0, code)
-            self.assertTrue((root / "experiments" / "demo" / "trial_001" / "demo_one_cycle.json").exists())
-            self.assertIn("[RUN] F-01", output.getvalue())
-            self.assertIn("[OK] done", output.getvalue())
+            trial = root / "experiments" / "demo" / "trial_001"
+            self.assertTrue(trial_artifact_exists(trial, "demo_one_cycle.json"))
+            self.assertIn("[진행] 1/5 F-01 대회/데이터 맥락 확인", output.getvalue())
+            self.assertIn("[완료] 5/5 done 1회 실험 종료", output.getvalue())
 
     def test_watch_demo_cycle_cli_prints_current_status(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -142,9 +259,9 @@ class DemoOneCycleTest(unittest.TestCase):
 
             text = output.getvalue()
             self.assertEqual(0, code)
-            self.assertIn("Demo agent status: demo / trial_001", text)
-            self.assertIn("status        : completed", text)
-            self.assertIn("Recent events:", text)
+            self.assertIn("데모 에이전트 상태: demo / trial_001", text)
+            self.assertIn("- 전체 상태: 완료", text)
+            self.assertIn("최근 진행 기록:", text)
 
     def _write_state(self, root: Path) -> None:
         comp = root / "competitions" / "demo"

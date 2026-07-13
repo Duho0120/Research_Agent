@@ -61,6 +61,35 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
             usage = json.loads((root / "memory" / "demo" / "token_usage.jsonl").read_text(encoding="utf-8").strip())
             self.assertEqual("workspace_code_writing", usage["call_type"])
 
+    def test_run_workspace_code_writer_accepts_validation_results_commands_object(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_handoff(root, project)
+            client = FakeWorkspaceCodeWriterClient(
+                {
+                    "output_text": json.dumps(
+                        {
+                            "status": "completed",
+                            "summary": "Updated model feature flag.",
+                            "changed_files": ["src/model.py"],
+                            "file_updates": [{"path": "src/model.py", "content": "FEATURE_FLAG = True\n"}],
+                            "validation_results": {
+                                "commands": [{"command": "{python} -m pytest tests -q", "status": "not_run"}]
+                            },
+                            "blocking_issues": [],
+                        }
+                    ),
+                }
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
+
+            self.assertEqual("accepted", result["status"])
+            self.assertEqual([], result["blocking_issues"])
+            self.assertEqual("FEATURE_FLAG = True\n", (project / "src" / "model.py").read_text(encoding="utf-8"))
+
     def test_run_workspace_code_writer_blocks_forbidden_artifact_update_before_write(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -131,6 +160,33 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
             self.assertEqual("blocked", result["status"])
             self.assertIn("changed_file_not_allowed:data/train.csv", result["issues"])
             self.assertIn("forbidden_path_touched:data/train.csv", result["issues"])
+
+    def test_validate_workspace_coding_result_accepts_validation_results_commands_object(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_handoff(root, project)
+            trial = root / "experiments" / "demo" / "trial_002"
+            (trial / "workspace_coding_result.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "summary": "Updated model.",
+                        "changed_files": ["src/model.py"],
+                        "validation_results": {
+                            "commands": [{"command": "{python} -m pytest tests -q", "status": "not_run"}]
+                        },
+                        "blocking_issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = validate_workspace_coding_result("demo", "trial_002")
+
+            self.assertEqual("accepted", result["status"])
+            self.assertEqual([], result["issues"])
 
     def test_run_workspace_code_writer_cli_uses_mock_response_file(self):
         with tempfile.TemporaryDirectory() as tmp:

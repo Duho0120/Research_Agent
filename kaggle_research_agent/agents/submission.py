@@ -7,7 +7,7 @@ from typing import Any
 from .. import paths
 from ..integrations import kaggle_cli
 from ..paths import competition_memory_dir, competition_submissions_dir, experiments_dir, trial_dir
-from ..store import now_iso, write_text
+from ..store import load_state, now_iso, save_state, write_text
 
 
 def record_submission_result(
@@ -25,7 +25,13 @@ def record_submission_result(
 ) -> dict[str, Any]:
     score_delta = _score_delta(previous_lb_score, submitted_lb_score)
     rank_delta = _rank_delta(previous_rank, submitted_rank)
-    is_best = _is_best_submission(previous_lb_score, submitted_lb_score, objective)
+    historical_best = _load_best_submission(competition)
+    best_reference_score = (
+        historical_best.get("submitted_lb_score")
+        if historical_best and historical_best.get("submitted_lb_score") is not None
+        else previous_lb_score
+    )
+    is_best = _is_best_submission(best_reference_score, submitted_lb_score, objective)
     row = {
         "submission_id": f"{competition}_{trial_id}_{version_name}",
         "competition": competition,
@@ -40,6 +46,7 @@ def record_submission_result(
         "submitted_rank": submitted_rank,
         "score_delta": score_delta,
         "rank_delta": rank_delta,
+        "best_reference_score": best_reference_score,
         "is_best": is_best,
         "notes": notes,
     }
@@ -131,6 +138,39 @@ def _write_best_files(competition: str, trial_id: str, row: dict[str, Any]) -> N
         encoding="utf-8",
     )
     write_text(trial_dir(competition, trial_id) / "BEST_MARKER.md", render_best_trial(row))
+    _update_state_best_trial_from_submission(competition, row)
+
+
+def _load_best_submission(competition: str) -> dict[str, Any] | None:
+    path = competition_memory_dir(competition) / "best_trial.json"
+    if not path.exists():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _update_state_best_trial_from_submission(competition: str, row: dict[str, Any]) -> None:
+    state = load_state(competition)
+    if not isinstance(state, dict):
+        return
+    current_state = state.setdefault("current_state", {})
+    if not isinstance(current_state, dict):
+        state["current_state"] = {}
+        current_state = state["current_state"]
+    current_state["best_trial"] = {
+        "trial_id": row["trial_id"],
+        "cv_score": row.get("cv_score"),
+        "lb_score": row.get("submitted_lb_score"),
+        "rank": row.get("submitted_rank"),
+        "version_name": row.get("version_name"),
+        "source": "leaderboard_submission",
+        "submitted_at": row.get("submitted_at"),
+    }
+    current_state["active_trial"] = row["trial_id"]
+    save_state(competition, state)
 
 
 def _score_delta(previous: float | None, current: float | None) -> float | None:

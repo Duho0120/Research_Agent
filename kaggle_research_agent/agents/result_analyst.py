@@ -21,7 +21,7 @@ def evaluate_trial(competition: str, trial_id: str) -> dict[str, Any]:
     state = load_state(competition)
     objective = metrics.get("objective") or state.get("competition", {}).get("objective", "maximize")
     best = state.get("current_state", {}).get("best_trial")
-    best_score = best.get("cv_score") if isinstance(best, dict) else None
+    best_score = _best_score_before_trial(best, trial_id, "cv_score")
     cv_score = metrics.get("cv_score")
     lb_score = metrics.get("lb_score")
     corr = metrics.get("prediction_correlation_with_best")
@@ -124,8 +124,8 @@ def diagnose_trial(competition: str, trial_id: str) -> dict[str, Any]:
 
     objective = metrics.get("objective") or state.get("competition", {}).get("objective", "maximize")
     best = state.get("current_state", {}).get("best_trial")
-    best_score = best.get("cv_score") if isinstance(best, dict) else None
-    best_lb_score = best.get("lb_score") if isinstance(best, dict) else None
+    best_score = _best_score_before_trial(best, trial_id, "cv_score")
+    best_lb_score = _best_score_before_trial(best, trial_id, "lb_score")
     cv_score = metrics.get("cv_score")
     lb_score = metrics.get("lb_score")
     corr = metrics.get("prediction_correlation_with_best")
@@ -201,6 +201,15 @@ def _improved(score: float | None, best: float | None, objective: str) -> bool:
     if score is None or best is None:
         return False
     return score < best if objective == "minimize" else score > best
+
+
+def _best_score_before_trial(best: Any, trial_id: str, score_key: str) -> float | None:
+    if not isinstance(best, dict):
+        return None
+    if best.get("trial_id") == trial_id:
+        return None
+    value = best.get(score_key)
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
 def _direction_conflict(

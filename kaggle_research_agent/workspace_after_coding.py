@@ -7,6 +7,7 @@ from typing import Any
 from .agents.memory import log_decision
 from .paths import trial_dir
 from .store import write_text
+from .trial_artifacts import organize_trial_artifacts, read_trial_json
 from .workspace_metrics_collector import collect_workspace_metrics
 from .workspace_result_cycle import process_workspace_result
 from .workspace_runner import run_workspace_pipeline
@@ -110,15 +111,15 @@ def run_workspace_after_coding(
 
 
 def _load_coding_validation(out_dir: Path) -> dict[str, Any] | None:
-    path = out_dir / "workspace_coding_result_validation.json"
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        return None
-    return value if isinstance(value, dict) else None
+    value = read_trial_json(out_dir, "workspace_coding_result_validation.json")
+    return value or None
 
 
 def _finish(out_dir: Path, result: dict[str, Any]) -> dict[str, Any]:
+    artifact_summary = None
+    if result.get("status") in {"completed", "completed_review_deferred", "awaiting_human_review"}:
+        artifact_summary = organize_trial_artifacts(result["competition"], result["trial_id"])
+        result["artifact_summary"] = artifact_summary
     write_text(out_dir / "workspace_after_coding_cycle.json", json.dumps(result, ensure_ascii=False, indent=2) + "\n")
     write_text(out_dir / "workspace_after_coding_cycle.md", _render_after_coding(result))
     log_decision(
@@ -133,6 +134,7 @@ def _finish(out_dir: Path, result: dict[str, Any]) -> dict[str, Any]:
             "workspace_run_status": (result.get("workspace_run") or {}).get("status"),
             "metrics_collection_status": (result.get("metrics_collection") or {}).get("status"),
             "workspace_result_cycle_status": (result.get("workspace_result_cycle") or {}).get("status"),
+            "artifact_readme": bool(artifact_summary),
         },
         user_input_used=result["run_now"],
         next_action=result["next_action"],

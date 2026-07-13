@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from . import paths
 from . import simple_yaml
 from .execution_profile import validate_execution_profile
 from .paths import competition_dir
@@ -26,13 +27,34 @@ def prepare_workspace(
     metric: str = "unknown",
     objective: str = "maximize",
     python_path: str | None = None,
+    create_workspace: bool = False,
+    workspace_root: str | None = None,
+    target_column: str | None = None,
+    id_column: str | None = None,
+    required_data_files: list[str] | None = None,
 ) -> dict[str, Any]:
-    if not source_path and not topic:
-        raise ValueError("Either source_path or topic is required.")
+    if not source_path and not topic and not create_workspace:
+        raise ValueError("Either source_path, topic, or create_workspace is required.")
 
     init_project(competition, metric=metric, objective=objective)
-    source = Path(source_path).expanduser().resolve() if source_path else None
     runtime = Path(python_path).expanduser().resolve() if python_path else Path(sys.executable).resolve()
+    data_files = _normalize_data_files(required_data_files)
+    scaffold: dict[str, Any] | None = None
+    if create_workspace:
+        source = _workspace_scaffold_path(competition, source_path=source_path, workspace_root=workspace_root)
+        scaffold = _create_workspace_scaffold(
+            competition,
+            source,
+            platform=platform,
+            metric=metric,
+            objective=objective,
+            topic=topic,
+            target_column=target_column,
+            id_column=id_column,
+            required_data_files=data_files,
+        )
+    else:
+        source = Path(source_path).expanduser().resolve() if source_path else None
     source_record = {
         "competition": competition,
         "topic": topic,
@@ -40,6 +62,8 @@ def prepare_workspace(
         "source_path": str(source) if source else None,
         "python": str(runtime),
         "status": "pending_inspection" if source else "needs_project_path",
+        "created_workspace": bool(scaffold),
+        "required_data_files": data_files,
     }
     _update_workspace_state(competition, platform, topic, source)
     _write_source_record(competition, source_record)
@@ -72,17 +96,83 @@ def prepare_workspace(
     )
     simple_yaml.dump(profile, competition_dir(competition) / "execution_profile.yaml")
     validation = validate_execution_profile(competition)
-    status = "ready" if validation["status"] == "ready" and not review_questions else "needs_review"
+    data_check = _check_required_data_files(source, data_files)
+    status = _preparation_status(validation, review_questions, data_check, scaffold)
     source_record["status"] = status
     _write_source_record(competition, source_record)
-    _write_preparation_summary(competition, status, review_questions, validation, inventory)
+    _write_preparation_summary(competition, status, review_questions, validation, inventory, data_check, scaffold)
     return {
         **source_record,
         "status": status,
         "review_questions": review_questions,
         "execution_profile_validation": validation,
         "inventory": inventory,
+        "data_check": data_check,
+        "scaffold": scaffold,
         "steps": ["initialized", "source_recorded", "source_inspected", "execution_profile_drafted", "profile_validated"],
+    }
+
+
+def _workspace_scaffold_path(competition: str, *, source_path: str | None, workspace_root: str | None) -> Path:
+    if source_path:
+        return Path(source_path).expanduser().resolve()
+    root = Path(workspace_root).expanduser().resolve() if workspace_root else paths.project_root() / "demo_workspaces"
+    return (root / competition).resolve()
+
+
+def _create_workspace_scaffold(
+    competition: str,
+    source: Path,
+    *,
+    platform: str,
+    metric: str,
+    objective: str,
+    topic: str | None,
+    target_column: str | None,
+    id_column: str | None,
+    required_data_files: list[str],
+) -> dict[str, Any]:
+    for directory in ["data", "src", "tests", "outputs"]:
+        (source / directory).mkdir(parents=True, exist_ok=True)
+    config = {
+        "competition": competition,
+        "platform": platform,
+        "topic": topic,
+        "metric": metric,
+        "objective": objective,
+        "target_column": target_column,
+        "id_column": id_column,
+        "required_data_files": required_data_files,
+        "data_dir": "data",
+        "outputs_dir": "outputs",
+    }
+    files = {
+        "workspace_config.json": json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+        "src/__init__.py": "",
+        "src/baseline.py": _baseline_script(),
+        "test_step.py": _test_step_script(),
+        "train_step.py": _train_step_script(),
+        "predict_step.py": _predict_step_script(),
+        "README.md": _workspace_readme(competition, required_data_files),
+        "data/README.md": _data_readme(required_data_files),
+        "tests/README.md": "Place optional workspace tests here.\n",
+    }
+    created_files = []
+    preserved_files = []
+    for relative, content in files.items():
+        target = source / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            preserved_files.append(relative)
+            continue
+        write_text(target, content)
+        created_files.append(relative)
+    return {
+        "source_path": str(source),
+        "created_files": created_files,
+        "preserved_files": preserved_files,
+        "data_policy": "manual",
+        "next_action": "copy-required-data-files" if required_data_files else "confirm-data-files-and-target-column",
     }
 
 
@@ -129,20 +219,30 @@ def _build_profile_draft(
 ) -> tuple[dict[str, Any], list[str]]:
     paths = {item["path"] for item in inventory["files"]}
     commands: dict[str, list[str]] = {}
-    if "tests" in {part for path in paths for part in Path(path).parts} or any(
+    test_entry = _first_existing(paths, ["test_step.py", "tests/test_step.py"])
+    if test_entry:
+        commands["test"] = [f"{{python}} {test_entry}"]
+    elif "tests" in {part for path in paths for part in Path(path).parts} or any(
         path in paths for path in ["pytest.ini", "pyproject.toml", "tox.ini"]
     ):
         commands["test"] = ["{python} -m pytest tests -q"]
-    train_entry = _first_existing(paths, ["train.py", "src/train.py", "scripts/train.py"])
+    train_entry = _first_existing(paths, ["train_step.py", "train.py", "src/train.py", "scripts/train.py"])
     if train_entry:
         commands["train"] = [f"{{python}} {train_entry}"]
-    predict_entry = _first_existing(paths, ["predict.py", "inference.py", "src/predict.py", "scripts/predict.py"])
+    predict_entry = _first_existing(
+        paths,
+        ["predict_step.py", "predict.py", "inference.py", "src/predict.py", "scripts/predict.py"],
+    )
     if predict_entry:
         commands["predict"] = [f"{{python}} {predict_entry}"]
 
     metrics_paths = _matching_paths(paths, {"metrics.json"})
     submission_paths = _matching_paths(paths, {"submission.csv"})
     artifacts: dict[str, list[str]] = {}
+    if not metrics_paths and (source / "outputs").is_dir():
+        metrics_paths = ["outputs/metrics.json"]
+    if not submission_paths and (source / "outputs").is_dir():
+        submission_paths = ["outputs/submission.csv"]
     if metrics_paths:
         artifacts["metrics"] = metrics_paths
     if submission_paths:
@@ -182,7 +282,7 @@ def _allowed_write_paths(source: Path, paths: set[str]) -> list[str]:
     for directory in ["src", "tests", "scripts"]:
         if (source / directory).is_dir():
             allowed.append(f"{directory}/")
-    for filename in ["train.py", "predict.py", "inference.py"]:
+    for filename in ["train_step.py", "predict_step.py", "test_step.py", "train.py", "predict.py", "inference.py", "workspace_config.json"]:
         if filename in paths:
             allowed.append(filename)
     return allowed
@@ -248,6 +348,8 @@ def _write_source_record(competition: str, record: dict[str, Any]) -> None:
         f"- topic: {record.get('topic')}",
         f"- source_path: {record.get('source_path')}",
         f"- python: {record.get('python')}",
+        f"- created_workspace: {record.get('created_workspace')}",
+        f"- required_data_files: {record.get('required_data_files')}",
         "",
     ]
     write_text(out_dir / "workspace_source.md", "\n".join(lines))
@@ -277,6 +379,8 @@ def _write_preparation_summary(
     questions: list[str],
     validation: dict[str, Any],
     inventory: dict[str, Any],
+    data_check: dict[str, Any] | None = None,
+    scaffold: dict[str, Any] | None = None,
 ) -> None:
     result = {
         "competition": competition,
@@ -285,6 +389,8 @@ def _write_preparation_summary(
         "execution_profile_status": validation["status"],
         "execution_profile_issues": validation["issues"],
         "inventory_file_count": inventory["file_count"],
+        "data_check": data_check or {},
+        "scaffold": scaffold or {},
     }
     out_dir = competition_dir(competition)
     write_text(out_dir / "workspace_preparation.json", json.dumps(result, ensure_ascii=False, indent=2) + "\n")
@@ -292,5 +398,249 @@ def _write_preparation_summary(
     lines.extend(f"- {item}" for item in questions or ["None"])
     lines.extend(["", "## Profile Issues", ""])
     lines.extend(f"- {item}" for item in validation["issues"] or ["None"])
+    if data_check:
+        lines.extend(["", "## Data Check", ""])
+        lines.extend(f"- missing: {item}" for item in data_check.get("missing_files", []) or ["None"])
+    if scaffold:
+        lines.extend(["", "## Created Workspace", ""])
+        lines.extend(f"- {item}" for item in scaffold.get("created_files", []) or ["None"])
     lines.append("")
     write_text(out_dir / "workspace_preparation.md", "\n".join(lines))
+
+
+def _normalize_data_files(values: list[str] | None) -> list[str]:
+    normalized: list[str] = []
+    for value in values or []:
+        for item in str(value).split(","):
+            item = item.strip().replace("\\", "/")
+            if item:
+                normalized.append(item)
+    return list(dict.fromkeys(normalized))
+
+
+def _check_required_data_files(source: Path, required_data_files: list[str]) -> dict[str, Any]:
+    missing = [item for item in required_data_files if not (source / "data" / item).exists()]
+    return {
+        "status": "ready" if not missing else "missing_data",
+        "required_files": required_data_files,
+        "missing_files": missing,
+        "data_dir": str((source / "data").as_posix()),
+        "manual_data_required": bool(missing),
+    }
+
+
+def _preparation_status(
+    validation: dict[str, Any],
+    review_questions: list[str],
+    data_check: dict[str, Any],
+    scaffold: dict[str, Any] | None,
+) -> str:
+    if review_questions:
+        return "needs_review"
+    if validation["status"] != "ready":
+        return "blocked"
+    if scaffold and data_check.get("status") == "missing_data":
+        return "needs_data"
+    return "ready"
+
+
+def _workspace_readme(competition: str, required_data_files: list[str]) -> str:
+    lines = [
+        f"# {competition} Workspace",
+        "",
+        "This workspace was scaffolded by the research agent.",
+        "",
+        "## Manual Data Step",
+        "",
+        "Copy the competition data files into `data/` before running the local loop.",
+        "",
+    ]
+    lines.extend(f"- data/{item}" for item in required_data_files or ["<competition files>"])
+    lines.extend(
+        [
+            "",
+            "## Commands",
+            "",
+            "```powershell",
+            "python test_step.py",
+            "python train_step.py",
+            "python predict_step.py",
+            "```",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _data_readme(required_data_files: list[str]) -> str:
+    lines = ["# Data", "", "Place manually downloaded competition data files here.", ""]
+    lines.extend(f"- {item}" for item in required_data_files or ["train.csv", "test.csv"])
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _test_step_script() -> str:
+    return """from src.baseline import check_required_data
+
+
+if __name__ == "__main__":
+    check_required_data()
+    print("workspace contract ok")
+"""
+
+
+def _train_step_script() -> str:
+    return """from src.baseline import train
+
+
+if __name__ == "__main__":
+    train()
+"""
+
+
+def _predict_step_script() -> str:
+    return """from src.baseline import predict
+
+
+if __name__ == "__main__":
+    predict()
+"""
+
+
+def _baseline_script() -> str:
+    return r'''from __future__ import annotations
+
+import csv
+import json
+from collections import Counter
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+CONFIG_PATH = ROOT / "workspace_config.json"
+
+
+def load_config() -> dict:
+    return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+
+
+def check_required_data() -> None:
+    config = load_config()
+    missing = []
+    for name in config.get("required_data_files", []):
+        if not (ROOT / "data" / name).exists():
+            missing.append(name)
+    if missing:
+        raise FileNotFoundError("Missing data files in data/: " + ", ".join(missing))
+
+
+def train() -> dict:
+    check_required_data()
+    config = load_config()
+    target = config.get("target_column")
+    if not target:
+        raise ValueError("workspace_config.json must define target_column before training.")
+    train_path = _find_train_file(target)
+    rows = _read_csv(train_path)
+    if not rows:
+        raise ValueError(f"No rows found in {train_path}")
+    if target not in rows[0]:
+        raise ValueError(f"Target column {target!r} not found in {train_path}")
+
+    split_at = max(1, int(len(rows) * 0.8))
+    train_rows = rows[:split_at]
+    valid_rows = rows[split_at:] or rows[:]
+    labels = [row[target] for row in train_rows if row.get(target) not in {None, ""}]
+    if not labels:
+        raise ValueError(f"No labels found in target column {target!r}")
+    prediction = Counter(labels).most_common(1)[0][0]
+    correct = sum(1 for row in valid_rows if row.get(target) == prediction)
+    score = correct / len(valid_rows) if valid_rows else 0.0
+
+    outputs = ROOT / "outputs"
+    outputs.mkdir(exist_ok=True)
+    model = {
+        "strategy": "majority_class",
+        "prediction": prediction,
+        "target_column": target,
+        "id_column": config.get("id_column"),
+        "train_file": train_path.name,
+    }
+    metrics = {
+        "cv_score": score,
+        "metric": config.get("metric", "accuracy"),
+        "objective": config.get("objective", "maximize"),
+        "train_rows": len(train_rows),
+        "validation_rows": len(valid_rows),
+        "strategy": "majority_class",
+    }
+    (outputs / "model.json").write_text(json.dumps(model, indent=2) + "\n", encoding="utf-8")
+    (outputs / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
+    return metrics
+
+
+def predict() -> Path:
+    config = load_config()
+    outputs = ROOT / "outputs"
+    model_path = outputs / "model.json"
+    if not model_path.exists():
+        train()
+    model = json.loads(model_path.read_text(encoding="utf-8"))
+    test_path = _find_test_file(model.get("target_column"))
+    rows = _read_csv(test_path)
+    target = model.get("target_column") or config.get("target_column") or "prediction"
+    id_column = config.get("id_column") or model.get("id_column") or _first_column(rows)
+    submission_path = outputs / "submission.csv"
+    with submission_path.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=[id_column, target])
+        writer.writeheader()
+        for index, row in enumerate(rows):
+            writer.writerow({id_column: row.get(id_column, index), target: model["prediction"]})
+    return submission_path
+
+
+def _find_train_file(target: str) -> Path:
+    preferred = ROOT / "data" / "train.csv"
+    if preferred.exists():
+        return preferred
+    for path in sorted((ROOT / "data").glob("*.csv")):
+        try:
+            rows = _read_csv(path, limit=1)
+        except ValueError:
+            continue
+        if rows and target in rows[0]:
+            return path
+    raise FileNotFoundError("Could not find a CSV train file containing the target column.")
+
+
+def _find_test_file(target: str | None) -> Path:
+    preferred = ROOT / "data" / "test.csv"
+    if preferred.exists():
+        return preferred
+    for path in sorted((ROOT / "data").glob("*.csv")):
+        if path.name.lower().startswith("train"):
+            continue
+        rows = _read_csv(path, limit=1)
+        if rows and (not target or target not in rows[0]):
+            return path
+    raise FileNotFoundError("Could not find a CSV test file.")
+
+
+def _read_csv(path: Path, *, limit: int | None = None) -> list[dict[str, str]]:
+    with path.open("r", encoding="utf-8-sig", newline="") as file:
+        reader = csv.DictReader(file)
+        if not reader.fieldnames:
+            raise ValueError(f"CSV has no header: {path}")
+        rows = []
+        for row in reader:
+            rows.append(dict(row))
+            if limit is not None and len(rows) >= limit:
+                break
+        return rows
+
+
+def _first_column(rows: list[dict[str, str]]) -> str:
+    if not rows:
+        return "id"
+    return next(iter(rows[0].keys()), "id")
+'''

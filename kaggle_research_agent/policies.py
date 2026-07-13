@@ -130,9 +130,9 @@ DEFAULT_POLICIES: dict[str, dict[str, Any]] = {
     },
     "model_policy": {
         "high_cost": {
-            "provider": "anthropic",
-            "api": "messages",
-            "model": "claude-sonnet-5",
+            "provider": "openai",
+            "api": "responses",
+            "model": "gpt-5.5",
             "call_types": [
                 "experiment_planning",
                 "code_writing",

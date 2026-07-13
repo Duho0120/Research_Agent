@@ -30,8 +30,8 @@ class PolicyGateTest(unittest.TestCase):
         high_cost = select_model_for_call("experiment_planning", policy=policy)
         low_cost = select_model_for_call("status_summary", policy=policy)
 
-        self.assertEqual("anthropic", high_cost["provider"])
-        self.assertEqual("claude-sonnet-5", high_cost["model"])
+        self.assertEqual("openai", high_cost["provider"])
+        self.assertEqual("gpt-5.5", high_cost["model"])
         self.assertEqual("openai", low_cost["provider"])
         self.assertEqual("gpt-5.6-luna", low_cost["model"])
 

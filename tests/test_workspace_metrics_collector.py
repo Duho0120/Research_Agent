@@ -68,6 +68,30 @@ class WorkspaceMetricsCollectorTest(unittest.TestCase):
             self.assertEqual("accuracy", metrics["metric"])
             self.assertEqual(5, metrics["epoch"])
 
+    def test_collects_validation_metric_key_from_competition_metric(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            project = Path(tmp) / "project"
+            root.mkdir()
+            project.mkdir()
+            source = project / "outputs" / "metrics.json"
+            source.parent.mkdir()
+            source.write_text(
+                json.dumps({"validation_accuracy": 0.79, "training_rows": 712}),
+                encoding="utf-8",
+            )
+            self._write_workspace(root, project, "trial_validation_metric", status="completed")
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = collect_workspace_metrics("demo", "trial_validation_metric")
+
+            self.assertEqual("collected", result["status"])
+            self.assertEqual("validation_accuracy", result["score_source"])
+            self.assertEqual(0.79, result["cv_score"])
+            metrics = json.loads((root / "experiments" / "demo" / "trial_validation_metric" / "metrics.json").read_text())
+            self.assertEqual(0.79, metrics["cv_score"])
+            self.assertEqual(712, metrics["training_rows"])
+
     def test_missing_score_mapping_requests_review_without_writing_metrics(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "agent"

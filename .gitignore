@@ -25,6 +25,10 @@ Thumbs.db
 *.log
 local_run.log
 
+# Local/demo workspaces and generated run views
+demo_workspaces/
+runs/
+
 # Large or private competition data
 data/
 competitions/**/data/
@@ -45,9 +49,20 @@ experiments/**/submission.csv
 experiments/**/oof*.csv
 experiments/**/test_pred*.csv
 experiments/**/predictions*.csv
+experiments/**/debug/
+experiments/**/workspace_logs/
+experiments/**/internal/
 
 # Generated runtime state that can contain machine-specific history
 submissions/
+
+# New per-competition runtime state. Existing tracked examples stay tracked.
+competitions/*/
+configs/*/
+memory/*/
+experiments/*/
+!configs/policies/
+!configs/policies/**
 
 # Notebook checkpoints
 .ipynb_checkpoints/

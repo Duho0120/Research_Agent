@@ -10,6 +10,7 @@ from .agents.memory import log_decision, log_token_usage
 from .agents.policy_gate import should_call_llm
 from .paths import trial_dir
 from .store import read_text, write_text
+from .trial_artifacts import trial_artifact_path
 
 
 def run_workspace_code_writer(
@@ -88,10 +89,12 @@ def run_workspace_code_writer(
 def validate_workspace_coding_result(competition: str, trial_id: str) -> dict[str, Any]:
     out_dir = trial_dir(competition, trial_id)
     handoff = _load_handoff(out_dir)
-    result_path = out_dir / "workspace_coding_result.json"
+    result_path = trial_artifact_path(out_dir, "workspace_coding_result.json")
     if not result_path.exists():
         raise FileNotFoundError(f"Missing workspace coding result: {result_path}")
     coding_result = json.loads(result_path.read_text(encoding="utf-8"))
+    if "validation_results" in coding_result:
+        coding_result["validation_results"] = _normalize_validation_results(coding_result.get("validation_results"))
     issues = _validate_schema(coding_result, handoff)
     issues.extend(_validate_changed_files(coding_result, handoff))
     issues.extend(_validate_file_updates(coding_result, handoff))
@@ -214,7 +217,7 @@ def _read_context(files: list[str]) -> str:
 
 
 def _load_handoff(out_dir: Path) -> dict[str, Any]:
-    handoff_path = out_dir / "workspace_coding_handoff.json"
+    handoff_path = trial_artifact_path(out_dir, "workspace_coding_handoff.json")
     if not handoff_path.exists():
         raise FileNotFoundError(f"Missing workspace coding handoff: {handoff_path}")
     handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
@@ -278,7 +281,18 @@ def _normalize_coding_result(
     normalized.setdefault("validation_results", [])
     normalized.setdefault("blocking_issues", [])
     normalized.setdefault("next_action", "validate-workspace-code-change")
+    normalized["validation_results"] = _normalize_validation_results(normalized.get("validation_results"))
     return normalized
+
+
+def _normalize_validation_results(value: Any) -> Any:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        commands = value.get("commands")
+        if isinstance(commands, list):
+            return commands
+    return value
 
 
 def _apply_file_updates(coding_result: dict[str, Any], handoff: dict[str, Any]) -> list[str]:

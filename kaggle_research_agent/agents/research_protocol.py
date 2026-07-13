@@ -32,7 +32,7 @@ def build_research_protocol(
     objective = metrics.get("objective") or state.get("competition", {}).get("objective", "maximize")
     best = state.get("current_state", {}).get("best_trial", {})
     score = metrics.get("cv_score")
-    best_score = best.get("cv_score") if isinstance(best, dict) else None
+    best_score = _best_score_before_trial(best, trial_id, "cv_score")
     issues = list(diagnosis.get("issues", []))
     optional_evidence: dict[str, Any] = {}
 
@@ -43,6 +43,7 @@ def build_research_protocol(
         competition_policy,
         issues,
         optional_evidence,
+        current_trial_id=trial_id,
     )
     strategy = _choose_strategy(
         diagnosis,
@@ -66,7 +67,7 @@ def build_research_protocol(
         "evidence": {
             "score": score,
             "best_score_before": best_score,
-            "improved": _improved(score, best_score, objective),
+            "improved": True if best_score is None and score is not None else _improved(score, best_score, objective),
             "task_type": profile.get("task_type", "unknown"),
             "diagnosis_issues": diagnosis.get("issues", []),
         },
@@ -163,16 +164,19 @@ def _apply_optional_leaderboard_check(
     competition_policy: dict[str, Any],
     issues: list[str],
     optional_evidence: dict[str, Any],
+    *,
+    current_trial_id: str,
 ) -> bool:
     settings = competition_policy.get("leaderboard_tracking", {})
     if not settings.get("enabled", False):
         return False
     leaderboard_score = metrics.get(settings.get("score_field", "lb_score"))
-    best_leaderboard_score = best.get(settings.get("score_field", "lb_score")) if isinstance(best, dict) else None
+    score_field = settings.get("score_field", "lb_score")
+    best_leaderboard_score = _best_score_before_trial(best, current_trial_id, score_field)
     optional_evidence["leaderboard_score"] = leaderboard_score
     optional_evidence["best_leaderboard_score"] = best_leaderboard_score
     conflict = (
-        _improved(metrics.get("cv_score"), best.get("cv_score") if isinstance(best, dict) else None, objective)
+        _improved(metrics.get("cv_score"), _best_score_before_trial(best, current_trial_id, "cv_score"), objective)
         and leaderboard_score is not None
         and best_leaderboard_score is not None
         and not _improved(leaderboard_score, best_leaderboard_score, objective)
@@ -261,6 +265,15 @@ def _improved(score: float | None, best: float | None, objective: str) -> bool:
     if score is None or best is None:
         return False
     return score < best if objective == "minimize" else score > best
+
+
+def _best_score_before_trial(best: Any, trial_id: str, score_key: str) -> float | None:
+    if not isinstance(best, dict):
+        return None
+    if trial_id and best.get("trial_id") == trial_id:
+        return None
+    value = best.get(score_key)
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
 def _strategy_reason(strategy: str, issues: list[str]) -> str:

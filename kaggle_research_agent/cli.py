@@ -39,10 +39,12 @@ from .workspace_next_gate import plan_next_workspace_trial
 from .workspace_result_cycle import process_workspace_result
 from .workspace_runner import run_workspace_pipeline
 from .demo_one_cycle import run_demo_one_cycle, watch_demo_agent
+from .demo_guide import run_demo_guide
+from .trial_artifacts import organize_trial_artifacts
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="kaggle-research-agent")
+    parser = argparse.ArgumentParser(prog="research-agent")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_init = sub.add_parser("init")
@@ -67,6 +69,11 @@ def main(argv: list[str] | None = None) -> int:
     p_prepare_workspace.add_argument("--metric", default="unknown")
     p_prepare_workspace.add_argument("--objective", choices=["maximize", "minimize"], default="maximize")
     p_prepare_workspace.add_argument("--python", dest="python_path", default=None)
+    p_prepare_workspace.add_argument("--create-workspace", action="store_true")
+    p_prepare_workspace.add_argument("--workspace-root", default=None)
+    p_prepare_workspace.add_argument("--target-column", default=None)
+    p_prepare_workspace.add_argument("--id-column", default=None)
+    p_prepare_workspace.add_argument("--required-data-file", action="append", default=[])
 
     p_profile_data = sub.add_parser("profile-data")
     p_profile_data.add_argument("--competition", required=True)
@@ -146,11 +153,15 @@ def main(argv: list[str] | None = None) -> int:
     p_run_workspace_after_coding.add_argument("--trial", required=True)
     p_run_workspace_after_coding.add_argument("--run-now", action="store_true")
 
+    p_organize_trial_artifacts = sub.add_parser("organize-trial-artifacts")
+    p_organize_trial_artifacts.add_argument("--competition", required=True)
+    p_organize_trial_artifacts.add_argument("--trial", required=True)
+
     p_demo_one_cycle = sub.add_parser("demo-one-cycle")
     p_demo_one_cycle.add_argument("--competition", required=True)
     p_demo_one_cycle.add_argument("--trial", default="trial_001")
-    p_demo_one_cycle.add_argument("--model", default=None)
-    p_demo_one_cycle.add_argument("--provider", choices=["openai", "anthropic"], default=None)
+    p_demo_one_cycle.add_argument("--model", default="gpt-5.5")
+    p_demo_one_cycle.add_argument("--provider", choices=["openai", "anthropic"], default="openai")
     p_demo_one_cycle.add_argument("--allow-api", action="store_true")
     p_demo_one_cycle.add_argument("--mock-plan-file", default=None)
     p_demo_one_cycle.add_argument("--mock-response-file", default=None)
@@ -164,6 +175,8 @@ def main(argv: list[str] | None = None) -> int:
     p_watch_demo_cycle.add_argument("--trial", default="trial_001")
     p_watch_demo_cycle.add_argument("--follow", action="store_true")
     p_watch_demo_cycle.add_argument("--interval-seconds", type=float, default=1.0)
+
+    sub.add_parser("demo-guide")
 
     p_cycle = sub.add_parser("cycle")
     p_cycle.add_argument("--competition", required=True)
@@ -379,6 +392,11 @@ def main(argv: list[str] | None = None) -> int:
             metric=args.metric,
             objective=args.objective,
             python_path=args.python_path,
+            create_workspace=args.create_workspace,
+            workspace_root=args.workspace_root,
+            target_column=args.target_column,
+            id_column=args.id_column,
+            required_data_files=args.required_data_file,
         )
         print(f"Workspace preparation: {result['competition']} status={result['status']}")
         return 1 if result["status"] == "blocked" else 0
@@ -492,6 +510,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Workspace after coding: {result['trial_id']} status={result['status']}")
         return 0 if result["status"] in {"ready_to_run", "completed"} else 1
 
+    if args.command == "organize-trial-artifacts":
+        result = organize_trial_artifacts(args.competition, args.trial)
+        print(
+            "Trial artifacts organized: "
+            f"{result['competition']} {result['trial_id']} status={result['status']} "
+            f"moved_debug_files={len(result.get('moved_debug_files', []))}"
+        )
+        return 0
+
     if args.command == "demo-one-cycle":
         result = run_demo_one_cycle(
             args.competition,
@@ -517,6 +544,9 @@ def main(argv: list[str] | None = None) -> int:
             interval_seconds=args.interval_seconds,
         )
         return 0 if status.get("status") not in {"blocked", "failed", "invalid"} else 1
+
+    if args.command == "demo-guide":
+        return run_demo_guide()
 
     if args.command == "cycle":
         result = run_cycle(

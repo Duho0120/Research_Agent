@@ -9,6 +9,7 @@ from .agents.memory import log_decision
 from .execution_profile import load_execution_profile, validate_execution_profile
 from .paths import trial_dir
 from .store import load_state, write_text
+from .trial_artifacts import read_trial_json
 
 
 def collect_workspace_metrics(competition: str, trial_id: str) -> dict[str, Any]:
@@ -29,12 +30,8 @@ def collect_workspace_metrics(competition: str, trial_id: str) -> dict[str, Any]
         "next_action": "inspect-metrics-collection",
     }
 
-    try:
-        workspace_run = json.loads((out_dir / "workspace_run.json").read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        result["issues"] = ["invalid_or_missing_workspace_run"]
-        return _finish(out_dir, result)
-    if not isinstance(workspace_run, dict):
+    workspace_run = read_trial_json(out_dir, "workspace_run.json")
+    if not workspace_run:
         result["issues"] = ["invalid_or_missing_workspace_run"]
         return _finish(out_dir, result)
     result["workspace_run_status"] = workspace_run.get("status")
@@ -77,7 +74,7 @@ def collect_workspace_metrics(competition: str, trial_id: str) -> dict[str, Any]
     state = load_state(competition)
     competition_state = state.get("competition", {})
     try:
-        cv_score, score_source = _resolve_score(source_metrics, profile)
+        cv_score, score_source = _resolve_score(source_metrics, profile, competition_state)
     except (AttributeError, KeyError, TypeError, ValueError):
         result["status"] = "needs_review"
         result["issues"] = ["missing_or_invalid_primary_score"]
@@ -135,14 +132,30 @@ def _finish(out_dir: Path, result: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _resolve_score(source_metrics: dict[str, Any], profile: dict[str, Any]) -> tuple[float | int, str]:
+def _resolve_score(
+    source_metrics: dict[str, Any],
+    profile: dict[str, Any],
+    competition_state: dict[str, Any],
+) -> tuple[float | int, str]:
     direct = source_metrics.get("cv_score")
     if _is_finite_number(direct):
         return direct, "cv_score"
 
     source_key = profile.get("metrics_contract", {}).get("source_key")
-    if not source_key:
-        raise KeyError("metrics_contract.source_key")
+    if source_key:
+        return _resolve_nested_score(source_metrics, source_key)
+
+    metric = str(competition_state.get("metric") or profile.get("metric") or "").strip().casefold()
+    if metric:
+        for candidate in (f"validation_{metric}", f"val_{metric}", f"valid_{metric}"):
+            value = source_metrics.get(candidate)
+            if _is_finite_number(value):
+                return value, candidate
+
+    raise KeyError("metrics_contract.source_key")
+
+
+def _resolve_nested_score(source_metrics: dict[str, Any], source_key: str) -> tuple[float | int, str]:
     value: Any = source_metrics
     for part in source_key.split("."):
         value = value[part]

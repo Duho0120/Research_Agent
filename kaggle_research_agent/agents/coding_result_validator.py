@@ -19,6 +19,8 @@ def validate_coding_result(competition: str, trial_id: str) -> dict[str, Any]:
 
     handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
     coding_result = json.loads(result_path.read_text(encoding="utf-8"))
+    if "validation_results" in coding_result:
+        coding_result["validation_results"] = _normalize_validation_results(coding_result.get("validation_results"))
     issues = _validate_schema(coding_result, handoff)
     issues.extend(_validate_changed_files(coding_result, handoff))
     issues.extend(_validate_file_updates(coding_result, handoff))
@@ -51,6 +53,16 @@ def validate_coding_result(competition: str, trial_id: str) -> dict[str, Any]:
         next_action=result["next_action"],
     )
     return result
+
+
+def _normalize_validation_results(value: Any) -> Any:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        commands = value.get("commands")
+        if isinstance(commands, list):
+            return commands
+    return value
 
 
 def create_dry_run_coding_result(competition: str, trial_id: str) -> dict[str, Any]:

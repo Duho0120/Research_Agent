@@ -44,6 +44,35 @@ class CodingResultValidatorTest(unittest.TestCase):
             self.assertEqual(last["decision_type"], "coding_result_validation")
             self.assertEqual(last["decision"], "accepted")
 
+    def test_validate_coding_result_accepts_validation_results_commands_object(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trial = root / "experiments" / "demo" / "trial_002"
+            trial.mkdir(parents=True)
+            self._write_handoff(trial)
+            (trial / "coding_result.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "summary": "Updated trial config.",
+                        "changed_files": ["experiments/demo/trial_002/config.yaml"],
+                        "validation_results": {
+                            "commands": [
+                                {"command": "python -B -m unittest discover -s tests -v", "status": "not_run"}
+                            ]
+                        },
+                        "blocking_issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = validate_coding_result("demo", "trial_002")
+
+            self.assertEqual("accepted", result["status"])
+            self.assertEqual([], result["issues"])
+
     def test_validate_coding_result_blocks_out_of_scope_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

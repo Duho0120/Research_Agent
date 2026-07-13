@@ -29,18 +29,33 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             self.assertEqual(["src/", "tests/", "train.py"], result["allowed_write_paths"])
             self.assertIn("outputs/metrics.json", result["forbidden_paths"])
             self.assertIn("outputs/submission.csv", result["forbidden_paths"])
+            self.assertEqual("outputs/metrics.json", result["metrics_output_contract"]["path"])
+            self.assertEqual("cv_score", result["metrics_output_contract"]["score_key"])
+            self.assertIn("cv_score", result["metrics_output_contract"]["required_keys"])
             self.assertTrue(result["execution_constraints"]["do_not_run_training"])
             self.assertTrue(result["execution_constraints"]["do_not_submit"])
             self.assertTrue(result["execution_constraints"]["do_not_edit_data_or_outputs"])
             self.assertTrue(result["pending_human_review"])
             self.assertIn("experiments/demo/trial_002/next_experiment.md", result["context_files"])
+            self.assertIn("experiments/demo/trial_002/workspace_context_snapshot.md", result["context_files"])
             self.assertTrue((trial / "workspace_coding_handoff.json").exists())
+            snapshot = trial / "workspace_context_snapshot.md"
+            self.assertTrue(snapshot.exists())
+            snapshot_text = snapshot.read_text(encoding="utf-8")
+            self.assertIn("Previous Trial Evidence", snapshot_text)
+            self.assertIn("Current Project Code", snapshot_text)
+            self.assertIn("pipeline_structure.json", snapshot_text)
+            self.assertIn("Data Split / CV Strategy", snapshot_text)
+            self.assertIn("train.py", snapshot_text)
+            self.assertIn("MODEL = 'baseline'", snapshot_text)
             request = trial / "workspace_coding_agent_request.md"
             self.assertTrue(request.exists())
             text = request.read_text(encoding="utf-8")
             self.assertIn("Allowed External Write Paths", text)
             self.assertIn("src/", text)
             self.assertIn("Do not run training", text)
+            self.assertIn("Metrics Output Contract", text)
+            self.assertIn("cv_score", text)
             log = root / "memory" / "demo" / "decision_log.jsonl"
             last = json.loads(log.read_text(encoding="utf-8").splitlines()[-1])
             self.assertEqual("workspace_coding_handoff", last["decision_type"])
@@ -144,6 +159,29 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
         )
 
     def _write_next_trial(self, root: Path, *, continuation_mode: str) -> None:
+        source = root / "experiments" / "demo" / "trial_001"
+        (source / "internal").mkdir(parents=True, exist_ok=True)
+        (source / "user_view").mkdir(parents=True, exist_ok=True)
+        (source / "internal" / "pipeline_structure.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "stages": [
+                        {
+                            "id": "data_split_cv",
+                            "name": "Data Split / CV Strategy",
+                            "included": True,
+                            "code_locations": ["train.py"],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (source / "user_view" / "02_pipeline_structure.ko.md").write_text(
+            "# trial_001 파이프라인 구조\n\n## Data Split / CV Strategy\n",
+            encoding="utf-8",
+        )
         trial = root / "experiments" / "demo" / "trial_002"
         trial.mkdir(parents=True)
         (trial / "next_experiment.md").write_text(

@@ -97,6 +97,35 @@ class ResultAnalystTest(unittest.TestCase):
             self.assertTrue(result["cv_improved"])
             self.assertNotIn("CV/LB", " ".join(result["issues"]))
 
+    def test_current_best_trial_is_not_compared_against_itself(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trial = root / "experiments" / "demo" / "trial_001"
+            trial.mkdir(parents=True)
+            (trial / "metrics.json").write_text(
+                json.dumps({"cv_score": 0.82, "objective": "maximize"}),
+                encoding="utf-8",
+            )
+            state_dir = root / "competitions" / "demo"
+            state_dir.mkdir(parents=True)
+            (state_dir / "state.yaml").write_text(
+                "competition:\n"
+                "  objective: maximize\n"
+                "current_state:\n"
+                "  consecutive_failures: 0\n"
+                "  best_trial:\n"
+                "    trial_id: trial_001\n"
+                "    cv_score: 0.82\n",
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = diagnose_trial("demo", "trial_001")
+
+            self.assertIsNone(result["best_cv_before"])
+            self.assertTrue(result["cv_improved"])
+            self.assertNotIn("CV did not improve", " ".join(result["issues"]))
+
 
 if __name__ == "__main__":
     unittest.main()

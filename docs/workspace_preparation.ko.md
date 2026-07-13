@@ -49,3 +49,42 @@ competitions/<workspace>/workspace_preparation.json
 competitions/<workspace>/execution_profile.yaml
 competitions/<workspace>/execution_profile_validation.json
 ```
+
+## Auto Workspace Scaffold
+
+Create a new local workspace scaffold:
+
+```powershell
+python -B -m kaggle_research_agent.cli prepare-workspace `
+  --competition titanic_demo `
+  --topic "Titanic survival prediction" `
+  --platform kaggle `
+  --metric accuracy `
+  --objective maximize `
+  --create-workspace `
+  --target-column Survived `
+  --id-column PassengerId `
+  --required-data-file train.csv `
+  --required-data-file test.csv `
+  --required-data-file gender_submission.csv
+```
+
+This creates:
+
+```text
+demo_workspaces/titanic_demo/
+  data/
+  src/
+  tests/
+  outputs/
+  workspace_config.json
+  test_step.py
+  train_step.py
+  predict_step.py
+```
+
+Data policy:
+
+- The agent creates the workspace structure and lightweight local scripts.
+- The user manually copies competition data files into `data/`.
+- If required files are missing, `prepare-workspace` returns `needs_data` rather than guessing or downloading data.

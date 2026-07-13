@@ -26,6 +26,7 @@ Completed:
 - Evaluation and Decision tools can check `code_patch_plan.json` before execution, write `patch_validation.md/json`, validate `coding_result.json` against the handoff contract, record decisions in `decision_log.jsonl`, and block unsafe or incomplete patch/code results.
 - Submission tools can record before/after score and rank metadata, preserve version files, mark the best trial, and expose `submit-trial` for manual or command-hooked submission runs.
 - Submission now has a safer approval gate: `prepare-submission` writes `submit_manifest.md/json` without touching leaderboard logs or best-trial markers.
+- Submission best tracking now compares against the stored historical best submission, handles first submissions with no previous leaderboard score, and updates `state.yaml` from confirmed leaderboard results.
 - The Kaggle CLI adapter can now build safe submit/leaderboard argument lists and return structured check/submit/leaderboard command results.
 - The Kaggle CLI adapter can parse CSV/table leaderboard output and poll until a target team appears or the polling window times out.
 - `submit-trial` can call the Kaggle CLI adapter directly, check CLI/auth status, submit, poll the leaderboard, and only record best markers after a leaderboard score/rank is found.
@@ -37,16 +38,22 @@ Completed:
 - Research Operating Protocol now provides a small domain-neutral flow: current state, evidence, issues, candidate actions, constraints, user questions, and execution plan are written before code-oriented follow-up. Competition-specific checks are opt-in.
 - Execution Profile provides a competition-neutral contract for an external project root, Python runtime, test/train/predict commands, expected artifacts, and allowed/forbidden write scope. Validation does not execute the project.
 - `prepare-workspace` can initialize an isolated workspace from any local project path or research topic, create a bounded file inventory, draft an Execution Profile from conventional entrypoints, and surface uncertain fields as review questions without executing external code.
+- `prepare-workspace --create-workspace` can scaffold a local research workspace under `demo_workspaces/<competition>` with `data/`, `src/`, `tests/`, `outputs/`, and lightweight `test/train/predict` scripts; competition data remains a manual user-provided input under `data/`.
 - `run-workspace-pipeline` connects a ready Execution Profile to an explicitly approved local `test -> train -> predict` run, stops on the first failure, and records command logs plus expected-artifact checks without embedding competition-specific logic.
 - `collect-workspace-metrics` copies a completed run's JSON metrics into the trial contract, accepts either `cv_score` or an explicit dotted `metrics_contract.source_key`, and requests review instead of guessing ambiguous numeric fields.
 - `process-workspace-result` evaluates and diagnoses collected metrics, records trial memory idempotently, defers nonurgent Human Review until two comparable trials exist, and immediately escalates leakage, label ambiguity, safety false negatives, or missing required definitions.
 - `plan-next-workspace-trial` connects processed workspace results to the next experiment plan, registers user review requests, blocks urgent review states, and allows nonurgent review states to continue with explicit caution metadata.
 - `prepare-workspace-handoff` turns a workspace next-experiment plan into a scoped coding-agent request from the Execution Profile write scope without editing the external project.
+- Workspace coding handoff now writes `workspace_context_snapshot.md`, combining previous-trial evidence and bounded current project code so later trials can modify the existing pipeline instead of starting from a blank request.
 - `run-workspace-code-writer` applies mock/API code-writer file updates under the external `project_root` only when every changed path is project-root-relative, allowed by `allowed_write_paths`, and outside forbidden metric/submission artifacts.
 - `run-workspace-after-coding` requires an accepted workspace coding result, then re-enters the existing workspace pipeline, metrics collection, and result-cycle flow; without `--run-now` it records only the planned execution.
 - `demo-one-cycle` provides the two-week demo path for F-01/F-02/F-03/F-04/F-06 only: rule-based context loading, LLM/mock experiment planning, LLM/mock code writing, local execution, and file-based result recording without F-05 self-improvement, Human Review, submission, approval UI, or SQLite.
 - Demo observability is CMD-only for now: `demo-one-cycle --show-progress` prints live stage messages, while `watch-demo-cycle` reads `agent_status.json` and `agent_events.jsonl` to show whether the demo agent is running, blocked, planned, or completed.
-- Demo model selection is policy-based: `configs/policies/model_policy.yaml` routes high-cost planning/code-writing calls to Anthropic Claude Sonnet 5 and keeps low-cost summary-style calls on OpenAI `gpt-5.6-luna`.
+- Trial artifact organization now writes a user-facing `user_view/` folder with Korean summary, plan, pipeline-structure, code-pipeline, result files, and copied changed code; it also mirrors that compact view into `runs/<competition>/<trial>/` for SFTP/file-browser users while debug/API payloads move into `debug/` and machine-facing JSON records move into `internal/`.
+- Each organized trial now writes `internal/pipeline_structure.json` plus `02_pipeline_structure.ko.md`, so the executable `.py` pipeline remains the source of truth while users and later coding handoffs can read a notebook-like stage map.
+- `demo-guide` provides a demo-only interactive CMD flow that lists registered experiments, guides new workspace creation, asks the user to place manual data files, and then starts the one-cycle demo path when OpenAI API execution is explicitly confirmed.
+- Demo guide execution uses the OpenAI Responses API with `OPENAI_API_KEY` and overrides the one-cycle provider/model to `openai` / `gpt-5.5`; low-cost policy calls remain on OpenAI `gpt-5.6-luna`.
+- Demo guide can start from a competition URL. It attempts a lightweight page read and infers simple defaults such as Kaggle slug/platform; when the page is unreadable or dynamic, it now asks for only one optional `source_summary` instead of several separate problem/data/submission/evaluation/rule prompts. That summary is saved to `source_materials.md/json`, `overview.md`, `data_notes.md`, and `metric.md`, then included in the one-cycle planning context.
 - The policy gate records local/Colab/wait/ask_user execution decisions and LLM call/skip decisions in `decision_log.jsonl`.
 - Human Review now has a closed feedback loop: `request-review` creates a review pack, `record-feedback` updates that pack, and `plan-next` can use recent user feedback.
 - Failed local runs now write `local_failure.json/md`, and the execution policy gate uses that structured artifact before falling back to raw log pattern matching.
@@ -101,12 +108,20 @@ start-competition / init
   -> submit after approval and leaderboard evidence
 
 two-week demo path:
+  research_agent.cli demo-guide
+    -> list registered experiments
+    -> accept a competition URL and try lightweight context inspection
+    -> ask for pasted source notes when URL content is unavailable
+    -> guide new experiment metadata input
+    -> create demo workspace and wait for manual data placement
+    -> start the one-cycle demo run with OpenAI API after explicit confirmation
   demo-one-cycle
     -> load context from Execution Profile and file memory
     -> create one experiment plan through mock/API LLM
     -> create scoped coding handoff and apply mock/API code updates
     -> optionally run local test/train/predict with --run-now
     -> collect metrics and write demo result record
+    -> organize trial artifacts into README / debug / internal
   watch-demo-cycle
     -> read agent_status.json and agent_events.jsonl
     -> print current stage/progress/recent events in CMD
@@ -128,7 +143,7 @@ Latest verified baseline:
 python -B -m unittest discover -s tests -v
 ```
 
-Expected result: `205 tests`, `OK`.
+Expected result: `215 tests`, `OK`.
 
 ## Agent Architecture
 
@@ -203,6 +218,7 @@ python -B -m kaggle_research_agent.cli decide-llm --competition demo --trial tri
 python -B -m kaggle_research_agent.cli request-review --competition demo --trial trial_001
 python -B -m kaggle_research_agent.cli research-protocol --competition demo --trial trial_001 --next-trial trial_002
 python -B -m kaggle_research_agent.cli prepare-workspace --competition my_workspace --source-path "C:\path\to\project" --topic "Research objective"
+python -B -m kaggle_research_agent.cli prepare-workspace --competition titanic_demo --topic "Titanic survival prediction" --platform kaggle --metric accuracy --objective maximize --create-workspace --target-column Survived --id-column PassengerId --required-data-file train.csv --required-data-file test.csv --required-data-file gender_submission.csv
 python -B -m kaggle_research_agent.cli validate-execution-profile --competition demo
 python -B -m kaggle_research_agent.cli run-workspace-pipeline --competition demo --trial trial_001
 python -B -m kaggle_research_agent.cli run-workspace-pipeline --competition demo --trial trial_001 --run-now
@@ -213,11 +229,37 @@ python -B -m kaggle_research_agent.cli prepare-workspace-handoff --competition d
 python -B -m kaggle_research_agent.cli run-workspace-code-writer --competition demo --trial trial_002 --mock-response-file mock_response.json
 python -B -m kaggle_research_agent.cli run-workspace-after-coding --competition demo --trial trial_002 --run-now
 python -B -m kaggle_research_agent.cli demo-one-cycle --competition demo --trial trial_001 --mock-plan-file mock_plan_response.json --mock-response-file mock_code_response.json --run-now --show-progress
+python -B -m kaggle_research_agent.cli demo-guide
 python -B -m kaggle_research_agent.cli watch-demo-cycle --competition demo --trial trial_001
 python -B -m kaggle_research_agent.cli watch-demo-cycle --competition demo --trial trial_001 --follow
+python -B -m kaggle_research_agent.cli organize-trial-artifacts --competition demo --trial trial_001
 python -B -m kaggle_research_agent.cli plan-improvement --competition demo --trial trial_001
 python -B -m kaggle_research_agent.cli advise-models --competition demo --trial trial_001
 ```
+
+Korean CMD/PowerShell demo output:
+
+```bat
+cd /d C:\Users\ASUS\Desktop\Research_Agent
+set OPENAI_API_KEY=your_api_key_here
+python -m research_agent.cli demo-guide
+```
+
+Legacy package path still works:
+
+```powershell
+chcp 65001
+$env:PYTHONUTF8="1"
+python -m kaggle_research_agent.cli demo-guide
+```
+
+For non-demo commands, use the neutral module path as well:
+
+```bat
+python -m research_agent.cli watch-demo-cycle --competition titanic --trial trial_001
+```
+
+If Korean text still looks broken, use Windows Terminal or PowerShell 7 and choose a Unicode-capable font such as D2Coding, Consolas, or Cascadia Mono.
 
 `decide-llm` records token-policy decisions in `memory/<competition>/decision_log.jsonl`. `request-review` now prepares the standard `review_pack/` when the human-review policy asks for one.
 `plan-improvement` writes `pipeline_improvement_plan.md/json` and keeps model changes as only one branch among validation, data, augmentation, loss, training, post-processing, and review decisions.
