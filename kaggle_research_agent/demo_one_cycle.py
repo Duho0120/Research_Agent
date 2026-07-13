@@ -210,7 +210,13 @@ def run_demo_one_cycle(
                 "F-04",
                 "Local pipeline completed.",
                 next_action="record-demo-result",
-                details={"commands": [item.get("name") for item in workspace_run.get("command_results", [])]},
+                details={
+                    "commands": [
+                        item.get("stage")
+                        for item in workspace_run.get("command_results", [])
+                        if item.get("returncode") == 0
+                    ]
+                },
             )
             reporter.start("F-06", "Recording result", 5, "Collecting metrics and writing demo result files.")
             metrics_collection = collect_workspace_metrics(competition, trial_id)
@@ -636,6 +642,159 @@ def _stage_completion_summary_ko(stage: str, details: dict[str, Any], message: s
         metric = details.get("metric")
         user_view = details.get("user_view")
         parts = ["결과 저장 완료"]
+        if metric or score is not None:
+            parts.append(f"{metric or 'score'}={score}")
+        if user_view:
+            parts.append(f"확인 폴더={user_view}")
+        return ", ".join(parts)
+    return message or "완료"
+
+
+def render_demo_agent_watch(competition: str, trial_id: str, *, event_limit: int = 8) -> str:
+    status = read_demo_agent_status(competition, trial_id)
+    events = read_demo_agent_events(competition, trial_id, limit=event_limit)
+    lines = [
+        f"데모 에이전트 상태: {competition} / {trial_id}",
+        f"- 전체 상태: {_status_label_ko(str(status.get('status', '-')))}",
+        f"- 현재 단계: {_stage_name_ko(str(status.get('current_stage', '-')))}",
+        f"- 진행률: {status.get('progress', 0)}/{status.get('total_steps', 5)}",
+        f"- 다음 행동: {status.get('next_action')}",
+        f"- 갱신 시각: {status.get('updated_at', '-')}",
+        f"- 상태 파일: {status.get('status_path')}",
+        "",
+        "최근 진행 기록:",
+    ]
+    if events:
+        lines.extend(f"- {format_demo_event(event)}" for event in events)
+    else:
+        lines.append("- 아직 기록된 이벤트가 없습니다.")
+    return "\n".join(lines)
+
+
+def format_demo_event(row: dict[str, Any]) -> str:
+    event = str(row.get("event", "event"))
+    stage = str(row.get("current_stage", "-"))
+    status = str(row.get("status", "-"))
+    progress = f"{row.get('progress', 0)}/{row.get('total_steps', 5)}"
+    if event == "stage_started":
+        return f"[진행] {progress} {_stage_name_ko(stage)}\n      진행 중: {_event_summary_ko(row)}"
+    if event == "stage_completed":
+        return f"      [완료] {_event_summary_ko(row)}"
+    if event == "cycle_completed":
+        return f"\n{_event_summary_ko(row)}"
+    if event in {"stage_failed", "cycle_blocked"} or status in {"blocked", "failed"}:
+        return f"      [중단] {_event_summary_ko(row)}"
+    return f"[상태] {progress} {_stage_name_ko(stage)} - {_event_summary_ko(row)}"
+
+
+def render_demo_cycle_cli_summary(result: dict[str, Any]) -> str:
+    competition = result.get("competition", "-")
+    trial_id = result.get("trial_id", "-")
+    status = str(result.get("status", "-"))
+    record = result.get("record") if isinstance(result.get("record"), dict) else {}
+    plan = result.get("plan") if isinstance(result.get("plan"), dict) else {}
+    code_writer = result.get("code_writer") if isinstance(result.get("code_writer"), dict) else {}
+    metric = record.get("metric") or (result.get("context") or {}).get("metric")
+    score = record.get("local_score")
+    changed_files = code_writer.get("changed_files") if isinstance(code_writer, dict) else []
+    user_view = f"runs/{competition}/{trial_id}"
+    lines = [
+        "",
+        "실험 요약",
+        f"- 실험: {competition} / {trial_id}",
+        f"- 상태: {_status_label_ko(status)}",
+    ]
+    if plan.get("plan_title"):
+        lines.append(f"- 계획: {plan['plan_title']}")
+    if changed_files:
+        preview = ", ".join(str(item) for item in changed_files[:3])
+        more = f" 외 {len(changed_files) - 3}개" if len(changed_files) > 3 else ""
+        lines.append(f"- 코드 변경: {len(changed_files)}개 파일 ({preview}{more})")
+    if score is not None:
+        lines.append(f"- 점수: {metric or 'score'} = {score}")
+    if status in {"completed", "planned"}:
+        lines.append(f"- 확인 폴더: {user_view}")
+    next_action = result.get("next_action")
+    if next_action and status not in {"completed", "planned"}:
+        lines.append(f"- 다음 조치: {next_action}")
+    return "\n".join(lines)
+
+
+def _stage_name_ko(stage: str) -> str:
+    return {
+        "F-01": "대회와 데이터 정보 확인",
+        "F-02": "첫 실험 계획 생성",
+        "F-03": "파이프라인 코드 작성",
+        "F-04": "로컬 실행",
+        "F-06": "결과 저장",
+        "done": "1회 실험 종료",
+    }.get(stage, stage or "-")
+
+
+def _status_label_ko(status: str) -> str:
+    return {
+        "running": "진행 중",
+        "completed": "완료",
+        "planned": "실행 대기",
+        "blocked": "중단됨",
+        "failed": "실패",
+        "missing": "상태 파일 없음",
+        "invalid": "상태 파일 오류",
+    }.get(status, status)
+
+
+def _event_summary_ko(row: dict[str, Any]) -> str:
+    event = str(row.get("event", "event"))
+    stage = str(row.get("current_stage", "-"))
+    details = row.get("details") if isinstance(row.get("details"), dict) else {}
+    message = str(row.get("message", "")).strip()
+    if event == "stage_started":
+        return {
+            "F-01": "설정, 데이터 목록, 이전 실험 기록을 읽고 있습니다.",
+            "F-02": "LLM으로 첫 실험 계획 1개를 만들고 있습니다.",
+            "F-03": "계획을 실제 파이프라인 코드 변경으로 바꾸고 있습니다.",
+            "F-04": "로컬에서 test -> train -> predict 명령을 실행하고 있습니다.",
+            "F-06": "점수와 산출물 경로를 정리하고 있습니다.",
+        }.get(stage, message or "진행 중입니다.")
+    if event == "stage_completed":
+        return _stage_completion_summary_ko(stage, details, message)
+    if event == "cycle_completed":
+        return "1회 실험 사이클 완료"
+    if event in {"stage_failed", "cycle_blocked"}:
+        next_action = row.get("next_action")
+        suffix = f" 다음 조치: {next_action}" if next_action else ""
+        return f"{message or '진행이 중단되었습니다.'}{suffix}"
+    return message or event
+
+
+def _stage_completion_summary_ko(stage: str, details: dict[str, Any], message: str) -> str:
+    if stage == "F-01":
+        metric = details.get("metric", "-")
+        objective = details.get("objective", "-")
+        platform = details.get("platform", "-")
+        return f"{platform}, {metric} {objective} 문제로 준비되었습니다."
+    if stage == "F-02":
+        usage = details.get("token_usage") or {}
+        token_text = ""
+        if isinstance(usage, dict) and usage:
+            total = usage.get("total_tokens")
+            token_text = f" LLM 사용: {total} tokens." if total is not None else ""
+        return f"실험 계획을 생성했습니다.{token_text}"
+    if stage == "F-03":
+        changed = details.get("changed_files") or []
+        if not changed:
+            return "코드 변경을 확인했습니다. 변경 파일은 없습니다."
+        preview = ", ".join(str(item) for item in changed[:3])
+        more = f" 외 {len(changed) - 3}개" if len(changed) > 3 else ""
+        return f"{len(changed)}개 파일을 수정했습니다. 주요 파일: {preview}{more}"
+    if stage == "F-04":
+        commands = [str(item) for item in details.get("commands", []) if item]
+        return "로컬 실행이 완료되었습니다." + (f" 실행: {', '.join(commands)}" if commands else "")
+    if stage == "F-06":
+        score = details.get("local_score")
+        metric = details.get("metric")
+        user_view = details.get("user_view")
+        parts = ["결과를 저장했습니다."]
         if metric or score is not None:
             parts.append(f"{metric or 'score'}={score}")
         if user_view:

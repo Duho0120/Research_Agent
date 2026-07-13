@@ -21,6 +21,9 @@ Thumbs.db
 .idea/
 .vscode/
 
+# Packaged submission archives
+*.zip
+
 # Runtime logs
 *.log
 local_run.log

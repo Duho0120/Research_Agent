@@ -230,8 +230,9 @@ class DemoOneCycleTest(unittest.TestCase):
             self.assertEqual(0, code)
             trial = root / "experiments" / "demo" / "trial_001"
             self.assertTrue(trial_artifact_exists(trial, "demo_one_cycle.json"))
-            self.assertIn("[진행] 1/5 F-01 대회/데이터 맥락 확인", output.getvalue())
-            self.assertIn("[완료] 5/5 done 1회 실험 종료", output.getvalue())
+            self.assertIn("[진행] 1/5 대회와 데이터 정보 확인", output.getvalue())
+            self.assertIn("1회 실험 사이클 완료", output.getvalue())
+            self.assertIn("실험 요약", output.getvalue())
 
     def test_watch_demo_cycle_cli_prints_current_status(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ast
 import json
+import re
 import shutil
 from pathlib import Path
 from pathlib import PurePosixPath
@@ -9,6 +11,8 @@ from typing import Any
 from . import paths, simple_yaml
 from .paths import competition_dir, trial_dir
 from .store import read_text, write_text
+from .trial_user_view import render_browse_paths as render_compact_browse_paths
+from .trial_user_view import render_user_view_files, write_browse_index as write_compact_browse_index
 
 
 DEBUG_FILE_NAMES = {
@@ -103,6 +107,7 @@ def build_trial_summary(competition: str, trial_id: str) -> dict[str, Any]:
         "metric": metric,
         "objective": objective,
         "local_score": score,
+        "metrics": metrics,
         "score_source": metrics_collection.get("score_source") or demo_record.get("score_source"),
         "plan_title": demo_record.get("plan_title") or _read_plan_title(out_dir),
         "changed_files": changed_files,
@@ -340,7 +345,11 @@ def _project_code_files(summary: dict[str, Any]) -> list[tuple[str, str]]:
     if not root.is_dir():
         return []
     result: list[tuple[str, str]] = []
-    for item in summary.get("changed_files", []):
+    candidates = [str(item) for item in summary.get("changed_files", [])]
+    for extra in ["workspace_config.json", "src/baseline.py", "train_step.py", "predict_step.py", "test_step.py"]:
+        if extra not in candidates:
+            candidates.append(extra)
+    for item in candidates:
         relative = _safe_relative_file(item)
         if relative is None:
             continue
@@ -438,6 +447,560 @@ def _unique(items: list[str]) -> list[str]:
     return list(dict.fromkeys(items))
 
 
+def _stage_context(summary: dict[str, Any], code_files: list[tuple[str, str]], code_text: str) -> dict[str, Any]:
+    return {
+        "summary": summary,
+        "code_files": code_files,
+        "code_text": code_text,
+        "code_constants": _extract_code_constants(code_files),
+        "pipeline_facts": _extract_pipeline_facts(summary, code_files, code_text),
+    }
+
+
+def _stage(
+    stage_id: str,
+    name: str,
+    included: bool,
+    reason: str,
+    context: dict[str, Any],
+    *,
+    role: str,
+    inputs: list[str],
+    outputs: list[str],
+    checks: list[str],
+    conditional: bool = False,
+) -> dict[str, Any]:
+    descriptions = _stage_descriptions()
+    described = descriptions.get(stage_id, {})
+    actual = context.get("pipeline_facts", {}).get(stage_id, [])
+    if not actual and not included:
+        actual = ["이번 실험에서는 해당 단계를 적용하지 않았습니다."]
+    return {
+        "id": stage_id,
+        "name": name,
+        "included": bool(included),
+        "required": not conditional,
+        "reason": described.get("reason", reason) if included else described.get("excluded_reason", f"이번 trial에서는 제외되었습니다: {reason}"),
+        "role": described.get("role", role),
+        "code_locations": _code_locations_for_stage(stage_id, context["code_files"]),
+        "inputs": described.get("inputs", inputs),
+        "outputs": described.get("outputs", outputs),
+        "checks": described.get("checks", checks),
+        "actual_applied": actual,
+        "improvement_handles": _improvement_handles(stage_id),
+    }
+
+
+def _contains_any(text: str, needles: list[str]) -> bool:
+    filtered = [needle for needle in needles if needle != "transform("]
+    lowered = text.lower()
+    return any(needle.lower() in lowered for needle in filtered)
+
+
+def _extract_code_constants(code_files: list[tuple[str, str]]) -> dict[str, list[Any]]:
+    constants: dict[str, list[Any]] = {}
+    for _, text in code_files:
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            for target in node.targets:
+                if not isinstance(target, ast.Name) or not target.id.isupper():
+                    continue
+                try:
+                    value = ast.literal_eval(node.value)
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(value, list):
+                    constants[target.id] = value
+    return constants
+
+
+def _extract_pipeline_facts(
+    summary: dict[str, Any],
+    code_files: list[tuple[str, str]],
+    code_text: str,
+) -> dict[str, list[str]]:
+    metrics = summary.get("metrics") if isinstance(summary.get("metrics"), dict) else {}
+    constants = _extract_code_constants(code_files)
+    lowered = code_text.lower()
+    facts: dict[str, list[str]] = {stage: [] for stage in _stage_descriptions()}
+
+    imported = []
+    for name, needle in [
+        ("pandas", "import pandas"),
+        ("numpy", "import numpy"),
+        ("sklearn", "sklearn"),
+        ("joblib", "import joblib"),
+        ("pathlib.Path", "from pathlib import path"),
+    ]:
+        if needle in lowered:
+            imported.append(name)
+    if imported:
+        facts["imports_setup"].append(f"사용 라이브러리/도구: {', '.join(imported)}.")
+    setup_paths = []
+    for name in ["CONFIG_PATH", "OUTPUT_DIR", "MODEL_PATH", "METRICS_PATH", "SUBMISSION_PATH"]:
+        if name.lower() in lowered:
+            setup_paths.append(name)
+    if setup_paths:
+        facts["imports_setup"].append(f"workspace 기준 경로 상수 {', '.join(setup_paths)}를 정의합니다.")
+
+    required_files = _workspace_config_required_files(code_files)
+    if "read_csv" in lowered:
+        files = ", ".join(required_files) if required_files else "train/test CSV"
+        facts["data_load"].append(f"`pd.read_csv`로 {files}를 읽습니다.")
+    target = _workspace_config_value(code_files, "target_column") or "target"
+    identifier = _workspace_config_value(code_files, "id_column") or "id"
+    facts["data_load"].append(f"학습 타깃은 `{target}`, 제출 ID는 `{identifier}`로 사용합니다.")
+
+    numeric = [str(item) for item in constants.get("NUMERIC_FEATURES", [])]
+    categorical = [str(item) for item in constants.get("CATEGORICAL_FEATURES", [])]
+    features = [str(item) for item in metrics.get("features") or constants.get("FEATURE_COLUMNS", [])]
+    if numeric:
+        facts["preprocessing"].append(f"수치형 피처는 {', '.join(numeric)}입니다.")
+    if categorical:
+        facts["preprocessing"].append(f"범주형 피처는 {', '.join(categorical)}입니다.")
+    if 'simpleimputer(strategy="median")' in lowered or "simpleimputer(strategy='median')" in lowered:
+        facts["preprocessing"].append("수치형 결측치는 `SimpleImputer(strategy=\"median\")`으로 대체합니다.")
+    if 'simpleimputer(strategy="most_frequent")' in lowered or "simpleimputer(strategy='most_frequent')" in lowered:
+        facts["preprocessing"].append("범주형 결측치는 `SimpleImputer(strategy=\"most_frequent\")`으로 대체합니다.")
+    if "standardscaler" in lowered:
+        facts["preprocessing"].append("수치형 피처에는 `StandardScaler`를 적용합니다.")
+    if "onehotencoder" in lowered:
+        encoder_note = "`OneHotEncoder`를 적용합니다."
+        if "handle_unknown=\"ignore\"" in code_text or "handle_unknown='ignore'" in code_text:
+            encoder_note = "`OneHotEncoder(handle_unknown=\"ignore\")`를 적용합니다."
+        facts["preprocessing"].append(f"범주형 피처에는 {encoder_note}")
+
+    validation_method = metrics.get("validation_method")
+    if validation_method:
+        facts["data_split_cv"].append(f"`metrics.json` 기준 검증 방식은 `{validation_method}`입니다.")
+    if "stratifiedkfold" in lowered:
+        facts["data_split_cv"].append("클래스 비율을 유지하는 `StratifiedKFold`를 사용합니다.")
+    if "n_splits" in lowered and "stratifiedkfold" in lowered:
+        facts["data_split_cv"].append("fold 수는 데이터의 최소 클래스 수를 고려하되 최대 5-fold로 제한합니다.")
+    if "shuffle=true" in lowered:
+        facts["data_split_cv"].append("fold 생성 시 `shuffle=True`를 사용합니다.")
+    random_state = metrics.get("random_state")
+    if random_state is not None:
+        facts["data_split_cv"].append(f"재현성을 위해 `random_state={random_state}`를 기록합니다.")
+    if "train_test_split" in lowered:
+        split_note = "데이터가 CV에 충분하지 않을 때 `train_test_split` fallback을 사용합니다."
+        if "test_size=0.2" in lowered:
+            split_note += " 이때 `test_size=0.2`를 사용합니다."
+        facts["data_split_cv"].append(split_note)
+
+    derived: list[str] = []
+    if "familysize" in lowered:
+        derived.append("`FamilySize = SibSp + Parch + 1`")
+    if "isalone" in lowered:
+        derived.append("`IsAlone = FamilySize == 1`")
+    if "title" in lowered and "_extract_title" in lowered:
+        derived.append("`Name`에서 `Title`을 추출하고 희귀 호칭을 그룹화")
+    if derived:
+        facts["feature_representation"].append("파생 피처: " + "; ".join(derived) + ".")
+    if features:
+        facts["feature_representation"].append(f"최종 모델 입력 피처는 {', '.join(features)}입니다.")
+
+    if _contains_any(code_text, ["augment", "augmentation", "randomcrop", "horizontalflip", "colorjitter", "mixup", "cutmix"]):
+        facts["data_augmentation"].append("코드에서 데이터 증강 로직을 사용합니다.")
+    else:
+        facts["data_augmentation"].append("이번 tabular baseline에서는 데이터 증강을 적용하지 않았습니다.")
+
+    model_type = metrics.get("model_type")
+    if model_type:
+        facts["model_definition"].append(f"모델 family는 `{model_type}`입니다.")
+    if "logisticregression" in lowered:
+        params = []
+        if "max_iter=1000" in lowered:
+            params.append("max_iter=1000")
+        if "solver=\"lbfgs\"" in code_text or "solver='lbfgs'" in code_text:
+            params.append("solver=\"lbfgs\"")
+        if random_state is not None:
+            params.append(f"random_state={random_state}")
+        suffix = f" ({', '.join(params)})" if params else ""
+        facts["model_definition"].append(f"`LogisticRegression`{suffix}을 사용합니다.")
+
+    metric = metrics.get("metric") or summary.get("metric")
+    objective = metrics.get("objective") or summary.get("objective")
+    if metric:
+        facts["loss_objective"].append(f"평가 지표는 `{metric}`이며 목표 방향은 `{objective}`입니다.")
+    if "logisticregression" in lowered:
+        facts["loss_objective"].append("명시적 loss 함수를 따로 구현하지 않고 sklearn `LogisticRegression`의 내부 최적화 목적을 사용합니다.")
+
+    if ".fit(" in lowered or "fit(" in lowered:
+        facts["training"].append("검증 점수를 계산한 뒤 전체 학습 데이터로 최종 pipeline을 다시 fit합니다.")
+    if "joblib.dump" in lowered:
+        facts["training"].append("학습된 pipeline과 메타데이터를 model bundle로 저장합니다.")
+
+    score = metrics.get("cv_score")
+    if score is not None:
+        facts["evaluation"].append(f"`cv_score`는 {score}입니다.")
+    fold_scores = metrics.get("fold_scores")
+    if isinstance(fold_scores, list) and fold_scores:
+        facts["evaluation"].append(f"fold별 점수 {len(fold_scores)}개를 `fold_scores`에 저장했습니다.")
+    if "validation_accuracy" in metrics:
+        facts["evaluation"].append("`validation_accuracy`와 `cv_score`를 동일한 로컬 검증 점수로 기록합니다.")
+
+    if "joblib.dump" in lowered:
+        facts["model_checkpoint"].append("`outputs/model.joblib`에 학습된 모델 bundle을 저장합니다.")
+    else:
+        facts["model_checkpoint"].append("이번 실험에서는 별도 모델 checkpoint 저장을 확인하지 못했습니다.")
+
+    if "submission.csv" in lowered:
+        facts["test_inference_output"].append("`outputs/submission.csv`를 생성합니다.")
+    if identifier and target:
+        facts["test_inference_output"].append(f"제출 파일은 `{identifier}`, `{target}` 두 컬럼을 사용합니다.")
+    if "astype(int)" in lowered or "np.where" in lowered:
+        facts["test_inference_output"].append("예측값은 제출 전에 정수형/binary 값으로 정리합니다.")
+
+    return {key: _unique([item for item in value if item]) for key, value in facts.items()}
+
+
+def _workspace_config_value(code_files: list[tuple[str, str]], key: str) -> str | None:
+    for relative, text in code_files:
+        if PurePosixPath(relative).name != "workspace_config.json":
+            continue
+        try:
+            value = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        item = value.get(key)
+        return str(item) if item is not None else None
+    return None
+
+
+def _workspace_config_required_files(code_files: list[tuple[str, str]]) -> list[str]:
+    for relative, text in code_files:
+        if PurePosixPath(relative).name != "workspace_config.json":
+            continue
+        try:
+            value = json.loads(text)
+        except json.JSONDecodeError:
+            return []
+        files = value.get("required_data_files")
+        return [str(item) for item in files] if isinstance(files, list) else []
+    return []
+
+
+def _extract_pipeline_facts(
+    summary: dict[str, Any],
+    code_files: list[tuple[str, str]],
+    code_text: str,
+) -> dict[str, list[str]]:
+    metrics = summary.get("metrics") if isinstance(summary.get("metrics"), dict) else {}
+    constants = _extract_code_constants(code_files)
+    lowered = code_text.lower()
+    facts: dict[str, list[str]] = {stage: [] for stage in _stage_descriptions()}
+
+    imported: list[str] = []
+    for name, needle in [
+        ("pandas", "import pandas"),
+        ("numpy", "import numpy"),
+        ("sklearn", "sklearn"),
+        ("joblib", "import joblib"),
+        ("pathlib.Path", "from pathlib import path"),
+    ]:
+        if needle in lowered:
+            imported.append(name)
+    if imported:
+        facts["imports_setup"].append(f"사용 라이브러리/도구: {', '.join(imported)}.")
+
+    setup_paths = [name for name in ["CONFIG_PATH", "DATA_DIR", "OUTPUT_DIR", "MODEL_PATH", "METRICS_PATH", "SUBMISSION_PATH"] if name.lower() in lowered]
+    if setup_paths:
+        facts["imports_setup"].append(f"workspace 기준 경로 상수 {', '.join(setup_paths)}를 정의합니다.")
+
+    required_files = _workspace_config_required_files(code_files)
+    if "read_csv" in lowered:
+        files = ", ".join(required_files) if required_files else "train/test CSV"
+        facts["data_load"].append(f"`pd.read_csv`로 {files}를 읽습니다.")
+    target = _workspace_config_value(code_files, "target_column") or _constant_string_value(code_files, "TARGET_COLUMN") or "target"
+    identifier = _workspace_config_value(code_files, "id_column") or _constant_string_value(code_files, "ID_COLUMN") or "id"
+    facts["data_load"].append(f"학습 타깃은 `{target}`, 제출 ID는 `{identifier}`로 사용합니다.")
+
+    numeric = [str(item) for item in constants.get("NUMERIC_FEATURES", [])]
+    categorical = [str(item) for item in constants.get("CATEGORICAL_FEATURES", [])]
+    features = [
+        str(item)
+        for item in metrics.get("features")
+        or metrics.get("feature_columns")
+        or constants.get("FEATURE_COLUMNS", [])
+    ]
+    if numeric:
+        facts["preprocessing"].append(f"수치형 피처는 {', '.join(numeric)}입니다.")
+    if categorical:
+        facts["preprocessing"].append(f"범주형 피처는 {', '.join(categorical)}입니다.")
+    if 'simpleimputer(strategy="median")' in lowered or "simpleimputer(strategy='median')" in lowered:
+        facts["preprocessing"].append("수치형 결측치는 `SimpleImputer(strategy=\"median\")`으로 대체합니다.")
+    if 'simpleimputer(strategy="most_frequent")' in lowered or "simpleimputer(strategy='most_frequent')" in lowered:
+        facts["preprocessing"].append("범주형 결측치는 `SimpleImputer(strategy=\"most_frequent\")`으로 대체합니다.")
+    if "standardscaler" in lowered:
+        facts["preprocessing"].append("수치형 피처에는 `StandardScaler`를 적용합니다.")
+    if "onehotencoder" in lowered:
+        encoder_note = "`OneHotEncoder`를 적용합니다."
+        if "handle_unknown=\"ignore\"" in code_text or "handle_unknown='ignore'" in code_text:
+            encoder_note = "`OneHotEncoder(handle_unknown=\"ignore\")`를 적용합니다."
+        facts["preprocessing"].append(f"범주형 피처에는 {encoder_note}")
+
+    validation_method = metrics.get("validation_method")
+    if validation_method:
+        facts["data_split_cv"].append(f"`metrics.json` 기준 검증 방식은 `{validation_method}`입니다.")
+    if "stratifiedkfold" in lowered:
+        facts["data_split_cv"].append("클래스 비율을 유지하는 `StratifiedKFold`를 사용합니다.")
+    if "n_splits" in lowered and "stratifiedkfold" in lowered:
+        facts["data_split_cv"].append("fold 수는 데이터의 최소 클래스 수를 고려해 정합니다.")
+    if "shuffle=true" in lowered:
+        facts["data_split_cv"].append("fold 생성 시 `shuffle=True`를 사용합니다.")
+    random_state = metrics.get("random_state")
+    if random_state is not None:
+        facts["data_split_cv"].append(f"재현성을 위해 `random_state={random_state}`를 기록합니다.")
+    if "train_test_split" in lowered:
+        split_note = "`train_test_split`으로 학습/검증 holdout split을 구성합니다."
+        if "test_size=0.2" in lowered:
+            split_note += " 이때 `test_size=0.2`를 사용합니다."
+        if "stratify=" in lowered:
+            split_note += " 가능한 경우 target 분포를 유지하도록 `stratify`를 사용합니다."
+        facts["data_split_cv"].append(split_note)
+
+    derived: list[str] = []
+    if "familysize" in lowered:
+        derived.append("`FamilySize = SibSp + Parch + 1`")
+    if "family_size" in lowered:
+        derived.append("`family_size = SibSp + Parch + 1`")
+    if "isalone" in lowered:
+        derived.append("`IsAlone = FamilySize == 1`")
+    if "is_alone" in lowered:
+        derived.append("`is_alone = family_size == 1`")
+    if "title" in lowered and ("extract_title" in lowered or "_extract_title" in lowered):
+        derived.append("`Name`에서 `Title`을 추출하고 희귀 호칭을 그룹화")
+    if derived:
+        facts["feature_representation"].append("파생 피처: " + "; ".join(_unique(derived)) + ".")
+    if features:
+        facts["feature_representation"].append(f"최종 모델 입력 피처는 {', '.join(features)}입니다.")
+
+    if _contains_any(code_text, ["augment", "augmentation", "randomcrop", "horizontalflip", "colorjitter", "mixup", "cutmix"]):
+        facts["data_augmentation"].append("코드에서 데이터 증강 로직을 사용합니다.")
+    else:
+        facts["data_augmentation"].append("이번 tabular baseline에서는 데이터 증강을 적용하지 않았습니다.")
+
+    model_type = metrics.get("model_type") or metrics.get("model")
+    if model_type:
+        facts["model_definition"].append(f"모델 family는 `{model_type}`입니다.")
+    if "logisticregression" in lowered:
+        params = _estimator_params(code_text, "LogisticRegression")
+        suffix = f" ({', '.join(params)})" if params else ""
+        facts["model_definition"].append(f"`LogisticRegression`{suffix}을 사용합니다.")
+    if "randomforestclassifier" in lowered:
+        params = _estimator_params(code_text, "RandomForestClassifier")
+        if not params:
+            params = [f"{key}={metrics[key]}" for key in ["n_estimators", "max_depth", "min_samples_leaf", "random_state"] if key in metrics]
+        suffix = f" ({', '.join(params)})" if params else ""
+        facts["model_definition"].append(f"`RandomForestClassifier`{suffix}를 사용합니다.")
+
+    metric = metrics.get("metric") or summary.get("metric")
+    objective = metrics.get("objective") or summary.get("objective")
+    if metric:
+        facts["loss_objective"].append(f"평가 지표는 `{metric}`이며 목표 방향은 `{objective}`입니다.")
+    if "logisticregression" in lowered:
+        facts["loss_objective"].append("명시적 loss 함수를 따로 구현하지 않고 sklearn `LogisticRegression`의 내부 최적화 목적을 사용합니다.")
+    if "randomforestclassifier" in lowered:
+        facts["loss_objective"].append("명시적 loss 함수를 따로 구현하지 않고 sklearn `RandomForestClassifier`의 분류 기준을 사용합니다.")
+
+    if ".fit(" in lowered or "fit(" in lowered:
+        facts["training"].append("검증 점수를 계산한 뒤 학습 pipeline을 fit합니다.")
+    if "joblib.dump" in lowered:
+        facts["training"].append("학습된 pipeline과 메타데이터를 model bundle로 저장합니다.")
+
+    score = metrics.get("cv_score")
+    if score is not None:
+        facts["evaluation"].append(f"`cv_score`는 {score}입니다.")
+    fold_scores = metrics.get("fold_scores")
+    if isinstance(fold_scores, list) and fold_scores:
+        facts["evaluation"].append(f"fold별 점수 {len(fold_scores)}개를 `fold_scores`에 저장했습니다.")
+    if "validation_accuracy" in metrics:
+        facts["evaluation"].append("`validation_accuracy`와 `cv_score`를 동일한 로컬 검증 점수로 기록합니다.")
+
+    if "joblib.dump" in lowered:
+        model_path = _path_constant_value(code_files, "MODEL_PATH")
+        if model_path:
+            facts["model_checkpoint"].append(f"`{model_path}`에 학습된 모델 bundle을 저장합니다.")
+        else:
+            facts["model_checkpoint"].append("학습된 모델 bundle을 `joblib.dump`로 저장합니다.")
+    else:
+        facts["model_checkpoint"].append("이번 실험에서는 별도 모델 checkpoint 저장을 확인하지 못했습니다.")
+
+    if "submission.csv" in lowered:
+        facts["test_inference_output"].append("`outputs/submission.csv`를 생성합니다.")
+    if identifier and target:
+        facts["test_inference_output"].append(f"제출 파일은 `{identifier}`, `{target}` 두 컬럼을 사용합니다.")
+    if "astype(int)" in lowered or "np.where" in lowered:
+        facts["test_inference_output"].append("예측값은 제출 전에 정수형/binary 값으로 정리합니다.")
+
+    return {key: _unique([item for item in value if item]) for key, value in facts.items()}
+
+
+def _estimator_params(code_text: str, estimator_name: str) -> list[str]:
+    match = re.search(rf"{re.escape(estimator_name)}\s*\((?P<body>.*?)\)", code_text, flags=re.DOTALL)
+    if not match:
+        return []
+    body = match.group("body")
+    scalar_constants = _scalar_constants_from_text(code_text)
+    params: list[str] = []
+    for key in ["n_estimators", "max_depth", "min_samples_leaf", "max_iter", "solver", "random_state", "n_jobs"]:
+        param = re.search(rf"{key}\s*=\s*([^,\n\)]+)", body)
+        if param:
+            value = param.group(1).strip()
+            value = scalar_constants.get(value, value)
+            params.append(f"{key}={value}")
+    return params
+
+
+def _scalar_constants_from_text(code_text: str) -> dict[str, str]:
+    try:
+        tree = ast.parse(code_text)
+    except SyntaxError:
+        return {}
+    constants: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if not isinstance(target, ast.Name) or not target.id.isupper():
+                continue
+            value = node.value
+            if isinstance(value, ast.Constant) and isinstance(value.value, (int, float, str, bool)):
+                constants[target.id] = repr(value.value) if isinstance(value.value, str) else str(value.value)
+    return constants
+
+
+def _constant_string_value(code_files: list[tuple[str, str]], constant_name: str) -> str | None:
+    for _, text in code_files:
+        tree = _parse_ast(text)
+        if tree is None:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            if not any(isinstance(target, ast.Name) and target.id == constant_name for target in node.targets):
+                continue
+            if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                return node.value.value
+    return None
+
+
+def _path_constant_value(code_files: list[tuple[str, str]], constant_name: str) -> str | None:
+    for _, text in code_files:
+        tree = _parse_ast(text)
+        if tree is None:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            if not any(isinstance(target, ast.Name) and target.id == constant_name for target in node.targets):
+                continue
+            value = _path_expr_to_string(node.value)
+            if value:
+                return value
+    return None
+
+
+def _path_expr_to_string(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        left = _path_expr_to_string(node.left)
+        right = _path_expr_to_string(node.right)
+        if left and right:
+            return f"{left.rstrip('/')}/{right.lstrip('/')}"
+        return right or left
+    return None
+
+
+def _parse_ast(text: str) -> ast.AST | None:
+    try:
+        return ast.parse(text)
+    except SyntaxError:
+        return None
+
+
+def _stage_descriptions() -> dict[str, dict[str, Any]]:
+    return {
+        "imports_setup": {
+            "role": "실험 실행에 필요한 라이브러리, 경로, 설정값을 준비합니다.",
+            "reason": "모든 실행 파이프라인은 import와 workspace 경로/config 초기화가 필요합니다.",
+        },
+        "data_load": {
+            "role": "원본 train/test 데이터를 읽고 이후 단계에 전달합니다.",
+            "reason": "사용자가 제공한 데이터 파일을 읽는 단계입니다.",
+            "inputs": ["data/train.csv", "data/test.csv", "workspace data directory"],
+            "outputs": ["raw train/test dataframe or dataset objects"],
+            "checks": ["파일 존재 여부", "target/id column 확인", "row/column schema 확인"],
+        },
+        "preprocessing": {
+            "role": "원본 데이터를 모델 입력 가능한 형태로 정리합니다.",
+            "reason": "결측치, 범주형 변수, 스케일 처리를 명시해야 다음 실험에서 무엇을 바꿀지 판단할 수 있습니다.",
+            "inputs": ["raw features"],
+            "outputs": ["model-ready features"],
+            "checks": ["결측치 처리 방식", "categorical/numeric feature 분리", "train/test transform 일관성"],
+        },
+        "data_split_cv": {
+            "role": "학습/검증 분리 또는 CV 전략을 정의합니다.",
+            "reason": "검증 점수의 의미를 판단하려면 split/CV 전략이 명확해야 합니다.",
+            "inputs": ["training data", "target"],
+            "outputs": ["validation score", "fold scores or holdout score"],
+            "checks": ["stratify/group/time split 필요 여부", "random seed", "metric과 split의 적합성"],
+        },
+        "feature_representation": {
+            "role": "모델이 학습할 입력 표현이나 파생 피처를 구성합니다.",
+            "reason": "원본 feature를 그대로 쓰지 않고 파생변수, 토큰, 임베딩 등을 만들 때 포함됩니다.",
+            "checks": ["생성된 feature 목록", "leakage 가능성", "train/test 동일 적용"],
+        },
+        "data_augmentation": {
+            "role": "학습 데이터에 변형을 적용해 일반화를 돕습니다.",
+            "reason": "이미지/시계열 등에서 무작위 변형이 필요할 때 포함됩니다.",
+            "excluded_reason": "이번 trial에서는 명시적 augmentation 로직을 찾지 못했습니다.",
+        },
+        "dataset_dataloader": {
+            "role": "배치 단위 학습을 위한 데이터 접근 골격을 제공합니다.",
+            "reason": "PyTorch/TensorFlow 등 배치 기반 프레임워크 사용 시 포함됩니다.",
+            "excluded_reason": "이번 trial은 sklearn tabular pipeline이라 Dataset/DataLoader가 필요하지 않습니다.",
+        },
+        "model_definition": {
+            "role": "모델 family와 주요 hyperparameter를 정의합니다.",
+            "reason": "어떤 모델을 학습했는지 명확해야 성능 변화 원인을 해석할 수 있습니다.",
+            "checks": ["model family", "주요 hyperparameter", "pretrained/fine-tuning 여부"],
+        },
+        "loss_objective": {
+            "role": "학습 최적화 목표와 평가 metric의 관계를 명시합니다.",
+            "reason": "loss/objective와 competition metric이 맞는지 확인해야 합니다.",
+        },
+        "training": {
+            "role": "모델을 학습하고 재현 가능한 학습 결과를 생성합니다.",
+            "reason": "실험 파이프라인에는 모델 학습 단계가 반드시 필요합니다.",
+        },
+        "training_curve": {
+            "role": "epoch별 학습 과정을 기록해 과적합/과소적합을 확인합니다.",
+            "reason": "epoch 기반 반복 학습일 때 강력히 권장됩니다.",
+            "excluded_reason": "이번 trial은 단일 sklearn estimator 기반이라 training curve를 생성하지 않았습니다.",
+        },
+        "evaluation": {
+            "role": "로컬 검증 metric을 계산하고 기록합니다.",
+            "reason": "다음 개선 방향을 판단하려면 metric 기록이 필요합니다.",
+        },
+        "model_checkpoint": {
+            "role": "학습된 모델 또는 checkpoint를 저장합니다.",
+            "reason": "재사용, 재현, 롤백, 제출 생성에 필요할 수 있습니다.",
+        },
+        "test_inference_output": {
+            "role": "test set 예측과 제출/출력 파일을 생성합니다.",
+            "reason": "대회 제출 또는 결과 검증을 위해 test inference 단계가 필요합니다.",
+        },
+    }
+
+
 def render_trial_readme(summary: dict[str, Any]) -> str:
     lines = [
         f"# {summary['competition']} / {summary['trial_id']}",
@@ -524,13 +1087,7 @@ def _write_user_view(out_dir: Path, summary: dict[str, Any]) -> list[str]:
     user_dir = out_dir / "user_view"
     _reset_user_view_dir(out_dir, user_dir)
     copied_files = _copy_user_code_files(user_dir, summary)
-    files = {
-        "README.ko.md": _render_user_readme(summary),
-        "01_plan.ko.md": _render_user_plan(out_dir, summary),
-        "02_pipeline_structure.ko.md": _render_user_pipeline_structure(out_dir, summary),
-        "03_code_pipeline.ko.md": _render_user_code_pipeline(summary, copied_files),
-        "04_result.ko.md": _render_user_result(summary),
-    }
+    files = render_user_view_files(out_dir, summary, copied_files)
     for name, content in files.items():
         write_text(user_dir / name, content)
     return [*files, *[f"code/{item}" for item in copied_files]]
@@ -727,6 +1284,144 @@ def _render_user_result(summary: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _render_user_readme(summary: dict[str, Any]) -> str:
+    return "\n".join(
+        [
+            f"# {summary['competition']} / {summary['trial_id']} 사용자용 보기",
+            "",
+            "이 폴더는 사용자가 바로 확인할 만한 실험 산출물만 모아둔 공간입니다.",
+            "상세 JSON, API 요청/응답, 디버그 로그는 원본 trial 폴더의 `internal/`, `debug/`에 보관됩니다.",
+            "",
+            "## 바로 볼 파일",
+            "",
+            "- `01_plan.ko.md`: 이번 실험 계획과 실제 구현된 핵심 선택",
+            "- `02_pipeline_structure.ko.md`: 단계별 파이프라인 구조와 실제 적용 내용",
+            "- `03_code_pipeline.ko.md`: 어떤 코드 파일이 만들어졌는지",
+            "- `04_result.ko.md`: 실행 결과와 점수",
+            "- `code/`: 이번 실험에서 생성 또는 수정된 코드 복사본",
+            "",
+            "## 한눈에 보기",
+            "",
+            f"- 상태: {summary.get('status')}",
+            f"- 평가 지표: {summary.get('metric')}",
+            f"- 목표 방향: {summary.get('objective')}",
+            f"- 로컬 점수: {summary.get('local_score')}",
+            f"- 실험 제목: {summary.get('plan_title')}",
+            "",
+        ]
+    )
+
+
+def _render_user_plan(out_dir: Path, summary: dict[str, Any]) -> str:
+    objective = _read_markdown_section(out_dir / "demo_experiment_plan.md", "Objective")
+    rationale = _read_markdown_section(out_dir / "demo_experiment_plan.md", "Rationale")
+    notes = _read_markdown_section(out_dir / "demo_experiment_plan.md", "Implementation Notes")
+    choices = _implemented_choice_lines(out_dir)
+    lines = [
+        f"# {summary['trial_id']} 실험 계획",
+        "",
+        "## 목적",
+        "",
+        f"- 이번 실험은 `{summary['competition']}`에서 처음 끝까지 실행되는 기준 파이프라인을 만드는 단계입니다.",
+        f"- 평가 지표는 `{summary.get('metric')}`이고, 목표 방향은 `{summary.get('objective')}`입니다.",
+        f"- 실험 제목: {summary.get('plan_title')}",
+        "",
+        "## 이번 실험에서 실제 구현된 핵심 선택",
+        "",
+    ]
+    lines.extend(f"- {item}" for item in choices or ["아직 구체 구현 선택을 추출하지 못했습니다."])
+    if objective:
+        lines.extend(["", "## 원문 계획의 목적", "", objective])
+    if rationale:
+        lines.extend(["", "## 원문 판단 근거", "", rationale])
+    if notes:
+        lines.extend(["", "## 구현 메모", "", notes])
+    lines.extend(
+        [
+            "",
+            "## 다음에 확인할 것",
+            "",
+            "- `02_pipeline_structure.ko.md`에서 단계별로 실제 적용된 split, 전처리, 피처, 모델을 확인합니다.",
+            "- `03_code_pipeline.ko.md`에서 실제 코드 파일 구성을 확인합니다.",
+            "- `04_result.ko.md`에서 실행 결과와 점수를 확인합니다.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _render_user_pipeline_structure(out_dir: Path, summary: dict[str, Any]) -> str:
+    structure = _read_json(out_dir / "internal" / "pipeline_structure.json")
+    stages = structure.get("stages", []) if isinstance(structure, dict) else []
+    lines = [
+        f"# {summary['trial_id']} 파이프라인 구조 명세",
+        "",
+        "이 문서는 `.ipynb`를 별도로 만들지 않아도, 위에서 아래로 읽으면 이번 실험의 파이프라인 순서와 각 단계에서 실제 적용된 기법을 볼 수 있도록 만든 사용자용 명세입니다.",
+        "실제 실행 코드는 `.py` 파일이 source of truth이며, 이 문서는 사용자가 이해하고 다음 trial의 컨텍스트로 재사용하기 위한 요약입니다.",
+        "",
+        "## 요약",
+        "",
+        f"- competition: {summary['competition']}",
+        f"- metric: {summary.get('metric')}",
+        f"- objective: {summary.get('objective')}",
+        f"- project_root: {summary.get('project_root')}",
+        f"- machine-readable source: `{summary.get('pipeline_structure_file')}`",
+        "",
+        "## 단계별 구조",
+        "",
+    ]
+    for index, stage in enumerate(stages, 1):
+        included = "포함" if stage.get("included") else "제외/미탑재"
+        required = "필수" if stage.get("required") else "조건부"
+        lines.extend(
+            [
+                f"### {index}. {stage.get('name')}",
+                "",
+                f"- 상태: {included}",
+                f"- 구분: {required}",
+                f"- 역할: {stage.get('role')}",
+                f"- 판단 근거: {stage.get('reason')}",
+                "- 이번 실험에서 실제 적용한 내용:",
+            ]
+        )
+        lines.extend(f"  - {item}" for item in stage.get("actual_applied", []) or ["구체 적용 내용을 추출하지 못했습니다."])
+        lines.append("- 코드 위치:")
+        lines.extend(f"  - `{item}`" for item in stage.get("code_locations", []) or ["미탑재"])
+        handles = stage.get("improvement_handles", [])
+        if handles:
+            lines.append("- 다음 trial에서 바꿀 수 있는 축:")
+            lines.extend(f"  - {item}" for item in handles)
+        checks = stage.get("checks", [])
+        if checks:
+            lines.append("- 확인 포인트:")
+            lines.extend(f"  - {item}" for item in checks)
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _implemented_choice_lines(out_dir: Path) -> list[str]:
+    structure = _read_json(out_dir / "internal" / "pipeline_structure.json")
+    stages = structure.get("stages", []) if isinstance(structure, dict) else []
+    focus_ids = {
+        "data_split_cv": "검증",
+        "preprocessing": "전처리",
+        "feature_representation": "피처/표현",
+        "model_definition": "모델",
+        "evaluation": "평가",
+        "test_inference_output": "출력",
+    }
+    lines: list[str] = []
+    for stage in stages:
+        label = focus_ids.get(stage.get("id"))
+        if not label:
+            continue
+        actual = stage.get("actual_applied") or []
+        if not actual:
+            continue
+        lines.append(f"{label}: {actual[0]}")
+    return lines
+
+
 def _copy_user_code_files(user_dir: Path, summary: dict[str, Any]) -> list[str]:
     project_root = summary.get("project_root")
     if not project_root:
@@ -839,10 +1534,10 @@ def _write_browse_view(competition: str, trial_id: str, out_dir: Path, summary: 
             shutil.copy2(item, destination)
             copied.append(relative.as_posix())
     paths_file = browse_dir / "05_paths.ko.md"
-    write_text(paths_file, _render_browse_paths(competition, trial_id, out_dir, browse_dir, summary))
+    write_text(paths_file, render_compact_browse_paths(competition, trial_id, out_dir, browse_dir, summary))
     if "05_paths.ko.md" not in copied:
         copied.append("05_paths.ko.md")
-    _write_browse_index(competition, browse_root)
+    write_compact_browse_index(competition, browse_root)
     return sorted(copied)
 
 

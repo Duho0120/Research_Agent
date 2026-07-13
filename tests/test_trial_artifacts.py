@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from kaggle_research_agent import simple_yaml
 from kaggle_research_agent.trial_artifacts import organize_trial_artifacts, trial_artifact_exists
 
 
@@ -13,8 +14,47 @@ class TrialArtifactsTest(unittest.TestCase):
             root = Path(tmp)
             trial = root / "experiments" / "demo" / "trial_001"
             trial.mkdir(parents=True)
+            project = root / "workspace"
+            project.mkdir()
+            (project / "train.py").write_text(
+                "\n".join(
+                    [
+                        "import pandas as pd",
+                        "from sklearn.impute import SimpleImputer",
+                        "from sklearn.linear_model import LogisticRegression",
+                        "from sklearn.model_selection import StratifiedKFold, train_test_split, cross_val_score",
+                        "from sklearn.preprocessing import OneHotEncoder, StandardScaler",
+                        'NUMERIC_FEATURES = ["Age", "Fare"]',
+                        'CATEGORICAL_FEATURES = ["Sex", "Embarked"]',
+                        'FEATURE_COLUMNS = NUMERIC_FEATURES + CATEGORICAL_FEATURES + ["FamilySize", "IsAlone", "Title"]',
+                        'df = pd.read_csv("data/train.csv")',
+                        'cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)',
+                        'imputer = SimpleImputer(strategy="median")',
+                        'scaler = StandardScaler()',
+                        'encoder = OneHotEncoder(handle_unknown="ignore")',
+                        'model = LogisticRegression(max_iter=1000, solver="lbfgs", random_state=42)',
+                        'train_test_split(df, test_size=0.2, random_state=42)',
+                        'model.fit(df, df)',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            comp = root / "competitions" / "demo"
+            comp.mkdir(parents=True)
+            simple_yaml.dump({"project_root": str(project)}, comp / "execution_profile.yaml")
             (trial / "metrics.json").write_text(
-                json.dumps({"cv_score": 0.8, "metric": "accuracy", "objective": "maximize"}),
+                json.dumps(
+                    {
+                        "cv_score": 0.8,
+                        "metric": "accuracy",
+                        "objective": "maximize",
+                        "validation_method": "stratified_5_fold_cv",
+                        "fold_scores": [0.7, 0.8, 0.9],
+                        "features": ["Age", "Fare", "Sex", "Embarked", "FamilySize", "IsAlone", "Title"],
+                        "model_type": "LogisticRegression",
+                        "random_state": 42,
+                    }
+                ),
                 encoding="utf-8",
             )
             (trial / "metrics_collection.json").write_text(
@@ -59,10 +99,18 @@ class TrialArtifactsTest(unittest.TestCase):
             self.assertTrue((trial / "user_view" / "03_code_pipeline.ko.md").exists())
             self.assertTrue((trial / "user_view" / "04_result.ko.md").exists())
             user_readme = (trial / "user_view" / "README.ko.md").read_text(encoding="utf-8")
-            self.assertIn("사용자가 바로 확인할 만한 파일", user_readme)
+            self.assertIn("사용자가 바로 확인할 핵심 산출물", user_readme)
             structure = json.loads((trial / "internal" / "pipeline_structure.json").read_text(encoding="utf-8"))
             self.assertEqual("1.0", structure["schema_version"])
             self.assertTrue(any(stage["id"] == "data_split_cv" for stage in structure["stages"]))
+            data_split = next(stage for stage in structure["stages"] if stage["id"] == "data_split_cv")
+            preprocessing = next(stage for stage in structure["stages"] if stage["id"] == "preprocessing")
+            model = next(stage for stage in structure["stages"] if stage["id"] == "model_definition")
+            augmentation = next(stage for stage in structure["stages"] if stage["id"] == "data_augmentation")
+            self.assertTrue(any("StratifiedKFold" in item for item in data_split["actual_applied"]))
+            self.assertTrue(any("StandardScaler" in item for item in preprocessing["actual_applied"]))
+            self.assertTrue(any("LogisticRegression" in item for item in model["actual_applied"]))
+            self.assertFalse(augmentation["included"])
             browse = root / "runs" / "demo" / "trial_001"
             self.assertTrue((browse / "README.ko.md").exists())
             self.assertTrue((browse / "01_plan.ko.md").exists())
@@ -71,8 +119,130 @@ class TrialArtifactsTest(unittest.TestCase):
             self.assertTrue((browse / "04_result.ko.md").exists())
             self.assertTrue((browse / "05_paths.ko.md").exists())
             self.assertTrue((root / "runs" / "demo" / "README.ko.md").exists())
+            user_plan = (browse / "01_plan.ko.md").read_text(encoding="utf-8")
+            user_structure = (browse / "02_pipeline_structure.ko.md").read_text(encoding="utf-8")
+            self.assertIn("이번 실험의 핵심 선택", user_plan)
+            self.assertIn("| 단계 | 실제 적용 내용 | 확인 포인트 |", user_structure)
+            self.assertIn("## 단계별 체크", user_structure)
+            self.assertIn("StratifiedKFold", user_structure)
+            self.assertIn("StandardScaler", user_structure)
+            self.assertIn("LogisticRegression", user_structure)
             browse_paths = (browse / "05_paths.ko.md").read_text(encoding="utf-8")
-            self.assertIn("실험 원본 기록", browse_paths)
+            self.assertIn("원본 trial 기록", browse_paths)
+
+    def test_pipeline_structure_extracts_random_forest_features_and_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trial = root / "experiments" / "demo" / "trial_001"
+            trial.mkdir(parents=True)
+            project = root / "workspace"
+            (project / "src").mkdir(parents=True)
+            (project / "workspace_config.json").write_text(
+                json.dumps(
+                    {
+                        "target_column": "Survived",
+                        "id_column": "PassengerId",
+                        "required_data_files": ["train.csv", "test.csv"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (project / "src" / "baseline.py").write_text(
+                "\n".join(
+                    [
+                        "import pandas as pd",
+                        "import joblib",
+                        "from pathlib import Path",
+                        "from sklearn.ensemble import RandomForestClassifier",
+                        "from sklearn.impute import SimpleImputer",
+                        "from sklearn.model_selection import train_test_split",
+                        "from sklearn.preprocessing import OneHotEncoder",
+                        "ROOT = Path(__file__).resolve().parents[1]",
+                        "DATA_DIR = ROOT / 'data'",
+                        "OUTPUT_DIR = ROOT / 'outputs'",
+                        "MODEL_PATH = ROOT / 'src' / 'titanic_random_forest_pipeline.joblib'",
+                        "TARGET_COLUMN = 'Survived'",
+                        "ID_COLUMN = 'PassengerId'",
+                        "RANDOM_STATE = 42",
+                        "NUMERIC_FEATURES = ['Pclass', 'Age', 'SibSp', 'Parch', 'Fare', 'family_size', 'is_alone']",
+                        "CATEGORICAL_FEATURES = ['Sex', 'Embarked', 'Title']",
+                        "FEATURE_COLUMNS = NUMERIC_FEATURES + CATEGORICAL_FEATURES",
+                        "train_df = pd.read_csv(DATA_DIR / 'train.csv')",
+                        "test_df = pd.read_csv(DATA_DIR / 'test.csv')",
+                        "train_df['family_size'] = train_df['SibSp'] + train_df['Parch'] + 1",
+                        "train_df['is_alone'] = (train_df['family_size'] == 1).astype(int)",
+                        "train_df['Title'] = train_df['Name'].map(extract_title)",
+                        "SimpleImputer(strategy='median')",
+                        "SimpleImputer(strategy='most_frequent')",
+                        "OneHotEncoder(handle_unknown='ignore')",
+                        "train_test_split(train_df, train_df[TARGET_COLUMN], test_size=0.2, stratify=train_df[TARGET_COLUMN], random_state=RANDOM_STATE)",
+                        "model = RandomForestClassifier(n_estimators=300, max_depth=6, min_samples_leaf=2, random_state=RANDOM_STATE, n_jobs=-1)",
+                        "model.fit(train_df, train_df[TARGET_COLUMN])",
+                        "joblib.dump({'model': model}, MODEL_PATH)",
+                        "submission = pd.DataFrame({ID_COLUMN: test_df[ID_COLUMN], TARGET_COLUMN: model.predict(test_df).astype(int)})",
+                        "submission.to_csv(OUTPUT_DIR / 'submission.csv', index=False)",
+                        "def extract_title(name): return 'Mr'",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            comp = root / "competitions" / "demo"
+            comp.mkdir(parents=True)
+            simple_yaml.dump({"project_root": str(project)}, comp / "execution_profile.yaml")
+            (trial / "metrics.json").write_text(
+                json.dumps(
+                    {
+                        "cv_score": 0.8268,
+                        "validation_accuracy": 0.8268,
+                        "metric": "accuracy",
+                        "objective": "maximize",
+                        "model": "RandomForestClassifier",
+                        "n_estimators": 300,
+                        "max_depth": 6,
+                        "min_samples_leaf": 2,
+                        "random_state": 42,
+                        "feature_columns": [
+                            "Pclass",
+                            "Age",
+                            "SibSp",
+                            "Parch",
+                            "Fare",
+                            "family_size",
+                            "is_alone",
+                            "Sex",
+                            "Embarked",
+                            "Title",
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (trial / "metrics_collection.json").write_text(json.dumps({"status": "collected"}), encoding="utf-8")
+            (trial / "workspace_run.json").write_text(json.dumps({"status": "completed"}), encoding="utf-8")
+            (trial / "workspace_coding_result.json").write_text(
+                json.dumps({"changed_files": ["src/baseline.py"]}),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                organize_trial_artifacts("demo", "trial_001")
+
+            structure = json.loads((trial / "internal" / "pipeline_structure.json").read_text(encoding="utf-8"))
+            by_id = {stage["id"]: stage for stage in structure["stages"]}
+            rendered = "\n".join(
+                item
+                for stage in by_id.values()
+                for item in stage.get("actual_applied", [])
+            )
+            self.assertIn("Survived", rendered)
+            self.assertIn("PassengerId", rendered)
+            self.assertIn("RandomForestClassifier", rendered)
+            self.assertIn("n_estimators=300", rendered)
+            self.assertIn("random_state=42", rendered)
+            self.assertIn("family_size", rendered)
+            self.assertIn("is_alone", rendered)
+            self.assertIn("src/titanic_random_forest_pipeline.joblib", rendered)
+            self.assertNotIn("`id`, `target`", rendered)
 
 
 if __name__ == "__main__":

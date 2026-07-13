@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, TextIO
 
 from . import paths
-from .demo_one_cycle import run_demo_one_cycle
+from .demo_one_cycle import render_demo_cycle_cli_summary, run_demo_one_cycle
 from .store import read_text, write_text
 from .trial_artifacts import trial_artifact_exists
 from .workspace_preparer import prepare_workspace
@@ -319,7 +319,7 @@ def _run_cycle_prompt(
         strategy_calls_today=0,
     )
     print("", file=output)
-    print(f"Demo one cycle: {competition} trial_001 status={result.get('status')}", file=output)
+    print(render_demo_cycle_cli_summary(result), file=output)
     return 0 if result.get("status") in {"planned", "completed"} else 1
 
 

@@ -38,7 +38,7 @@ from .workspace_after_coding import run_workspace_after_coding
 from .workspace_next_gate import plan_next_workspace_trial
 from .workspace_result_cycle import process_workspace_result
 from .workspace_runner import run_workspace_pipeline
-from .demo_one_cycle import run_demo_one_cycle, watch_demo_agent
+from .demo_one_cycle import render_demo_cycle_cli_summary, run_demo_one_cycle, watch_demo_agent
 from .demo_guide import run_demo_guide
 from .trial_artifacts import organize_trial_artifacts
 
@@ -458,17 +458,17 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "run-workspace-pipeline":
         result = run_workspace_pipeline(args.competition, args.trial, run_now=args.run_now)
-        print(f"Workspace pipeline: {result['competition']} {result['trial_id']} status={result['status']}")
+        print(_render_workspace_pipeline_summary(result))
         return 0 if result["status"] in {"planned", "completed"} else 1
 
     if args.command == "collect-workspace-metrics":
         result = collect_workspace_metrics(args.competition, args.trial)
-        print(f"Workspace metrics: {result['competition']} {result['trial_id']} status={result['status']}")
+        print(_render_workspace_metrics_summary(result))
         return 0 if result["status"] == "collected" else 1
 
     if args.command == "process-workspace-result":
         result = process_workspace_result(args.competition, args.trial)
-        print(f"Workspace result: {result['competition']} {result['trial_id']} status={result['status']}")
+        print(_render_workspace_result_summary(result))
         return 1 if result["status"] == "blocked" else 0
 
     if args.command == "plan-next-workspace-trial":
@@ -497,17 +497,17 @@ def main(argv: list[str] | None = None) -> int:
             trial_llm_calls=args.trial_llm_calls,
             strategy_calls_today=args.strategy_calls_today,
         )
-        print(f"Workspace code writer: {result['trial_id']} status={result['status']}")
+        print(_render_workspace_code_writer_summary(result))
         return 0 if result["status"] == "accepted" else 1
 
     if args.command == "validate-workspace-coding-result":
         result = validate_workspace_coding_result(args.competition, args.trial)
-        print(f"Workspace coding result validation: {result['trial_id']} status={result['status']}")
+        print(_render_workspace_code_validation_summary(result))
         return 0 if result["status"] == "accepted" else 1
 
     if args.command == "run-workspace-after-coding":
         result = run_workspace_after_coding(args.competition, args.trial, run_now=args.run_now)
-        print(f"Workspace after coding: {result['trial_id']} status={result['status']}")
+        print(_render_workspace_after_coding_summary(result))
         return 0 if result["status"] in {"ready_to_run", "completed"} else 1
 
     if args.command == "organize-trial-artifacts":
@@ -533,7 +533,7 @@ def main(argv: list[str] | None = None) -> int:
             strategy_calls_today=args.strategy_calls_today,
             show_progress=args.show_progress,
         )
-        print(f"Demo one cycle: {result['competition']} {result['trial_id']} status={result['status']}")
+        print(render_demo_cycle_cli_summary(result))
         return 0 if result["status"] in {"planned", "completed"} else 1
 
     if args.command == "watch-demo-cycle":
@@ -805,6 +805,123 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if result["status"] in {"job_created", "executed", "ready_to_evaluate"} else 1
 
     return 1
+
+
+def _render_workspace_pipeline_summary(result: dict) -> str:
+    lines = [
+        "Workspace 실행 요약",
+        f"- 실험: {result.get('competition')} / {result.get('trial_id')}",
+        f"- 상태: {result.get('status')}",
+    ]
+    command_results = result.get("command_results") or []
+    if command_results:
+        passed = [
+            item.get("stage") or item.get("name") or item.get("command")
+            for item in command_results
+            if item.get("returncode") == 0 or item.get("status") == "passed"
+        ]
+        failed = [
+            item.get("stage") or item.get("name") or item.get("command")
+            for item in command_results
+            if not (item.get("returncode") == 0 or item.get("status") == "passed")
+        ]
+        passed = [str(item) for item in passed if item]
+        failed = [str(item) for item in failed if item]
+        if passed:
+            lines.append(f"- 완료 명령: {', '.join(passed)}")
+        if failed:
+            lines.append(f"- 확인 필요: {', '.join(failed)}")
+    if result.get("next_action"):
+        lines.append(f"- 다음 조치: {result.get('next_action')}")
+    return "\n".join(lines)
+
+
+def _render_workspace_metrics_summary(result: dict) -> str:
+    lines = [
+        "Metrics 수집 요약",
+        f"- 실험: {result.get('competition')} / {result.get('trial_id')}",
+        f"- 상태: {result.get('status')}",
+    ]
+    score = result.get("cv_score")
+    if score is None:
+        score = result.get("local_score")
+    metric = result.get("metric")
+    if score is not None:
+        lines.append(f"- 점수: {metric or 'score'} = {score}")
+    if result.get("metrics_path"):
+        lines.append(f"- metrics: {result.get('metrics_path')}")
+    issues = result.get("issues") or []
+    if issues:
+        lines.append(f"- 이슈: {', '.join(str(item) for item in issues[:3])}")
+    return "\n".join(lines)
+
+
+def _render_workspace_result_summary(result: dict) -> str:
+    lines = [
+        "실험 결과 처리 요약",
+        f"- 실험: {result.get('competition')} / {result.get('trial_id')}",
+        f"- 상태: {result.get('status')}",
+    ]
+    evaluation = result.get("evaluation") if isinstance(result.get("evaluation"), dict) else {}
+    diagnosis = result.get("diagnosis") if isinstance(result.get("diagnosis"), dict) else {}
+    if evaluation.get("score") is not None:
+        lines.append(f"- 평가 점수: {evaluation.get('score')}")
+    if diagnosis.get("strategy_recommendation"):
+        lines.append(f"- 전략 판단: {diagnosis.get('strategy_recommendation')}")
+    if result.get("next_action"):
+        lines.append(f"- 다음 조치: {result.get('next_action')}")
+    return "\n".join(lines)
+
+
+def _render_workspace_code_writer_summary(result: dict) -> str:
+    lines = [
+        "코드 작성 요약",
+        f"- 실험: {result.get('competition', '-')} / {result.get('trial_id')}",
+        f"- 상태: {result.get('status')}",
+    ]
+    changed = result.get("changed_files") or []
+    if changed:
+        preview = ", ".join(str(item) for item in changed[:3])
+        more = f" 외 {len(changed) - 3}개" if len(changed) > 3 else ""
+        lines.append(f"- 변경 파일: {len(changed)}개 ({preview}{more})")
+    issues = result.get("issues") or result.get("blocking_issues") or []
+    if issues:
+        lines.append(f"- 이슈: {', '.join(str(item) for item in issues[:3])}")
+    if result.get("next_action"):
+        lines.append(f"- 다음 조치: {result.get('next_action')}")
+    return "\n".join(lines)
+
+
+def _render_workspace_code_validation_summary(result: dict) -> str:
+    lines = [
+        "코드 검증 요약",
+        f"- 실험: {result.get('competition', '-')} / {result.get('trial_id')}",
+        f"- 상태: {result.get('status')}",
+    ]
+    changed = result.get("changed_files") or []
+    if changed:
+        lines.append(f"- 검증된 변경 파일: {len(changed)}개")
+    issues = result.get("issues") or []
+    if issues:
+        lines.append(f"- 이슈: {', '.join(str(item) for item in issues[:3])}")
+    if result.get("next_action"):
+        lines.append(f"- 다음 조치: {result.get('next_action')}")
+    return "\n".join(lines)
+
+
+def _render_workspace_after_coding_summary(result: dict) -> str:
+    lines = [
+        "코드 반영 후 실행 요약",
+        f"- 실험: {result.get('competition', '-')} / {result.get('trial_id')}",
+        f"- 상태: {result.get('status')}",
+    ]
+    if result.get("workspace_run_status"):
+        lines.append(f"- 실행 상태: {result.get('workspace_run_status')}")
+    if result.get("metrics_status"):
+        lines.append(f"- metrics 상태: {result.get('metrics_status')}")
+    if result.get("next_action"):
+        lines.append(f"- 다음 조치: {result.get('next_action')}")
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":
