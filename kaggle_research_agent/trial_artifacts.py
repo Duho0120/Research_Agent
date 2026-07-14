@@ -454,6 +454,7 @@ def _stage_context(summary: dict[str, Any], code_files: list[tuple[str, str]], c
         "code_text": code_text,
         "code_constants": _extract_code_constants(code_files),
         "pipeline_facts": _extract_pipeline_facts(summary, code_files, code_text),
+        "pipeline_details": _extract_pipeline_details(summary, code_files, code_text),
     }
 
 
@@ -475,6 +476,7 @@ def _stage(
     actual = context.get("pipeline_facts", {}).get(stage_id, [])
     if not actual and not included:
         actual = ["이번 실험에서는 해당 단계를 적용하지 않았습니다."]
+    details = context.get("pipeline_details", {}).get(stage_id, {})
     return {
         "id": stage_id,
         "name": name,
@@ -487,6 +489,7 @@ def _stage(
         "outputs": described.get("outputs", outputs),
         "checks": described.get("checks", checks),
         "actual_applied": actual,
+        "structured_details": details,
         "improvement_handles": _improvement_handles(stage_id),
     }
 
@@ -556,8 +559,8 @@ def _extract_pipeline_facts(
     identifier = _workspace_config_value(code_files, "id_column") or "id"
     facts["data_load"].append(f"학습 타깃은 `{target}`, 제출 ID는 `{identifier}`로 사용합니다.")
 
-    numeric = [str(item) for item in constants.get("NUMERIC_FEATURES", [])]
-    categorical = [str(item) for item in constants.get("CATEGORICAL_FEATURES", [])]
+    numeric = _feature_list(metrics, constants, "numeric")
+    categorical = _feature_list(metrics, constants, "categorical")
     features = [str(item) for item in metrics.get("features") or constants.get("FEATURE_COLUMNS", [])]
     if numeric:
         facts["preprocessing"].append(f"수치형 피처는 {', '.join(numeric)}입니다.")
@@ -574,10 +577,22 @@ def _extract_pipeline_facts(
         if "handle_unknown=\"ignore\"" in code_text or "handle_unknown='ignore'" in code_text:
             encoder_note = "`OneHotEncoder(handle_unknown=\"ignore\")`를 적용합니다."
         facts["preprocessing"].append(f"범주형 피처에는 {encoder_note}")
+    preprocessing_meta = metrics.get("preprocessing") if isinstance(metrics.get("preprocessing"), dict) else {}
+    if preprocessing_meta.get("numeric_imputation") and not any("수치형 결측치" in item for item in facts["preprocessing"]):
+        facts["preprocessing"].append(f"수치형 결측치는 `{preprocessing_meta['numeric_imputation']}` 방식으로 대체합니다.")
+    if preprocessing_meta.get("categorical_imputation") and not any("범주형 결측치" in item for item in facts["preprocessing"]):
+        facts["preprocessing"].append(f"범주형 결측치는 `{preprocessing_meta['categorical_imputation']}` 방식으로 대체합니다.")
+    if preprocessing_meta.get("numeric_scaling") and not any("StandardScaler" in item for item in facts["preprocessing"]):
+        facts["preprocessing"].append(f"수치형 피처에는 `{preprocessing_meta['numeric_scaling']}`를 적용합니다.")
+    if preprocessing_meta.get("categorical_encoding") and not any("OneHotEncoder" in item for item in facts["preprocessing"]):
+        facts["preprocessing"].append(f"범주형 피처에는 `{preprocessing_meta['categorical_encoding']}`를 적용합니다.")
 
     validation_method = metrics.get("validation_method")
     if validation_method:
         facts["data_split_cv"].append(f"`metrics.json` 기준 검증 방식은 `{validation_method}`입니다.")
+    split_strategy = metrics.get("split_strategy")
+    if split_strategy:
+        facts["data_split_cv"].append(f"`metrics.json` 기준 split 전략은 `{split_strategy}`입니다.")
     if "stratifiedkfold" in lowered:
         facts["data_split_cv"].append("클래스 비율을 유지하는 `StratifiedKFold`를 사용합니다.")
     if "n_splits" in lowered and "stratifiedkfold" in lowered:
@@ -633,7 +648,7 @@ def _extract_pipeline_facts(
 
     if ".fit(" in lowered or "fit(" in lowered:
         facts["training"].append("검증 점수를 계산한 뒤 전체 학습 데이터로 최종 pipeline을 다시 fit합니다.")
-    if "joblib.dump" in lowered:
+    if "joblib.dump" in lowered or "pickle.dump" in lowered:
         facts["training"].append("학습된 pipeline과 메타데이터를 model bundle로 저장합니다.")
 
     score = metrics.get("cv_score")
@@ -721,8 +736,8 @@ def _extract_pipeline_facts(
     identifier = _workspace_config_value(code_files, "id_column") or _constant_string_value(code_files, "ID_COLUMN") or "id"
     facts["data_load"].append(f"학습 타깃은 `{target}`, 제출 ID는 `{identifier}`로 사용합니다.")
 
-    numeric = [str(item) for item in constants.get("NUMERIC_FEATURES", [])]
-    categorical = [str(item) for item in constants.get("CATEGORICAL_FEATURES", [])]
+    numeric = _feature_list(metrics, constants, "numeric")
+    categorical = _feature_list(metrics, constants, "categorical")
     features = [
         str(item)
         for item in metrics.get("features")
@@ -823,12 +838,13 @@ def _extract_pipeline_facts(
     if "validation_accuracy" in metrics:
         facts["evaluation"].append("`validation_accuracy`와 `cv_score`를 동일한 로컬 검증 점수로 기록합니다.")
 
-    if "joblib.dump" in lowered:
+    if "joblib.dump" in lowered or "pickle.dump" in lowered:
         model_path = _path_constant_value(code_files, "MODEL_PATH")
         if model_path:
             facts["model_checkpoint"].append(f"`{model_path}`에 학습된 모델 bundle을 저장합니다.")
         else:
-            facts["model_checkpoint"].append("학습된 모델 bundle을 `joblib.dump`로 저장합니다.")
+            writer = "joblib.dump" if "joblib.dump" in lowered else "pickle.dump"
+            facts["model_checkpoint"].append(f"학습된 모델 bundle을 `{writer}`로 저장합니다.")
     else:
         facts["model_checkpoint"].append("이번 실험에서는 별도 모델 checkpoint 저장을 확인하지 못했습니다.")
 
@@ -840,6 +856,308 @@ def _extract_pipeline_facts(
         facts["test_inference_output"].append("예측값은 제출 전에 정수형/binary 값으로 정리합니다.")
 
     return {key: _unique([item for item in value if item]) for key, value in facts.items()}
+
+
+def _extract_pipeline_details(
+    summary: dict[str, Any],
+    code_files: list[tuple[str, str]],
+    code_text: str,
+) -> dict[str, dict[str, Any]]:
+    metrics = summary.get("metrics") if isinstance(summary.get("metrics"), dict) else {}
+    constants = _extract_code_constants(code_files)
+    lowered = code_text.lower()
+    target = _workspace_config_value(code_files, "target_column") or _constant_string_value(code_files, "TARGET_COLUMN") or "target"
+    identifier = _workspace_config_value(code_files, "id_column") or _constant_string_value(code_files, "ID_COLUMN") or "id"
+    required_files = _workspace_config_required_files(code_files)
+    numeric = _feature_list(metrics, constants, "numeric")
+    categorical = _feature_list(metrics, constants, "categorical")
+    final_features = [
+        str(item)
+        for item in metrics.get("features")
+        or metrics.get("feature_columns")
+        or constants.get("FEATURE_COLUMNS", [])
+    ]
+    derived_features = _derived_feature_details(lowered, final_features)
+    raw_feature_columns = _raw_feature_columns(numeric, categorical, derived_features)
+    preprocessing_steps = _preprocessing_step_details(metrics, code_text, lowered, numeric, categorical)
+    validation = _validation_details(metrics, code_text, lowered)
+    model = _model_details(metrics, code_text, lowered)
+    checkpoint = _path_constant_value(code_files, "MODEL_PATH")
+
+    details: dict[str, dict[str, Any]] = {
+        "data_load": {
+            "required_files": required_files,
+            "target_column": target,
+            "id_column": identifier,
+            "loader": "pandas.read_csv" if "read_csv" in lowered else "unknown",
+        },
+        "preprocessing": {
+            "raw_feature_columns": raw_feature_columns,
+            "numeric_features": numeric,
+            "categorical_features": categorical,
+            "steps": preprocessing_steps,
+        },
+        "data_split_cv": validation,
+        "feature_representation": {
+            "derived_features": derived_features,
+            "final_feature_columns": final_features,
+        },
+        "model_definition": model,
+        "loss_objective": {
+            "metric": metrics.get("metric") or summary.get("metric"),
+            "objective": metrics.get("objective") or summary.get("objective"),
+            "explicit_loss": None,
+            "library_objective": model.get("estimator") if model else None,
+        },
+        "training": {
+            "fit_detected": ".fit(" in lowered or "fit(" in lowered,
+            "checkpoint_path": checkpoint,
+            "train_rows": metrics.get("train_rows"),
+            "validation_rows": metrics.get("validation_rows"),
+        },
+        "evaluation": {
+            "score_source": summary.get("score_source"),
+            "cv_score": metrics.get("cv_score"),
+            "validation_accuracy": metrics.get("validation_accuracy"),
+            "fold_scores": metrics.get("fold_scores"),
+        },
+        "model_checkpoint": {
+            "checkpoint_path": checkpoint,
+            "writer": _checkpoint_writer(lowered),
+        },
+        "test_inference_output": {
+            "submission_path": "outputs/submission.csv" if "submission.csv" in lowered else None,
+            "id_column": identifier,
+            "prediction_column": target,
+            "postprocessing": _prediction_postprocessing(lowered),
+        },
+    }
+    return {key: value for key, value in details.items() if _has_detail(value)}
+
+
+def _derived_feature_details(lowered: str, final_features: list[str]) -> list[dict[str, Any]]:
+    details: list[dict[str, Any]] = []
+    final_lookup = {item.lower(): item for item in final_features}
+    family_name = final_lookup.get("family_size") or final_lookup.get("familysize")
+    if family_name or "family_size" in lowered or "familysize" in lowered:
+        family_name = family_name or ("family_size" if "family_size" in lowered else "FamilySize")
+        details.append(
+            {
+                "name": family_name,
+                "source_columns": ["SibSp", "Parch"],
+                "formula": "SibSp + Parch + 1",
+                "purpose": "동승 가족 규모를 생존 예측 신호로 사용",
+            }
+        )
+    alone_name = final_lookup.get("is_alone") or final_lookup.get("isalone")
+    if alone_name or "is_alone" in lowered or "isalone" in lowered:
+        alone_name = alone_name or ("is_alone" if "is_alone" in lowered else "IsAlone")
+        family_ref = family_name or ("family_size" if "family_size" in lowered else "FamilySize")
+        details.append(
+            {
+                "name": alone_name,
+                "source_columns": [family_ref],
+                "formula": f"{family_ref} == 1",
+                "purpose": "혼자 탑승했는지 여부를 binary feature로 표현",
+            }
+        )
+    if "title" in lowered and ("extract_title" in lowered or "_extract_title" in lowered):
+        details.append(
+            {
+                "name": final_lookup.get("title") or "Title",
+                "source_columns": ["Name"],
+                "formula": "Name에서 쉼표와 마침표 사이의 호칭을 추출하고 일부 호칭을 정규화",
+                "purpose": "성별/사회적 호칭 정보를 범주형 피처로 사용",
+            }
+        )
+    return details
+
+
+def _feature_list(metrics: dict[str, Any], constants: dict[str, list[Any]], kind: str) -> list[str]:
+    if kind == "numeric":
+        metric_keys = ["numeric_features", "numeric_feature_columns"]
+        constant_keys = ["NUMERIC_FEATURES", "NUMERIC_FEATURE_CANDIDATES", "NUMERIC_COLUMNS"]
+    else:
+        metric_keys = ["categorical_features", "categorical_feature_columns"]
+        constant_keys = ["CATEGORICAL_FEATURES", "CATEGORICAL_FEATURE_CANDIDATES", "CATEGORICAL_COLUMNS"]
+    for key in metric_keys:
+        value = metrics.get(key)
+        if isinstance(value, list):
+            return [str(item) for item in value]
+    for key in constant_keys:
+        value = constants.get(key)
+        if isinstance(value, list):
+            return [str(item) for item in value]
+    return []
+
+
+def _raw_feature_columns(
+    numeric: list[str],
+    categorical: list[str],
+    derived_features: list[dict[str, Any]],
+) -> list[str]:
+    derived_names = {str(item.get("name")) for item in derived_features if item.get("name")}
+    columns: list[str] = []
+    for column in [*numeric, *categorical]:
+        if column not in derived_names:
+            columns.append(column)
+    for feature in derived_features:
+        for source in feature.get("source_columns", []):
+            if source not in derived_names:
+                columns.append(str(source))
+    return _unique(columns)
+
+
+def _preprocessing_step_details(
+    metrics: dict[str, Any],
+    code_text: str,
+    lowered: str,
+    numeric: list[str],
+    categorical: list[str],
+) -> list[dict[str, Any]]:
+    steps: list[dict[str, Any]] = []
+    preprocessing_meta = metrics.get("preprocessing") if isinstance(metrics.get("preprocessing"), dict) else {}
+    numeric_imputation = preprocessing_meta.get("numeric_imputation")
+    categorical_imputation = preprocessing_meta.get("categorical_imputation")
+    numeric_scaling = preprocessing_meta.get("numeric_scaling")
+    categorical_encoding = preprocessing_meta.get("categorical_encoding")
+    if (
+        'simpleimputer(strategy="median")' in lowered
+        or "simpleimputer(strategy='median')" in lowered
+        or numeric_imputation
+    ):
+        steps.append(
+            {
+                "applies_to": "numeric_features",
+                "columns": numeric,
+                "operation": "SimpleImputer",
+                "parameters": {"strategy": str(numeric_imputation or "median")},
+            }
+        )
+    if (
+        'simpleimputer(strategy="most_frequent")' in lowered
+        or "simpleimputer(strategy='most_frequent')" in lowered
+        or categorical_imputation
+    ):
+        steps.append(
+            {
+                "applies_to": "categorical_features",
+                "columns": categorical,
+                "operation": "SimpleImputer",
+                "parameters": {"strategy": str(categorical_imputation or "most_frequent")},
+            }
+        )
+    if "standardscaler" in lowered or numeric_scaling:
+        steps.append(
+            {
+                "applies_to": "numeric_features",
+                "columns": numeric,
+                "operation": "StandardScaler" if "standardscaler" in lowered else str(numeric_scaling),
+                "parameters": {},
+            }
+        )
+    if "onehotencoder" in lowered or categorical_encoding:
+        params: dict[str, Any] = {}
+        if "handle_unknown=\"ignore\"" in code_text or "handle_unknown='ignore'" in code_text:
+            params["handle_unknown"] = "ignore"
+        if categorical_encoding and "handle_unknown_ignore" in str(categorical_encoding):
+            params.setdefault("handle_unknown", "ignore")
+        steps.append(
+            {
+                "applies_to": "categorical_features",
+                "columns": categorical,
+                "operation": "OneHotEncoder" if "onehotencoder" in lowered else str(categorical_encoding),
+                "parameters": params,
+            }
+        )
+    return steps
+
+
+def _validation_details(metrics: dict[str, Any], code_text: str, lowered: str) -> dict[str, Any]:
+    details: dict[str, Any] = {}
+    split_strategy = metrics.get("split_strategy")
+    if metrics.get("validation_method"):
+        details["method"] = metrics.get("validation_method")
+    elif "stratifiedkfold" in lowered:
+        details["method"] = "stratified_k_fold_cv"
+    elif "train_test_split" in lowered:
+        details["method"] = "holdout_train_test_split"
+    if split_strategy:
+        details["split_strategy"] = split_strategy
+    n_splits = re.search(r"n_splits\s*=\s*([^,\n\)]+)", code_text)
+    if n_splits:
+        details["n_splits"] = n_splits.group(1).strip()
+    test_size = re.search(r"test_size\s*=\s*([^,\n\)]+)", code_text)
+    if test_size:
+        details["test_size"] = test_size.group(1).strip()
+    random_state = metrics.get("random_state")
+    if random_state is not None:
+        details["random_state"] = random_state
+    elif "random_state" in lowered:
+        random_state_match = re.search(r"random_state\s*=\s*([^,\n\)]+)", code_text)
+        if random_state_match:
+            details["random_state"] = random_state_match.group(1).strip()
+    details["stratify"] = "stratify=" in lowered or "stratifiedkfold" in lowered
+    if split_strategy and "stratified" in str(split_strategy).lower():
+        details["stratify"] = True
+    return details
+
+
+def _model_details(metrics: dict[str, Any], code_text: str, lowered: str) -> dict[str, Any]:
+    candidates = ["RandomForestClassifier", "LogisticRegression"]
+    estimator = str(metrics.get("model") or metrics.get("model_type") or "")
+    for candidate in candidates:
+        if candidate.lower() in lowered:
+            estimator = candidate
+            break
+    if not estimator:
+        return {}
+    params = _params_list_to_dict(_estimator_params(code_text, estimator))
+    if estimator == "RandomForestClassifier":
+        for key in ["n_estimators", "max_depth", "min_samples_leaf", "random_state"]:
+            if key in metrics and key not in params:
+                params[key] = metrics[key]
+    return {
+        "estimator": estimator,
+        "parameters": params,
+        "pretrained": False,
+        "pipeline_container": "sklearn.pipeline.Pipeline" if "pipeline(" in lowered else None,
+    }
+
+
+def _params_list_to_dict(items: list[str]) -> dict[str, Any]:
+    params: dict[str, Any] = {}
+    for item in items:
+        if "=" not in item:
+            continue
+        key, value = item.split("=", 1)
+        params[key] = value.strip().strip("\"'")
+    return params
+
+
+def _prediction_postprocessing(lowered: str) -> list[str]:
+    steps: list[str] = []
+    if "astype(int)" in lowered:
+        steps.append("astype(int)")
+    if "np.where" in lowered:
+        steps.append("np.where")
+    return steps
+
+
+def _checkpoint_writer(lowered: str) -> str | None:
+    if "joblib.dump" in lowered:
+        return "joblib.dump"
+    if "pickle.dump" in lowered:
+        return "pickle.dump"
+    return None
+
+
+def _has_detail(value: Any) -> bool:
+    if isinstance(value, dict):
+        return any(_has_detail(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_has_detail(item) for item in value)
+    return value is not None and value != ""
 
 
 def _estimator_params(code_text: str, estimator_name: str) -> list[str]:
@@ -896,23 +1214,35 @@ def _path_constant_value(code_files: list[tuple[str, str]], constant_name: str) 
         tree = _parse_ast(text)
         if tree is None:
             continue
+        path_constants: dict[str, str] = {}
         for node in ast.walk(tree):
             if not isinstance(node, ast.Assign):
                 continue
-            if not any(isinstance(target, ast.Name) and target.id == constant_name for target in node.targets):
+            names = [target.id for target in node.targets if isinstance(target, ast.Name)]
+            if not names:
                 continue
-            value = _path_expr_to_string(node.value)
+            value = _path_expr_to_string(node.value, path_constants)
             if value:
-                return value
+                for name in names:
+                    path_constants[name] = value
+                    if name == constant_name:
+                        return value
     return None
 
 
-def _path_expr_to_string(node: ast.AST) -> str | None:
+def _path_expr_to_string(node: ast.AST, constants: dict[str, str] | None = None) -> str | None:
+    constants = constants or {}
+    if isinstance(node, ast.Name):
+        return constants.get(node.id)
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "Path":
+        if node.args:
+            return _path_expr_to_string(node.args[0], constants)
+        return None
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
-        left = _path_expr_to_string(node.left)
-        right = _path_expr_to_string(node.right)
+        left = _path_expr_to_string(node.left, constants)
+        right = _path_expr_to_string(node.right, constants)
         if left and right:
             return f"{left.rstrip('/')}/{right.lstrip('/')}"
         return right or left

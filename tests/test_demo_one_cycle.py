@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from kaggle_research_agent import simple_yaml
 from kaggle_research_agent.cli import main
-from kaggle_research_agent.demo_one_cycle import run_demo_one_cycle
+from kaggle_research_agent.demo_one_cycle import build_demo_plan_payload, run_demo_one_cycle
 from kaggle_research_agent.trial_artifacts import trial_artifact_exists
 
 
@@ -63,7 +63,13 @@ class DemoOneCycleTest(unittest.TestCase):
             self.assertEqual({"openai_responses"}, {row["provider"] for row in usages})
             self.assertEqual({"gpt-5.5"}, {row["model"] for row in usages})
             self.assertEqual("gpt-5.6-luna", result["model_policy"]["low_cost"]["model"])
+            self.assertFalse(result["context"]["artifact_policy"]["save_model"]["default"])
             self.assertIn("improved", (project / "train_step.py").read_text(encoding="utf-8"))
+            plan_request = build_demo_plan_payload(result["context"], model="gpt-5.5")
+            plan_prompt = plan_request["input"][1]["content"]
+            self.assertIn("Model/checkpoint artifacts are optional", plan_prompt)
+            self.assertIn("required_for_separate_predict_command", plan_prompt)
+            self.assertIn("Artifact Policy", (trial / "demo_context.md").read_text(encoding="utf-8"))
 
     def test_demo_one_cycle_resumes_from_completed_plan_and_code_result(self):
         with tempfile.TemporaryDirectory() as tmp:

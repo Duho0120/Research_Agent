@@ -7,6 +7,7 @@ from typing import Any
 from .execution_profile import load_execution_profile, validate_execution_profile
 from .agents.memory import log_decision
 from .paths import trial_dir
+from .policies import load_policy
 from .store import read_text, write_text
 
 
@@ -86,6 +87,7 @@ def _build_handoff(
     metrics_paths = artifacts.get("metrics", []) if isinstance(artifacts, dict) else []
     metrics_path = metrics_paths[0] if metrics_paths else "outputs/metrics.json"
     context_files = _context_files(competition, trial_id)
+    artifact_policy = load_policy("artifact_policy")
     if status == "ready" and profile:
         context_files.extend(_write_workspace_context_snapshot(competition, trial_id, profile, continuation))
     return {
@@ -123,6 +125,7 @@ def _build_handoff(
                 "Additional diagnostic keys such as validation_accuracy are allowed, but cv_score is the canonical score.",
             ],
         },
+        "artifact_policy": artifact_policy,
         "required_output": {
             "json_file": f"experiments/{competition}/{trial_id}/workspace_coding_result.json",
             "markdown_file": f"experiments/{competition}/{trial_id}/workspace_coding_result.md",
@@ -189,6 +192,21 @@ def render_workspace_coding_request(handoff: dict[str, Any], next_experiment: st
     lines.extend(f"  - {field}" for field in metrics_contract["required_keys"])
     lines.extend(["- notes:"])
     lines.extend(f"  - {note}" for note in metrics_contract["notes"])
+    artifact_policy = handoff.get("artifact_policy", {})
+    if artifact_policy:
+        lines.extend(
+            [
+                "",
+                "## Artifact Policy",
+                "",
+                "- Metrics, submission, code snapshot, and pipeline summary are the primary trial memory.",
+                "- Do not persist trained model/checkpoint artifacts by default.",
+                "- Persist a model only when the policy allows it and record the reason in your summary or metrics metadata.",
+                "```json",
+                json.dumps(artifact_policy, ensure_ascii=False, indent=2),
+                "```",
+            ]
+        )
     required = handoff["required_output"]
     lines.extend(
         [

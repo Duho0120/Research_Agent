@@ -32,6 +32,8 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             self.assertEqual("outputs/metrics.json", result["metrics_output_contract"]["path"])
             self.assertEqual("cv_score", result["metrics_output_contract"]["score_key"])
             self.assertIn("cv_score", result["metrics_output_contract"]["required_keys"])
+            self.assertFalse(result["artifact_policy"]["save_model"]["default"])
+            self.assertIn("required_for_separate_predict_command", result["artifact_policy"]["save_model"]["allowed_when"])
             self.assertTrue(result["execution_constraints"]["do_not_run_training"])
             self.assertTrue(result["execution_constraints"]["do_not_submit"])
             self.assertTrue(result["execution_constraints"]["do_not_edit_data_or_outputs"])
@@ -56,6 +58,8 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             self.assertIn("Do not run training", text)
             self.assertIn("Metrics Output Contract", text)
             self.assertIn("cv_score", text)
+            self.assertIn("Artifact Policy", text)
+            self.assertIn("Do not persist trained model", text)
             log = root / "memory" / "demo" / "decision_log.jsonl"
             last = json.loads(log.read_text(encoding="utf-8").splitlines()[-1])
             self.assertEqual("workspace_coding_handoff", last["decision_type"])

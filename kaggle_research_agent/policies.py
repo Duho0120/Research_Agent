@@ -158,6 +158,31 @@ DEFAULT_POLICIES: dict[str, dict[str, Any]] = {
             "model": "gpt-5.6-luna",
         },
     },
+    "artifact_policy": {
+        "save_submission": True,
+        "save_metrics": True,
+        "save_code_snapshot": True,
+        "save_pipeline_summary": True,
+        "save_model": {
+            "default": False,
+            "allowed_when": [
+                "required_for_separate_predict_command",
+                "best_trial",
+                "submitted_trial",
+                "expensive_to_retrain",
+                "ensemble_candidate",
+                "user_requested",
+            ],
+            "require_reason": True,
+            "prefer_small_serialized_artifact": True,
+            "cleanup_non_best_models": True,
+        },
+        "notes": [
+            "A trial should not persist trained model artifacts by default.",
+            "Submission, metrics, code snapshot, and pipeline summary are the primary memory artifacts.",
+            "If a model artifact is persisted, the plan/code should record why it is needed.",
+        ],
+    },
 }
 
 

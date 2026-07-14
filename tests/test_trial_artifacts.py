@@ -106,10 +106,24 @@ class TrialArtifactsTest(unittest.TestCase):
             data_split = next(stage for stage in structure["stages"] if stage["id"] == "data_split_cv")
             preprocessing = next(stage for stage in structure["stages"] if stage["id"] == "preprocessing")
             model = next(stage for stage in structure["stages"] if stage["id"] == "model_definition")
+            features = next(stage for stage in structure["stages"] if stage["id"] == "feature_representation")
             augmentation = next(stage for stage in structure["stages"] if stage["id"] == "data_augmentation")
             self.assertTrue(any("StratifiedKFold" in item for item in data_split["actual_applied"]))
             self.assertTrue(any("StandardScaler" in item for item in preprocessing["actual_applied"]))
             self.assertTrue(any("LogisticRegression" in item for item in model["actual_applied"]))
+            self.assertEqual("stratified_5_fold_cv", data_split["structured_details"]["method"])
+            self.assertTrue(
+                any(
+                    step["operation"] == "StandardScaler"
+                    for step in preprocessing["structured_details"]["steps"]
+                )
+            )
+            self.assertTrue(
+                any(
+                    item["name"] == "FamilySize"
+                    for item in features["structured_details"]["derived_features"]
+                )
+            )
             self.assertFalse(augmentation["included"])
             browse = root / "runs" / "demo" / "trial_001"
             self.assertTrue((browse / "README.ko.md").exists())
@@ -122,11 +136,14 @@ class TrialArtifactsTest(unittest.TestCase):
             user_plan = (browse / "01_plan.ko.md").read_text(encoding="utf-8")
             user_structure = (browse / "02_pipeline_structure.ko.md").read_text(encoding="utf-8")
             self.assertIn("이번 실험의 핵심 선택", user_plan)
+            self.assertNotIn("평가: `cv_score`", user_plan)
             self.assertIn("| 단계 | 실제 적용 내용 | 확인 포인트 |", user_structure)
             self.assertIn("## 단계별 체크", user_structure)
             self.assertIn("StratifiedKFold", user_structure)
             self.assertIn("StandardScaler", user_structure)
             self.assertIn("LogisticRegression", user_structure)
+            self.assertIn("파생변수", user_structure)
+            self.assertNotIn("다음 개선축", user_structure)
             browse_paths = (browse / "05_paths.ko.md").read_text(encoding="utf-8")
             self.assertIn("원본 trial 기록", browse_paths)
 
@@ -243,6 +260,136 @@ class TrialArtifactsTest(unittest.TestCase):
             self.assertIn("is_alone", rendered)
             self.assertIn("src/titanic_random_forest_pipeline.joblib", rendered)
             self.assertNotIn("`id`, `target`", rendered)
+            preprocessing = by_id["preprocessing"]["structured_details"]
+            features = by_id["feature_representation"]["structured_details"]
+            split = by_id["data_split_cv"]["structured_details"]
+            model = by_id["model_definition"]["structured_details"]
+            self.assertEqual(
+                ["Pclass", "Age", "SibSp", "Parch", "Fare", "Sex", "Embarked", "Name"],
+                preprocessing["raw_feature_columns"],
+            )
+            self.assertTrue(any(step["operation"] == "OneHotEncoder" for step in preprocessing["steps"]))
+            self.assertTrue(any(item["name"] == "family_size" for item in features["derived_features"]))
+            self.assertEqual("holdout_train_test_split", split["method"])
+            self.assertEqual("0.2", split["test_size"])
+            self.assertEqual("RandomForestClassifier", model["estimator"])
+            self.assertEqual("300", model["parameters"]["n_estimators"])
+
+    def test_pipeline_structure_prefers_runtime_feature_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trial = root / "experiments" / "demo" / "trial_001"
+            trial.mkdir(parents=True)
+            project = root / "workspace"
+            (project / "src").mkdir(parents=True)
+            (project / "workspace_config.json").write_text(
+                json.dumps(
+                    {
+                        "target_column": "Survived",
+                        "id_column": "PassengerId",
+                        "required_data_files": ["train.csv", "test.csv"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (project / "src" / "baseline.py").write_text(
+                "\n".join(
+                    [
+                        "import pickle",
+                        "from pathlib import Path",
+                        "from sklearn.impute import SimpleImputer",
+                        "from sklearn.linear_model import LogisticRegression",
+                        "from sklearn.model_selection import train_test_split",
+                        "from sklearn.preprocessing import OneHotEncoder, StandardScaler",
+                        "OUTPUTS_DIR = Path('outputs')",
+                        "MODEL_PATH = OUTPUTS_DIR / 'model.pkl'",
+                        "NUMERIC_FEATURE_CANDIDATES = ['Pclass', 'Age', 'SibSp', 'Parch', 'Fare', 'FamilySize', 'IsAlone']",
+                        "CATEGORICAL_FEATURE_CANDIDATES = ['Sex', 'Embarked']",
+                        "SimpleImputer(strategy='median')",
+                        "SimpleImputer(strategy='most_frequent')",
+                        "StandardScaler()",
+                        "OneHotEncoder(handle_unknown='ignore')",
+                        "train_test_split(X, y, test_size=0.2, random_state=42, stratify=y, shuffle=True)",
+                        "model = LogisticRegression(max_iter=1000, solver='liblinear', random_state=42)",
+                        "pickle.dump({'pipeline': model}, open(MODEL_PATH, 'wb'))",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            comp = root / "competitions" / "demo"
+            comp.mkdir(parents=True)
+            simple_yaml.dump({"project_root": str(project)}, comp / "execution_profile.yaml")
+            (trial / "metrics.json").write_text(
+                json.dumps(
+                    {
+                        "cv_score": 0.8,
+                        "validation_accuracy": 0.8,
+                        "metric": "accuracy",
+                        "objective": "maximize",
+                        "model_type": "logistic_regression",
+                        "features": [
+                            "Pclass",
+                            "Age",
+                            "SibSp",
+                            "Parch",
+                            "Fare",
+                            "FamilySize",
+                            "IsAlone",
+                            "Sex",
+                            "Embarked",
+                        ],
+                        "numeric_features": [
+                            "Pclass",
+                            "Age",
+                            "SibSp",
+                            "Parch",
+                            "Fare",
+                            "FamilySize",
+                            "IsAlone",
+                        ],
+                        "categorical_features": ["Sex", "Embarked"],
+                        "preprocessing": {
+                            "numeric_imputation": "median",
+                            "categorical_imputation": "most_frequent",
+                            "categorical_encoding": "one_hot_handle_unknown_ignore",
+                            "numeric_scaling": "standard_scaler",
+                        },
+                        "split_strategy": "deterministic_stratified_split",
+                        "random_state": 42,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (trial / "metrics_collection.json").write_text(json.dumps({"status": "collected"}), encoding="utf-8")
+            (trial / "workspace_run.json").write_text(json.dumps({"status": "completed"}), encoding="utf-8")
+            (trial / "workspace_coding_result.json").write_text(
+                json.dumps({"changed_files": ["src/baseline.py"]}),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                organize_trial_artifacts("demo", "trial_001")
+
+            structure = json.loads((trial / "internal" / "pipeline_structure.json").read_text(encoding="utf-8"))
+            by_id = {stage["id"]: stage for stage in structure["stages"]}
+            preprocessing = by_id["preprocessing"]["structured_details"]
+            split = by_id["data_split_cv"]["structured_details"]
+            checkpoint = by_id["model_checkpoint"]["structured_details"]
+            user_structure = (root / "runs" / "demo" / "trial_001" / "02_pipeline_structure.ko.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertEqual(
+                ["Pclass", "Age", "SibSp", "Parch", "Fare", "FamilySize", "IsAlone"],
+                preprocessing["numeric_features"],
+            )
+            self.assertEqual(["Sex", "Embarked"], preprocessing["categorical_features"])
+            self.assertTrue(any(step["columns"] for step in preprocessing["steps"]))
+            self.assertEqual("deterministic_stratified_split", split["split_strategy"])
+            self.assertEqual("pickle.dump", checkpoint["writer"])
+            self.assertEqual("outputs/model.pkl", checkpoint["checkpoint_path"])
+            self.assertIn("Pclass", user_structure)
+            self.assertIn("Sex", user_structure)
+            self.assertIn("pickle", json.dumps(checkpoint))
 
 
 if __name__ == "__main__":

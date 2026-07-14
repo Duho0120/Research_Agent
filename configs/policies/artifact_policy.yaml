@@ -1,0 +1,20 @@
+save_submission: true
+save_metrics: true
+save_code_snapshot: true
+save_pipeline_summary: true
+save_model:
+  default: false
+  allowed_when:
+    - required_for_separate_predict_command
+    - best_trial
+    - submitted_trial
+    - expensive_to_retrain
+    - ensemble_candidate
+    - user_requested
+  require_reason: true
+  prefer_small_serialized_artifact: true
+  cleanup_non_best_models: true
+notes:
+  - A trial should not persist trained model artifacts by default.
+  - Submission, metrics, code snapshot, and pipeline summary are the primary memory artifacts.
+  - If a model artifact is persisted, the plan/code should record why it is needed.

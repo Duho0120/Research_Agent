@@ -48,7 +48,7 @@ def render_user_readme(summary: dict[str, Any]) -> str:
 
 
 def render_user_plan(out_dir: Path, summary: dict[str, Any]) -> str:
-    choices = _implemented_choice_lines(out_dir)
+    choices = _planned_choice_lines(out_dir)
     objective = _compact_block(_read_markdown_section(out_dir / "demo_experiment_plan.md", "Objective"))
     rationale = _compact_block(_read_markdown_section(out_dir / "demo_experiment_plan.md", "Rationale"))
     notes = _compact_block(_read_markdown_section(out_dir / "demo_experiment_plan.md", "Implementation Notes"))
@@ -65,7 +65,7 @@ def render_user_plan(out_dir: Path, summary: dict[str, Any]) -> str:
         "## 이번 실험의 핵심 선택",
         "",
     ]
-    lines.extend(f"- {item}" for item in choices or ["아직 코드에서 핵심 선택을 추출하지 못했습니다."])
+    lines.extend(f"- {item}" for item in choices or ["계획서에서 핵심 선택을 추출하지 못했습니다."])
     if objective:
         lines.extend(["", "## LLM 계획 요약", "", f"- {objective}"])
     if rationale:
@@ -77,9 +77,9 @@ def render_user_plan(out_dir: Path, summary: dict[str, Any]) -> str:
             "",
             "## 다음 확인",
             "",
-            "- `02_pipeline_structure.ko.md`: 실제 적용된 split, 전처리, 피처, 모델",
-            "- `03_code_pipeline.ko.md`: 생성/수정된 코드 파일",
-            "- `04_result.ko.md`: 실행 결과와 점수",
+            "- `02_pipeline_structure.ko.md`: 이번 계획이 실제 코드에 어떻게 적용됐는지 확인",
+            "- `03_code_pipeline.ko.md`: 생성/수정된 코드 파일 확인",
+            "- `04_result.ko.md`: 실행 결과와 점수 확인",
             "",
         ]
     )
@@ -115,6 +115,7 @@ def render_user_pipeline_structure(out_dir: Path, summary: dict[str, Any]) -> st
 
     lines.extend(["", "## 단계별 체크", ""])
     for index, stage in enumerate(included_stages, 1):
+        detail_lines = _stage_detail_lines(stage)
         lines.extend(
             [
                 f"### {index}. {_stage_display_name(stage)}",
@@ -123,12 +124,10 @@ def render_user_pipeline_structure(out_dir: Path, summary: dict[str, Any]) -> st
                 f"- 적용: {_join_short(stage.get('actual_applied', []), limit=4)}",
             ]
         )
+        lines.extend(f"- {item}" for item in detail_lines)
         locations = stage.get("code_locations", [])
         if locations:
             lines.append(f"- 코드: {_join_code_locations(locations, limit=3)}")
-        handles = stage.get("improvement_handles", [])
-        if handles:
-            lines.append(f"- 다음 개선축: {_join_short(handles, limit=3)}")
         lines.append("")
 
     lines.extend(
@@ -267,23 +266,39 @@ def render_browse_paths(
     return "\n".join(lines)
 
 
-def _implemented_choice_lines(out_dir: Path) -> list[str]:
-    structure = _read_json(out_dir / "internal" / "pipeline_structure.json")
-    stages = structure.get("stages", []) if isinstance(structure, dict) else []
-    focus_ids = {
-        "data_split_cv": "검증",
-        "preprocessing": "전처리",
-        "feature_representation": "피처",
-        "model_definition": "모델",
-        "evaluation": "평가",
-        "test_inference_output": "출력",
-    }
+def _planned_choice_lines(out_dir: Path) -> list[str]:
+    notes = _read_markdown_section(out_dir / "demo_experiment_plan.md", "Implementation Notes")
     lines: list[str] = []
-    for stage in stages:
-        label = focus_ids.get(stage.get("id"))
-        actual = stage.get("actual_applied") or []
-        if label and actual:
-            lines.append(f"{label}: {_shorten(actual[0], 130)}")
+    for raw_line in notes.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("- "):
+            continue
+        item = line[2:].strip()
+        lowered = item.lower()
+        if any(
+            keyword in lowered
+            for keyword in [
+                "implement one end-to-end",
+                "implement a single pipeline",
+                "create basic",
+                "use core",
+                "handle missing",
+                "encode categorical",
+                "train a single",
+                "train one",
+                "single deterministic",
+                "deterministic train/validation",
+                "use a deterministic",
+                "report validation",
+                "write outputs/metrics",
+                "write outputs/submission",
+                "make predict_step",
+                "make test_step",
+                "keep changes",
+                "do not add",
+            ]
+        ):
+            lines.append(_shorten(item, 160))
     return lines
 
 
@@ -297,14 +312,150 @@ def _stage_display_name(stage: dict[str, Any]) -> str:
         "data_augmentation": "증강",
         "dataset_dataloader": "Dataset/DataLoader",
         "model_definition": "모델",
-        "loss_function": "손실/목표",
+        "loss_objective": "손실/목표",
         "training": "학습",
         "training_curve": "학습 곡선",
         "evaluation": "평가",
-        "model_save_checkpoint": "저장",
+        "model_checkpoint": "저장",
         "test_inference_output": "추론/출력",
     }
     return names.get(str(stage.get("id")), str(stage.get("name") or stage.get("id") or "unknown"))
+
+
+def _stage_detail_lines(stage: dict[str, Any]) -> list[str]:
+    details = stage.get("structured_details")
+    if not isinstance(details, dict) or not details:
+        return []
+    stage_id = str(stage.get("id"))
+    if stage_id == "data_load":
+        parts = []
+        if details.get("target_column"):
+            parts.append(f"타깃 `{details['target_column']}`")
+        if details.get("id_column"):
+            parts.append(f"ID `{details['id_column']}`")
+        files = details.get("required_files") or []
+        if files:
+            parts.append(f"필수 파일 {_inline_list(files, 4)}")
+        return [f"세부: {', '.join(parts)}"] if parts else []
+    if stage_id == "preprocessing":
+        lines = []
+        raw = details.get("raw_feature_columns") or []
+        numeric = details.get("numeric_features") or []
+        categorical = details.get("categorical_features") or []
+        if raw:
+            lines.append(f"입력 컬럼: {_inline_list(raw, 10)}")
+        if numeric or categorical:
+            lines.append(f"피처 그룹: 수치형 {_inline_list(numeric, 8)} / 범주형 {_inline_list(categorical, 8)}")
+        steps = _format_preprocessing_steps(details.get("steps") or [])
+        if steps:
+            lines.append(f"처리 방식: {steps}")
+        return lines
+    if stage_id == "feature_representation":
+        lines = []
+        derived = _format_derived_features(details.get("derived_features") or [])
+        if derived:
+            lines.append(f"파생변수: {derived}")
+        final_features = details.get("final_feature_columns") or []
+        if final_features:
+            lines.append(f"최종 피처: {_inline_list(final_features, 12)}")
+        return lines
+    if stage_id == "data_split_cv":
+        parts = []
+        for key, label in [
+            ("method", "방식"),
+            ("split_strategy", "전략"),
+            ("test_size", "검증 비율"),
+            ("n_splits", "fold"),
+            ("random_state", "seed"),
+        ]:
+            if details.get(key) is not None:
+                parts.append(f"{label} `{details[key]}`")
+        if details.get("stratify"):
+            parts.append("stratify 사용")
+        return [f"세부: {', '.join(parts)}"] if parts else []
+    if stage_id == "model_definition":
+        estimator = details.get("estimator")
+        params = _format_params(details.get("parameters") or {})
+        if estimator and params:
+            return [f"모델 설정: `{estimator}` ({params})"]
+        if estimator:
+            return [f"모델 설정: `{estimator}`"]
+        return []
+    if stage_id == "loss_objective":
+        metric = details.get("metric")
+        objective = details.get("objective")
+        if metric:
+            return [f"평가 기준: `{metric}` / `{objective or '-'}`"]
+        return []
+    if stage_id == "training":
+        parts = []
+        if details.get("train_rows") is not None:
+            parts.append(f"학습 rows `{details['train_rows']}`")
+        if details.get("validation_rows") is not None:
+            parts.append(f"검증 rows `{details['validation_rows']}`")
+        if details.get("checkpoint_path"):
+            parts.append(f"저장 `{details['checkpoint_path']}`")
+        return [f"세부: {', '.join(parts)}"] if parts else []
+    if stage_id == "evaluation":
+        parts = []
+        for key in ["cv_score", "validation_accuracy"]:
+            if details.get(key) is not None:
+                parts.append(f"{key} `{details[key]}`")
+        return [f"점수: {', '.join(parts)}"] if parts else []
+    if stage_id == "model_checkpoint" and details.get("checkpoint_path"):
+        return [f"저장 위치: `{details['checkpoint_path']}`"]
+    if stage_id == "test_inference_output":
+        parts = []
+        if details.get("submission_path"):
+            parts.append(f"파일 `{details['submission_path']}`")
+        if details.get("id_column") and details.get("prediction_column"):
+            parts.append(f"컬럼 `{details['id_column']}`, `{details['prediction_column']}`")
+        post = details.get("postprocessing") or []
+        if post:
+            parts.append(f"후처리 {_inline_list(post, 3)}")
+        return [f"출력: {', '.join(parts)}"] if parts else []
+    return []
+
+
+def _format_preprocessing_steps(steps: list[Any]) -> str:
+    formatted: list[str] = []
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        operation = step.get("operation")
+        applies_to = step.get("applies_to")
+        params = _format_params(step.get("parameters") or {})
+        suffix = f"({params})" if params else ""
+        formatted.append(f"`{operation}{suffix}` -> {applies_to}")
+    return "; ".join(formatted)
+
+
+def _format_derived_features(features: list[Any]) -> str:
+    formatted: list[str] = []
+    for feature in features:
+        if not isinstance(feature, dict):
+            continue
+        name = feature.get("name")
+        formula = feature.get("formula")
+        if name and formula:
+            formatted.append(f"`{name} = {formula}`")
+        elif name:
+            formatted.append(f"`{name}`")
+    return "; ".join(formatted)
+
+
+def _format_params(params: dict[str, Any]) -> str:
+    return ", ".join(f"{key}={value}" for key, value in params.items())
+
+
+def _inline_list(items: Iterable[Any], limit: int) -> str:
+    values = [f"`{item}`" for item in items if item is not None and item != ""]
+    if not values:
+        return "`-`"
+    shown = values[:limit]
+    if len(values) > limit:
+        shown.append(f"외 {len(values) - limit}개")
+    return ", ".join(shown)
 
 
 def _read_json(path: Path) -> dict[str, Any]:

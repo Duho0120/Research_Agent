@@ -54,6 +54,9 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
             trial = root / "experiments" / "demo" / "trial_002"
             self.assertEqual("accepted", result["status"])
             self.assertEqual(1, len(client.calls))
+            prompt = client.calls[0]["input"][1]["content"]
+            self.assertIn("Artifact policy", prompt)
+            self.assertIn("Do not persist trained model/checkpoint artifacts by default", prompt)
             self.assertEqual("FEATURE_FLAG = True\n", (project / "src" / "model.py").read_text(encoding="utf-8"))
             self.assertTrue((trial / "workspace_coding_api_request.json").exists())
             self.assertTrue((trial / "workspace_coding_api_response.json").exists())
@@ -261,6 +264,13 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                     "allowed_write_paths": ["src/", "tests/", "train.py"],
                     "forbidden_paths": ["data/", "outputs/metrics.json", "outputs/submission.csv"],
                     "validation_commands": ["{python} -m pytest tests -q"],
+                    "artifact_policy": {
+                        "save_model": {
+                            "default": False,
+                            "allowed_when": ["required_for_separate_predict_command"],
+                            "require_reason": True,
+                        }
+                    },
                     "required_output": {
                         "required_fields": [
                             "status",

@@ -825,6 +825,7 @@ def load_demo_context(competition: str, trial_id: str) -> dict[str, Any]:
         "artifacts": profile.get("artifacts", {}),
         "write_scope": profile.get("write_scope", {}),
         "metrics_contract": profile.get("metrics_contract", {}),
+        "artifact_policy": load_policy("artifact_policy"),
         "inventory_summary": _inventory_summary(inventory),
         "competition_docs": competition_docs,
         "recent_trials": recent_trials,
@@ -959,6 +960,9 @@ def build_demo_plan_payload(context: dict[str, Any], *, model: str) -> dict[str,
                     [
                         "Create exactly one first-cycle experiment plan for this ML workspace.",
                         "Do not include leaderboard submission, human review, ensembling, or multi-trial axis switching.",
+                        "Model/checkpoint artifacts are optional. Follow artifact_policy: do not persist a trained model by default.",
+                        "If a model artifact is needed, justify it using an allowed_when reason such as required_for_separate_predict_command.",
+                        "Always preserve metrics, submission output, code snapshot, and pipeline summary as the primary trial memory.",
                         "Return JSON with plan_title, objective, rationale, implementation_notes, expected_outputs.",
                         "",
                         json.dumps(context, ensure_ascii=False, indent=2),
@@ -1060,6 +1064,20 @@ def render_demo_context(context: dict[str, Any]) -> str:
     lines.extend(["", "## Artifacts", ""])
     for kind, values in context.get("artifacts", {}).items():
         lines.extend(f"- {kind}: {value}" for value in values)
+    artifact_policy = context.get("artifact_policy", {})
+    if artifact_policy:
+        lines.extend(
+            [
+                "",
+                "## Artifact Policy",
+                "",
+                "- trained model default save: "
+                + str(artifact_policy.get("save_model", {}).get("default"))
+                if isinstance(artifact_policy.get("save_model"), dict)
+                else "- trained model default save: unknown",
+                "- primary memory: metrics, submission, code snapshot, pipeline summary",
+            ]
+        )
     lines.extend(["", "## Competition Documents", ""])
     competition_docs = context.get("competition_docs", {})
     if competition_docs:
