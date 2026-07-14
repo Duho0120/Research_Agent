@@ -57,6 +57,8 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
             prompt = client.calls[0]["input"][1]["content"]
             self.assertIn("Artifact policy", prompt)
             self.assertIn("Do not persist trained model/checkpoint artifacts by default", prompt)
+            self.assertIn("Use the RAG context pack", prompt)
+            self.assertIn("context_pack_workspace_code_writing.md", prompt)
             self.assertEqual("FEATURE_FLAG = True\n", (project / "src" / "model.py").read_text(encoding="utf-8"))
             self.assertTrue((trial / "workspace_coding_api_request.json").exists())
             self.assertTrue((trial / "workspace_coding_api_response.json").exists())
@@ -261,6 +263,12 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                     "objective": "Implement the next workspace experiment.",
                     "project_root": str(project),
                     "context_files": ["experiments/demo/trial_002/next_experiment.md"],
+                    "retrieval_context": {
+                        "task": "workspace_code_writing",
+                        "document_count": 1,
+                        "context_pack_md_file": "experiments/demo/trial_002/context_pack_workspace_code_writing.md",
+                        "retrieval_manifest_file": "experiments/demo/trial_002/retrieval_manifest_workspace_code_writing.json",
+                    },
                     "allowed_write_paths": ["src/", "tests/", "train.py"],
                     "forbidden_paths": ["data/", "outputs/metrics.json", "outputs/submission.csv"],
                     "validation_commands": ["{python} -m pytest tests -q"],

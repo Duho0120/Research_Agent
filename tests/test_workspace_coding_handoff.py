@@ -40,7 +40,12 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             self.assertTrue(result["pending_human_review"])
             self.assertIn("experiments/demo/trial_002/next_experiment.md", result["context_files"])
             self.assertIn("experiments/demo/trial_002/workspace_context_snapshot.md", result["context_files"])
+            self.assertIn("experiments/demo/trial_002/context_pack_workspace_code_writing.md", result["context_files"])
+            self.assertIn("experiments/demo/trial_002/retrieval_manifest_workspace_code_writing.json", result["context_files"])
+            self.assertEqual("workspace_code_writing", result["retrieval_context"]["task"])
             self.assertTrue((trial / "workspace_coding_handoff.json").exists())
+            self.assertTrue((trial / "context_pack_workspace_code_writing.json").exists())
+            self.assertTrue((trial / "retrieval_manifest_workspace_code_writing.json").exists())
             snapshot = trial / "workspace_context_snapshot.md"
             self.assertTrue(snapshot.exists())
             snapshot_text = snapshot.read_text(encoding="utf-8")
@@ -60,6 +65,7 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             self.assertIn("cv_score", text)
             self.assertIn("Artifact Policy", text)
             self.assertIn("Do not persist trained model", text)
+            self.assertIn("RAG Context Pack", text)
             log = root / "memory" / "demo" / "decision_log.jsonl"
             last = json.loads(log.read_text(encoding="utf-8").splitlines()[-1])
             self.assertEqual("workspace_coding_handoff", last["decision_type"])

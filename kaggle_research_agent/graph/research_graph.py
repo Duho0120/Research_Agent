@@ -23,6 +23,7 @@ from .nodes import (
     validate_config_node,
     wait_node,
 )
+from .events import wrap_graph_node
 from .state import ResearchGraphState
 
 
@@ -33,20 +34,20 @@ def build_research_graph():
         raise RuntimeError("LangGraph is not installed. Install `langgraph` to use run-graph-cycle.") from exc
 
     graph = StateGraph(ResearchGraphState)
-    graph.add_node("plan_trial", plan_trial_node)
-    graph.add_node("validate_config", validate_config_node)
-    graph.add_node("check_metrics", check_metrics_node)
-    graph.add_node("evaluate", evaluate_node)
-    graph.add_node("diagnose", diagnose_node)
-    graph.add_node("remember", remember_node)
-    graph.add_node("plan_next", plan_next_node)
-    graph.add_node("decide_execution", decide_execution_node)
-    graph.add_node("safe_chain", safe_execution_chain_node)
-    graph.add_node("ask_user", ask_user_node)
-    graph.add_node("wait", wait_node)
-    graph.add_node("run_local", run_local_node)
-    graph.add_node("create_job", create_job_node)
-    graph.add_node("finalize", finalize_node)
+    graph.add_node("plan_trial", wrap_graph_node("plan_trial", plan_trial_node))
+    graph.add_node("validate_config", wrap_graph_node("validate_config", validate_config_node))
+    graph.add_node("check_metrics", wrap_graph_node("check_metrics", check_metrics_node))
+    graph.add_node("evaluate", wrap_graph_node("evaluate", evaluate_node))
+    graph.add_node("diagnose", wrap_graph_node("diagnose", diagnose_node))
+    graph.add_node("remember", wrap_graph_node("remember", remember_node))
+    graph.add_node("plan_next", wrap_graph_node("plan_next", plan_next_node))
+    graph.add_node("decide_execution", wrap_graph_node("decide_execution", decide_execution_node))
+    graph.add_node("safe_chain", wrap_graph_node("safe_chain", safe_execution_chain_node))
+    graph.add_node("ask_user", wrap_graph_node("ask_user", ask_user_node))
+    graph.add_node("wait", wrap_graph_node("wait", wait_node))
+    graph.add_node("run_local", wrap_graph_node("run_local", run_local_node))
+    graph.add_node("create_job", wrap_graph_node("create_job", create_job_node))
+    graph.add_node("finalize", wrap_graph_node("finalize", finalize_node))
 
     graph.add_edge(START, "plan_trial")
     graph.add_edge("plan_trial", "validate_config")

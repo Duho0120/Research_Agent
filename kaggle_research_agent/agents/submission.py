@@ -327,6 +327,9 @@ def submit_trial(
     if submit_result.get("leaderboard_result", {}).get("status") == "found":
         leaderboard = submit_result["leaderboard_result"]
         after = {"score": leaderboard.get("score"), "rank": leaderboard.get("rank"), "poll_result": leaderboard}
+    elif submit_result.get("submission_result", {}).get("public_score") is not None:
+        submission_result = submit_result["submission_result"]
+        after = {"score": submission_result.get("public_score"), "rank": None, "submission_result": submission_result}
     else:
         after = _leaderboard_state(after_command, after_score, after_rank)
 
@@ -453,6 +456,21 @@ def _run_kaggle_submission(
             "submit": submit,
         }
     if not poll_leaderboard:
+        submissions = kaggle_cli.fetch_submissions(
+            competition_slug=competition_slug,
+            cwd=root,
+            page_size=5,
+            runner=command_runner,
+        )
+        latest_submission = (
+            kaggle_cli.latest_completed_submission(
+                submissions.get("stdout", ""),
+                description=message,
+                file_name=Path(submission_file).name,
+            )
+            if submissions["ok"]
+            else None
+        )
         return {
             "status": "submitted_without_polling",
             "returncode": 0,
@@ -461,6 +479,8 @@ def _run_kaggle_submission(
             "cli_check": cli_check,
             "auth_check": auth_check,
             "submit": submit,
+            "submissions": submissions,
+            "submission_result": latest_submission or {},
         }
     if not team_name:
         return {

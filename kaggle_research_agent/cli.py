@@ -28,6 +28,10 @@ from .agents.safe_execution_chain import run_safe_execution_chain
 from .agents.submission import prepare_submission, record_submission_result, submit_trial
 from .agents.validation_command_runner import run_validation_commands
 from .graph.research_graph import run_graph_cycle
+from .graph.demo_cycle_graph import run_demo_graph_cycle
+from .graph.demo_auto_loop import run_demo_graph_auto_loop
+from .retrieval.index_builder import build_document_index
+from .retrieval.retriever import retrieve_documents
 from .paths import competition_configs_dir, configs_dir, trial_dir
 from .store import init_project
 from .workspace_preparer import prepare_workspace
@@ -170,6 +174,32 @@ def main(argv: list[str] | None = None) -> int:
     p_demo_one_cycle.add_argument("--strategy-calls-today", type=int, default=None)
     p_demo_one_cycle.add_argument("--show-progress", action="store_true")
 
+    p_demo_graph_cycle = sub.add_parser("demo-graph-cycle")
+    p_demo_graph_cycle.add_argument("--competition", required=True)
+    p_demo_graph_cycle.add_argument("--trial", default="trial_001")
+    p_demo_graph_cycle.add_argument("--model", default="gpt-5.5")
+    p_demo_graph_cycle.add_argument("--provider", choices=["openai", "anthropic"], default="openai")
+    p_demo_graph_cycle.add_argument("--allow-api", action="store_true")
+    p_demo_graph_cycle.add_argument("--mock-plan-file", default=None)
+    p_demo_graph_cycle.add_argument("--mock-response-file", default=None)
+    p_demo_graph_cycle.add_argument("--run-now", action="store_true")
+    p_demo_graph_cycle.add_argument("--trial-llm-calls", type=int, default=None)
+    p_demo_graph_cycle.add_argument("--strategy-calls-today", type=int, default=None)
+
+    p_demo_graph_auto_loop = sub.add_parser("demo-graph-auto-loop")
+    p_demo_graph_auto_loop.add_argument("--competition", required=True)
+    p_demo_graph_auto_loop.add_argument("--start-trial", default="trial_001")
+    p_demo_graph_auto_loop.add_argument("--max-trials", type=int, default=3)
+    p_demo_graph_auto_loop.add_argument("--stop-no-improvement", type=int, default=3)
+    p_demo_graph_auto_loop.add_argument("--model", default="gpt-5.5")
+    p_demo_graph_auto_loop.add_argument("--provider", choices=["openai", "anthropic"], default="openai")
+    p_demo_graph_auto_loop.add_argument("--allow-api", action="store_true")
+    p_demo_graph_auto_loop.add_argument("--mock-plan-file", default=None)
+    p_demo_graph_auto_loop.add_argument("--mock-response-file", default=None)
+    p_demo_graph_auto_loop.add_argument("--run-now", action="store_true")
+    p_demo_graph_auto_loop.add_argument("--trial-llm-calls", type=int, default=None)
+    p_demo_graph_auto_loop.add_argument("--strategy-calls-today", type=int, default=None)
+
     p_watch_demo_cycle = sub.add_parser("watch-demo-cycle")
     p_watch_demo_cycle.add_argument("--competition", required=True)
     p_watch_demo_cycle.add_argument("--trial", default="trial_001")
@@ -209,6 +239,14 @@ def main(argv: list[str] | None = None) -> int:
     p_graph_cycle.add_argument("--mock-response-file", default=None)
     p_graph_cycle.add_argument("--safe-chain-model", default="gpt-5")
     p_graph_cycle.add_argument("--safe-chain-allow-api", action="store_true")
+
+    p_build_retrieval_index = sub.add_parser("build-retrieval-index")
+    p_build_retrieval_index.add_argument("--competition", required=True)
+
+    p_retrieve_documents = sub.add_parser("retrieve-documents")
+    p_retrieve_documents.add_argument("--competition", required=True)
+    p_retrieve_documents.add_argument("--query", required=True)
+    p_retrieve_documents.add_argument("--limit", type=int, default=5)
 
     p_auto = sub.add_parser("run-auto-loop")
     p_auto.add_argument("--competition", required=True)
@@ -545,6 +583,46 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0 if status.get("status") not in {"blocked", "failed", "invalid"} else 1
 
+    if args.command == "demo-graph-cycle":
+        result = run_demo_graph_cycle(
+            args.competition,
+            args.trial,
+            model=args.model,
+            provider=args.provider,
+            allow_api=args.allow_api,
+            mock_plan_file=args.mock_plan_file,
+            mock_response_file=args.mock_response_file,
+            run_now=args.run_now,
+            trial_llm_calls=args.trial_llm_calls,
+            strategy_calls_today=args.strategy_calls_today,
+        )
+        print(render_demo_cycle_cli_summary(result))
+        return 0 if result["status"] in {"planned", "completed"} else 1
+
+    if args.command == "demo-graph-auto-loop":
+        result = run_demo_graph_auto_loop(
+            args.competition,
+            start_trial_id=args.start_trial,
+            max_trials=args.max_trials,
+            stop_no_improvement=args.stop_no_improvement,
+            model=args.model,
+            provider=args.provider,
+            allow_api=args.allow_api,
+            mock_plan_file=args.mock_plan_file,
+            mock_response_file=args.mock_response_file,
+            run_now=args.run_now,
+            trial_llm_calls=args.trial_llm_calls,
+            strategy_calls_today=args.strategy_calls_today,
+        )
+        print(
+            f"Demo graph auto loop: {result['competition']} "
+            f"status={result['status']} trials={len(result['trials'])}"
+        )
+        best = result.get("best_trial") or {}
+        if best:
+            print(f"Best trial: {best.get('trial_id')} score={best.get('local_score')}")
+        return 0 if result["status"] in {"completed", "stopped_no_improvement"} else 1
+
     if args.command == "demo-guide":
         return run_demo_guide()
 
@@ -592,6 +670,19 @@ def main(argv: list[str] | None = None) -> int:
         if result.get("config_errors"):
             print("\n".join(result["config_errors"]))
             return 1
+        return 0
+
+    if args.command == "build-retrieval-index":
+        result = build_document_index(args.competition)
+        print(f"Retrieval index: {args.competition} documents={result['document_count']}")
+        print(result["index_file"])
+        return 0
+
+    if args.command == "retrieve-documents":
+        result = retrieve_documents(args.competition, args.query, limit=args.limit)
+        print(f"Retrieved documents: {result['competition']} results={result['result_count']}")
+        for item in result["results"]:
+            print(f"- score={item['score']} kind={item['source_kind']} path={item['source_path']}")
         return 0
 
     if args.command == "run-auto-loop":

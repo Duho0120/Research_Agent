@@ -20,6 +20,11 @@ class ResearchGraphState(TypedDict, total=False):
     safe_chain_model: str
     steps: list[str]
     status: str
+    current_node: str
+    last_completed_node: str
+    failed_node: str
+    graph_state_file: str
+    node_events_file: str
     plan: dict[str, Any]
     config_errors: list[str]
     metrics_exists: bool

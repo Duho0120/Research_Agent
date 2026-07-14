@@ -103,6 +103,42 @@ class PipelinePlannerTest(unittest.TestCase):
             self.assertIn("pretraining_strategy", plan["secondary_axes"])
             self.assertIn("model family", " ".join(plan["candidate_actions"]))
 
+    def test_uses_latest_submission_score_when_metrics_have_no_lb_score(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            comp = root / "competitions" / "demo"
+            comp.mkdir(parents=True)
+            (comp / "state.yaml").write_text(
+                "competition:\n  objective: maximize\ncurrent_state:\n  consecutive_failures: 0\n",
+                encoding="utf-8",
+            )
+            trial = root / "experiments" / "demo" / "trial_001"
+            trial.mkdir(parents=True)
+            (trial / "metrics.json").write_text(
+                json.dumps({"cv_score": 0.83, "objective": "maximize"}),
+                encoding="utf-8",
+            )
+            submissions = root / "submissions" / "demo"
+            submissions.mkdir(parents=True)
+            (submissions / "submission_log.jsonl").write_text(
+                json.dumps(
+                    {
+                        "trial_id": "trial_001",
+                        "submitted_lb_score": 0.77511,
+                        "submitted_rank": 1234,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                plan = plan_pipeline_improvement("demo", "trial_001")
+
+            self.assertEqual(plan["evidence_used"]["lb_score"], 0.77511)
+            self.assertEqual(plan["evidence_used"]["rank"], 1234)
+            self.assertEqual(plan["evidence_used"]["leaderboard_source"], "submission_log")
+
 
 if __name__ == "__main__":
     unittest.main()

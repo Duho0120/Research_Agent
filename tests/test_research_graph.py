@@ -76,6 +76,18 @@ class ResearchGraphTest(unittest.TestCase):
             self.assertIn("remembered", result["steps"])
             self.assertEqual("trial_001", result["memory"]["trial_id"])
             self.assertTrue((trial / "diagnosis.md").exists())
+            graph_state = json.loads((trial / "graph_state.json").read_text(encoding="utf-8"))
+            self.assertEqual("completed", graph_state["status"])
+            self.assertEqual("finalize", graph_state["last_completed_node"])
+            self.assertEqual("experiments/demo/trial_001/graph_state.json", result["graph_state_file"])
+            events = [
+                json.loads(line)
+                for line in (trial / "node_events.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual("plan_trial", events[0]["node"])
+            self.assertEqual("started", events[0]["event"])
+            self.assertEqual("finalize", events[-1]["node"])
+            self.assertEqual("completed", events[-1]["event"])
 
     def test_graph_cycle_creates_job_when_metrics_are_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -102,6 +114,10 @@ class ResearchGraphTest(unittest.TestCase):
             self.assertIn("execution_decided", result["steps"])
             self.assertIn("local_job_created", result["steps"])
             self.assertEqual("local", result["job"]["backend"])
+            graph_state = json.loads((trial / "graph_state.json").read_text(encoding="utf-8"))
+            self.assertEqual("waiting_for_metrics", graph_state["status"])
+            self.assertEqual("finalize", graph_state["last_completed_node"])
+            self.assertTrue((trial / "node_events.jsonl").exists())
 
     def test_graph_cycle_can_run_safe_execution_chain_when_requested(self):
         with tempfile.TemporaryDirectory() as tmp:

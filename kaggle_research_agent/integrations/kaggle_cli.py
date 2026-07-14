@@ -39,7 +39,7 @@ def check_cli_available(cwd: Path, runner: CommandRunner = run_args) -> dict[str
 
 
 def check_cli_auth(cwd: Path, runner: CommandRunner = run_args) -> dict[str, Any]:
-    args = ["kaggle", "config", "view"]
+    args = ["kaggle", "competitions", "list", "--page-size", "1"]
     return _structured_result("check_auth", args, runner(args, cwd))
 
 
@@ -61,6 +61,16 @@ def fetch_leaderboard(
 ) -> dict[str, Any]:
     args = build_leaderboard_args(competition_slug)
     return _structured_result("leaderboard", args, runner(args, cwd))
+
+
+def fetch_submissions(
+    competition_slug: str,
+    cwd: Path,
+    page_size: int = 5,
+    runner: CommandRunner = run_args,
+) -> dict[str, Any]:
+    args = build_submissions_args(competition_slug, page_size=page_size)
+    return _structured_result("submissions", args, runner(args, cwd))
 
 
 def fetch_competition_files(
@@ -116,6 +126,44 @@ def parse_leaderboard(text: str, team_name: str) -> dict[str, Any]:
     return {"status": "not_found", "team_name": team_name, "score": None, "rank": None}
 
 
+def parse_submissions(text: str) -> list[dict[str, Any]]:
+    stripped = text.strip()
+    if not stripped:
+        return []
+    rows: list[dict[str, Any]] = []
+    for row in csv.DictReader(stripped.splitlines()):
+        normalized = {str(key).strip().casefold(): value for key, value in row.items() if key is not None}
+        rows.append(
+            {
+                "ref": str(normalized.get("ref", "")).strip(),
+                "file_name": str(normalized.get("filename", "")).strip(),
+                "date": str(normalized.get("date", "")).strip(),
+                "description": str(normalized.get("description", "")).strip(),
+                "status": str(normalized.get("status", "")).strip(),
+                "public_score": _to_float(normalized.get("publicscore")),
+                "private_score": _to_float(normalized.get("privatescore")),
+            }
+        )
+    return rows
+
+
+def latest_completed_submission(
+    text: str,
+    *,
+    description: str | None = None,
+    file_name: str | None = None,
+) -> dict[str, Any] | None:
+    rows = parse_submissions(text)
+    if description:
+        rows = [row for row in rows if row.get("description") == description]
+    if file_name:
+        rows = [row for row in rows if row.get("file_name") == file_name]
+    for row in rows:
+        if "complete" in str(row.get("status", "")).casefold() and row.get("public_score") is not None:
+            return row
+    return rows[0] if rows else None
+
+
 def parse_competition_files(text: str) -> list[dict[str, Any]]:
     stripped = text.strip()
     if not stripped:
@@ -161,6 +209,10 @@ def build_submit_command(competition_slug: str, submission_file: str, message: s
 
 def build_leaderboard_args(competition_slug: str) -> list[str]:
     return ["kaggle", "competitions", "leaderboard", competition_slug, "--show"]
+
+
+def build_submissions_args(competition_slug: str, page_size: int = 5) -> list[str]:
+    return ["kaggle", "competitions", "submissions", competition_slug, "--csv", "--page-size", str(page_size)]
 
 
 def build_competition_files_args(competition_slug: str) -> list[str]:

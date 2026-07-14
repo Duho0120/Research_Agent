@@ -8,6 +8,7 @@ from .execution_profile import load_execution_profile, validate_execution_profil
 from .agents.memory import log_decision
 from .paths import trial_dir
 from .policies import load_policy
+from .retrieval.context_pack import build_context_pack
 from .store import read_text, write_text
 
 
@@ -88,8 +89,24 @@ def _build_handoff(
     metrics_path = metrics_paths[0] if metrics_paths else "outputs/metrics.json"
     context_files = _context_files(competition, trial_id)
     artifact_policy = load_policy("artifact_policy")
+    retrieval_context: dict[str, Any] = {}
     if status == "ready" and profile:
         context_files.extend(_write_workspace_context_snapshot(competition, trial_id, profile, continuation))
+        retrieval_context = build_context_pack(
+            competition,
+            trial_id,
+            task="workspace_code_writing",
+            query=(
+                "next experiment current project code previous trial metrics result pipeline structure "
+                "user pipeline structure workspace context snapshot validation allowed write files"
+            ),
+        )
+        context_files.extend(
+            [
+                retrieval_context["context_pack_md_file"],
+                retrieval_context["retrieval_manifest_file"],
+            ]
+        )
     return {
         "schema_version": "1.0",
         "request_id": f"{competition}:{trial_id}:workspace-coding",
@@ -104,6 +121,7 @@ def _build_handoff(
         "pending_human_review": bool(continuation.get("pending_human_review")),
         "review_source_trial": continuation.get("review_source_trial"),
         "context_files": context_files,
+        "retrieval_context": _compact_retrieval_context(retrieval_context),
         "allowed_write_paths": allowed,
         "forbidden_paths": forbidden,
         "validation_commands": validation_commands,
@@ -159,6 +177,19 @@ def render_workspace_coding_request(handoff: dict[str, Any], next_experiment: st
         "",
     ]
     lines.extend(f"- {item}" for item in handoff["context_files"] or ["None"])
+    retrieval_context = handoff.get("retrieval_context", {})
+    if retrieval_context:
+        lines.extend(
+            [
+                "",
+                "## RAG Context Pack",
+                "",
+                f"- task: {retrieval_context.get('task')}",
+                f"- documents: {retrieval_context.get('document_count')}",
+                f"- context_pack: `{retrieval_context.get('context_pack_md_file')}`",
+                f"- manifest: `{retrieval_context.get('retrieval_manifest_file')}`",
+            ]
+        )
     lines.extend(["", "## Allowed External Write Paths", ""])
     lines.extend(f"- {item}" for item in handoff["allowed_write_paths"] or ["None"])
     lines.extend(["", "## Forbidden External Paths", ""])
@@ -413,3 +444,25 @@ def _load_json_object(path: Path) -> dict[str, Any] | None:
 
 def _unique(items: list[str]) -> list[str]:
     return list(dict.fromkeys(items))
+
+
+def _compact_retrieval_context(context: dict[str, Any]) -> dict[str, Any]:
+    if not context:
+        return {}
+    return {
+        "task": context.get("task"),
+        "query": context.get("query"),
+        "document_count": context.get("document_count"),
+        "context_pack_file": context.get("context_pack_file"),
+        "context_pack_md_file": context.get("context_pack_md_file"),
+        "retrieval_manifest_file": context.get("retrieval_manifest_file"),
+        "documents": [
+            {
+                "source_path": doc.get("source_path"),
+                "source_kind": doc.get("source_kind"),
+                "trial_id": doc.get("trial_id"),
+                "score": doc.get("score"),
+            }
+            for doc in context.get("documents", [])
+        ],
+    }

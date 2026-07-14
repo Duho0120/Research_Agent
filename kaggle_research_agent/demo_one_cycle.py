@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import os
 import time
@@ -9,9 +10,11 @@ from typing import Any
 from .agents.code_writer_adapter import FileResponseClient, create_llm_client, provider_log_name
 from .agents.memory import log_decision, log_token_usage
 from .agents.policy_gate import log_llm_decision
+from .agents.submission import prepare_submission
 from .execution_profile import load_execution_profile, validate_execution_profile
 from .paths import competition_dir, competition_memory_dir, trial_dir
 from .policies import load_policy, select_model_for_call
+from .retrieval.context_pack import build_context_pack, context_pack_prompt_summary
 from .store import load_recent_trials, load_state, now_iso, read_text, write_text
 from .trial_artifacts import organize_trial_artifacts, trial_artifact_path
 from .workspace_code_writer import run_workspace_code_writer, validate_workspace_coding_result
@@ -42,6 +45,17 @@ def run_demo_one_cycle(
     reporter.start("F-01", "Loading problem context", 1, "Reading Execution Profile, state, inventory, and recent file memory.")
     context = load_demo_context(competition, trial_id)
     context["model_policy"] = model_policy
+    context["planning_context_pack"] = _compact_context_pack(
+        build_context_pack(
+            competition,
+            trial_id,
+            task="experiment_planning",
+            query=(
+                "competition overview metric data notes source materials execution profile "
+                "previous trial plan metrics pipeline structure result"
+            ),
+        )
+    )
     write_text(out_dir / "demo_context.json", json.dumps(context, ensure_ascii=False, indent=2) + "\n")
     write_text(out_dir / "demo_context.md", render_demo_context(context))
     if context["status"] != "ready":
@@ -230,8 +244,14 @@ def run_demo_one_cycle(
                     workspace_run=workspace_run,
                     metrics_collection=metrics_collection,
                 )
+                submission_manifest = prepare_demo_submission(
+                    competition,
+                    trial_id,
+                    record=record,
+                    notes="Demo cycle completed local execution. Submit only after user approval.",
+                )
                 status = "completed"
-                next_action = "inspect-demo-cycle-artifacts"
+                next_action = "review-submit-manifest"
                 reporter.complete(
                     "F-06",
                     f"Result recorded: local_score={record.get('local_score')}.",
@@ -272,10 +292,42 @@ def run_demo_one_cycle(
             "workspace_run": workspace_run,
             "metrics_collection": metrics_collection,
             "record": record,
+            "submission_manifest": locals().get("submission_manifest"),
             "issues": issues,
             "next_action": next_action,
         },
         reporter=reporter,
+    )
+
+
+def prepare_demo_submission(
+    competition: str,
+    trial_id: str,
+    *,
+    record: dict[str, Any] | None = None,
+    notes: str = "",
+) -> dict[str, Any]:
+    """Prepare a guarded submission manifest after local metrics are available."""
+
+    profile = load_execution_profile(competition)
+    project_root = Path(profile.get("project_root") or ".")
+    submission_relatives = profile.get("artifacts", {}).get("submission") or ["outputs/submission.csv"]
+    submission_relative = str(submission_relatives[0])
+    submission_file = project_root / submission_relative
+    objective = (
+        (record or {}).get("objective")
+        or profile.get("objective")
+        or load_state(competition).get("competition", {}).get("objective")
+        or "maximize"
+    )
+    version_name = f"{trial_id}_local_submission"
+    return prepare_submission(
+        competition=competition,
+        trial_id=trial_id,
+        version_name=version_name,
+        submission_file=str(submission_file),
+        objective=str(objective),
+        notes=notes,
     )
 
 
@@ -694,6 +746,9 @@ def render_demo_cycle_cli_summary(result: dict[str, Any]) -> str:
     record = result.get("record") if isinstance(result.get("record"), dict) else {}
     plan = result.get("plan") if isinstance(result.get("plan"), dict) else {}
     code_writer = result.get("code_writer") if isinstance(result.get("code_writer"), dict) else {}
+    submission_manifest = (
+        result.get("submission_manifest") if isinstance(result.get("submission_manifest"), dict) else {}
+    )
     metric = record.get("metric") or (result.get("context") or {}).get("metric")
     score = record.get("local_score")
     changed_files = code_writer.get("changed_files") if isinstance(code_writer, dict) else []
@@ -712,10 +767,16 @@ def render_demo_cycle_cli_summary(result: dict[str, Any]) -> str:
         lines.append(f"- 코드 변경: {len(changed_files)}개 파일 ({preview}{more})")
     if score is not None:
         lines.append(f"- 점수: {metric or 'score'} = {score}")
+    if submission_manifest:
+        lines.append(
+            "- 제출 준비: "
+            f"{submission_manifest.get('status')} "
+            f"({submission_manifest.get('submission_file')})"
+        )
     if status in {"completed", "planned"}:
         lines.append(f"- 확인 폴더: {user_view}")
     next_action = result.get("next_action")
-    if next_action and status not in {"completed", "planned"}:
+    if next_action:
         lines.append(f"- 다음 조치: {next_action}")
     return "\n".join(lines)
 
@@ -727,6 +788,7 @@ def _stage_name_ko(stage: str) -> str:
         "F-03": "파이프라인 코드 작성",
         "F-04": "로컬 실행",
         "F-06": "결과 저장",
+        "P-01": "제출 준비",
         "done": "1회 실험 종료",
     }.get(stage, stage or "-")
 
@@ -947,6 +1009,7 @@ def create_demo_experiment_plan(
 
 
 def build_demo_plan_payload(context: dict[str, Any], *, model: str) -> dict[str, Any]:
+    context_pack = context.get("planning_context_pack", {})
     return {
         "model": model,
         "input": [
@@ -964,6 +1027,14 @@ def build_demo_plan_payload(context: dict[str, Any], *, model: str) -> dict[str,
                         "If a model artifact is needed, justify it using an allowed_when reason such as required_for_separate_predict_command.",
                         "Always preserve metrics, submission output, code snapshot, and pipeline summary as the primary trial memory.",
                         "Return JSON with plan_title, objective, rationale, implementation_notes, expected_outputs.",
+                        "Use the RAG context pack as evidence. Prefer concrete details from retrieved documents over generic ML advice.",
+                        "Mention the applied data, split, preprocessing, model, and output assumptions when they are available in evidence.",
+                        "",
+                        "## RAG Context Pack",
+                        "",
+                        context_pack_prompt_summary(context_pack) if context_pack else "No RAG context pack available.",
+                        "",
+                        "## Structured Demo Context",
                         "",
                         json.dumps(context, ensure_ascii=False, indent=2),
                     ]
@@ -1078,6 +1149,19 @@ def render_demo_context(context: dict[str, Any]) -> str:
                 "- primary memory: metrics, submission, code snapshot, pipeline summary",
             ]
         )
+    context_pack = context.get("planning_context_pack", {})
+    if context_pack:
+        lines.extend(
+            [
+                "",
+                "## RAG Context Pack",
+                "",
+                f"- task: {context_pack.get('task')}",
+                f"- documents: {context_pack.get('document_count')}",
+                f"- context_pack: `{context_pack.get('context_pack_md_file')}`",
+                f"- manifest: `{context_pack.get('retrieval_manifest_file')}`",
+            ]
+        )
     lines.extend(["", "## Competition Documents", ""])
     competition_docs = context.get("competition_docs", {})
     if competition_docs:
@@ -1093,6 +1177,23 @@ def render_demo_context(context: dict[str, Any]) -> str:
         lines.append("- None")
     lines.append("")
     return "\n".join(lines)
+
+
+def _compact_context_pack(context_pack: dict[str, Any]) -> dict[str, Any]:
+    documents = []
+    for doc in context_pack.get("documents", []):
+        documents.append(
+            {
+                "source_path": doc.get("source_path"),
+                "source_kind": doc.get("source_kind"),
+                "trial_id": doc.get("trial_id"),
+                "score": doc.get("score"),
+                "text": str(doc.get("text", ""))[:1800],
+            }
+        )
+    compact = dict(context_pack)
+    compact["documents"] = documents
+    return compact
 
 
 def render_demo_plan(plan: dict[str, Any]) -> str:
@@ -1114,9 +1215,9 @@ def render_demo_plan(plan: dict[str, Any]) -> str:
         "## Implementation Notes",
         "",
     ]
-    lines.extend(f"- {item}" for item in plan.get("implementation_notes", []) or ["None"])
+    lines.extend(f"- {item}" for item in _normalize_plan_items(plan.get("implementation_notes")) or ["None"])
     lines.extend(["", "## Expected Outputs", ""])
-    lines.extend(f"- {item}" for item in plan.get("expected_outputs", []) or ["None"])
+    lines.extend(f"- {item}" for item in _normalize_plan_items(plan.get("expected_outputs")) or ["None"])
     lines.extend(["", "## Issues", ""])
     lines.extend(f"- {item}" for item in plan.get("issues", []) or ["None"])
     lines.append("")
@@ -1295,13 +1396,79 @@ def _normalize_plan(plan: dict[str, Any], context: dict[str, Any]) -> dict[str, 
     normalized.setdefault("implementation_notes", [])
     normalized.setdefault("expected_outputs", ["metrics.json", "submission.csv"])
     normalized.setdefault("issues", [])
-    if not isinstance(normalized["implementation_notes"], list):
-        normalized["implementation_notes"] = [str(normalized["implementation_notes"])]
-    if not isinstance(normalized["expected_outputs"], list):
-        normalized["expected_outputs"] = [str(normalized["expected_outputs"])]
+    normalized["implementation_notes"] = _normalize_plan_items(normalized.get("implementation_notes"))
+    normalized["expected_outputs"] = _normalize_plan_items(normalized.get("expected_outputs"))
     if not isinstance(normalized["issues"], list):
         normalized["issues"] = [str(normalized["issues"])]
     return normalized
+
+
+def _normalize_plan_items(value: Any) -> list[str]:
+    if value is None or value == "":
+        return []
+    items = value if isinstance(value, list) else [value]
+    normalized: list[str] = []
+    for item in items:
+        normalized.extend(_flatten_plan_item(_coerce_plan_item(item)))
+    return [item for item in normalized if item]
+
+
+def _coerce_plan_item(item: Any) -> Any:
+    if not isinstance(item, str):
+        return item
+    stripped = item.strip()
+    if not stripped or stripped[0] not in "[{":
+        return item
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        pass
+    try:
+        return ast.literal_eval(stripped)
+    except (SyntaxError, ValueError):
+        return item
+
+
+def _flatten_plan_item(item: Any, *, label: str | None = None) -> list[str]:
+    if isinstance(item, dict):
+        lines: list[str] = []
+        for key, value in item.items():
+            key_label = _human_plan_label(str(key))
+            lines.extend(_flatten_plan_item(value, label=key_label))
+        return lines
+    if isinstance(item, list):
+        lines = []
+        for value in item:
+            lines.extend(_flatten_plan_item(value, label=label))
+        return lines
+    text = str(item).strip()
+    if not text:
+        return []
+    return [f"{label}: {text}" if label else text]
+
+
+def _human_plan_label(key: str) -> str:
+    normalized = "_".join(key.strip().lower().replace("-", " ").split())
+    labels = {
+        "applied_data_assumptions": "데이터 가정",
+        "applied_data": "데이터 적용",
+        "split": "검증 분리",
+        "validation_split": "검증 분리",
+        "preprocessing": "전처리",
+        "model": "모델",
+        "commands": "실행 명령",
+        "prediction_output": "예측/제출 출력",
+        "testing": "테스트",
+        "artifact_policy": "산출물 정책",
+        "workspace_constraints": "작업 범위",
+        "write_scope": "수정 범위",
+        "metrics": "지표 파일",
+        "submission": "제출 파일",
+        "code_snapshot": "코드 스냅샷",
+        "pipeline_summary": "파이프라인 요약",
+        "model_artifact": "모델 파일",
+    }
+    return labels.get(normalized, key.replace("_", " ").strip().title())
 
 
 def _workspace_run_issues(workspace_run: dict[str, Any]) -> list[str]:

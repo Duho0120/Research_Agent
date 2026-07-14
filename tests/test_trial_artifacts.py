@@ -98,6 +98,7 @@ class TrialArtifactsTest(unittest.TestCase):
             self.assertTrue((trial / "user_view" / "02_pipeline_structure.ko.md").exists())
             self.assertTrue((trial / "user_view" / "03_code_pipeline.ko.md").exists())
             self.assertTrue((trial / "user_view" / "04_result.ko.md").exists())
+            self.assertTrue((trial / "user_view" / "05_submission.ko.md").exists())
             user_readme = (trial / "user_view" / "README.ko.md").read_text(encoding="utf-8")
             self.assertIn("사용자가 바로 확인할 핵심 산출물", user_readme)
             structure = json.loads((trial / "internal" / "pipeline_structure.json").read_text(encoding="utf-8"))
@@ -131,7 +132,8 @@ class TrialArtifactsTest(unittest.TestCase):
             self.assertTrue((browse / "02_pipeline_structure.ko.md").exists())
             self.assertTrue((browse / "03_code_pipeline.ko.md").exists())
             self.assertTrue((browse / "04_result.ko.md").exists())
-            self.assertTrue((browse / "05_paths.ko.md").exists())
+            self.assertTrue((browse / "05_submission.ko.md").exists())
+            self.assertTrue((browse / "06_paths.ko.md").exists())
             self.assertTrue((root / "runs" / "demo" / "README.ko.md").exists())
             user_plan = (browse / "01_plan.ko.md").read_text(encoding="utf-8")
             user_structure = (browse / "02_pipeline_structure.ko.md").read_text(encoding="utf-8")
@@ -144,7 +146,7 @@ class TrialArtifactsTest(unittest.TestCase):
             self.assertIn("LogisticRegression", user_structure)
             self.assertIn("파생변수", user_structure)
             self.assertNotIn("다음 개선축", user_structure)
-            browse_paths = (browse / "05_paths.ko.md").read_text(encoding="utf-8")
+            browse_paths = (browse / "06_paths.ko.md").read_text(encoding="utf-8")
             self.assertIn("원본 trial 기록", browse_paths)
 
     def test_pipeline_structure_extracts_random_forest_features_and_config(self):

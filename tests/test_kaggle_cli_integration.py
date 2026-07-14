@@ -76,7 +76,7 @@ class KaggleCliIntegrationTest(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["action"], "check_auth")
-        self.assertEqual(result["args"], ["kaggle", "config", "view"])
+        self.assertEqual(result["args"], ["kaggle", "competitions", "list", "--page-size", "1"])
         self.assertIn("kaggle.json", result["stderr"])
 
     def test_submit_competition_returns_structured_command_result(self):
@@ -115,6 +115,45 @@ class KaggleCliIntegrationTest(unittest.TestCase):
             result["args"],
             ["kaggle", "competitions", "leaderboard", "demo-competition", "--show"],
         )
+
+    def test_fetch_submissions_returns_structured_command_result(self):
+        def runner(args, cwd):
+            return {
+                "returncode": 0,
+                "stdout": "ref,fileName,date,description,status,publicScore,privateScore\n",
+                "stderr": "",
+            }
+
+        result = kaggle_cli.fetch_submissions(
+            competition_slug="demo-competition",
+            cwd=Path("workspace"),
+            runner=runner,
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["action"], "submissions")
+        self.assertEqual(
+            result["args"],
+            ["kaggle", "competitions", "submissions", "demo-competition", "--csv", "--page-size", "5"],
+        )
+
+    def test_parse_submissions_finds_latest_completed_public_score(self):
+        text = (
+            "ref,fileName,date,description,status,publicScore,privateScore\n"
+            "2,submission.csv,2026-07-14 06:13:40,trial_001,SubmissionStatus.COMPLETE,0.77511,\n"
+            "1,old.csv,2026-07-13 06:13:40,old,SubmissionStatus.COMPLETE,0.76315,\n"
+        )
+
+        rows = kaggle_cli.parse_submissions(text)
+        latest = kaggle_cli.latest_completed_submission(
+            text,
+            description="trial_001",
+            file_name="submission.csv",
+        )
+
+        self.assertEqual(rows[0]["public_score"], 0.77511)
+        self.assertEqual(latest["ref"], "2")
+        self.assertEqual(latest["public_score"], 0.77511)
 
     def test_parse_leaderboard_csv_finds_team_score_and_rank(self):
         text = (

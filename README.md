@@ -34,6 +34,9 @@ Completed:
 - `start-competition` combines inspection, project initialization, onboarding notes, data profiling, and the first `trial_001` plan.
 - `run-auto-loop` can run a bounded safe research loop across multiple trials with a no-improvement stop policy and submission disabled by default.
 - `run-graph-cycle` exposes the same conservative one-trial flow through a LangGraph `StateGraph` orchestration layer while keeping the existing Python tools as graph nodes.
+- `run-graph-cycle` now records LangGraph node observability artifacts for each trial: `graph_state.json` captures the latest graph checkpoint-like state, while `node_events.jsonl` records node started/completed/failed events.
+- File-based RAG groundwork is available through `build-retrieval-index` and `retrieve-documents`: competition docs, memory logs, trial metrics, pipeline structures, and user-facing trial summaries can be indexed into `memory/<competition>/document_index.jsonl`.
+- Planner/coder LLM calls now have a RAG context-pack path: demo planning writes `context_pack_experiment_planning.*`, while workspace coding handoff writes `context_pack_workspace_code_writing.*` and `retrieval_manifest_workspace_code_writing.json` so later prompts can cite retrieved evidence instead of relying on raw file dumps.
 - Policy files under `configs/policies/` control token use, execution decisions, and human-review decisions.
 - Research Operating Protocol now provides a small domain-neutral flow: current state, evidence, issues, candidate actions, constraints, user questions, and execution plan are written before code-oriented follow-up. Competition-specific checks are opt-in.
 - Execution Profile provides a competition-neutral contract for an external project root, Python runtime, test/train/predict commands, expected artifacts, and allowed/forbidden write scope. Validation does not execute the project.
@@ -48,10 +51,12 @@ Completed:
 - `run-workspace-code-writer` applies mock/API code-writer file updates under the external `project_root` only when every changed path is project-root-relative, allowed by `allowed_write_paths`, and outside forbidden metric/submission artifacts.
 - `run-workspace-after-coding` requires an accepted workspace coding result, then re-enters the existing workspace pipeline, metrics collection, and result-cycle flow; without `--run-now` it records only the planned execution.
 - `demo-one-cycle` provides the two-week demo path for F-01/F-02/F-03/F-04/F-06 only: rule-based context loading, LLM/mock experiment planning, LLM/mock code writing, local execution, and file-based result recording without F-05 self-improvement, Human Review, submission, approval UI, or SQLite.
+- `demo-graph-cycle` runs the same F-01/F-02/F-03/F-04/F-06 one-cycle demo through a LangGraph node flow (`load_context -> plan_experiment -> write_code -> run_local -> collect_metrics -> record_result -> finalize`) while preserving the existing demo artifacts.
+- `demo-graph-auto-loop` runs a bounded multi-trial demo loop on top of `demo-graph-cycle`, rebuilds the retrieval index between trials, tracks `demo_best_trial.json`, and stops when the configured no-improvement threshold is reached.
 - Demo observability is CMD-only for now: `demo-one-cycle --show-progress` prints live stage messages, while `watch-demo-cycle` reads `agent_status.json` and `agent_events.jsonl` to show whether the demo agent is running, blocked, planned, or completed.
 - Trial artifact organization now writes a user-facing `user_view/` folder with Korean summary, plan, pipeline-structure, code-pipeline, result files, and copied changed code; it also mirrors that compact view into `runs/<competition>/<trial>/` for SFTP/file-browser users while debug/API payloads move into `debug/` and machine-facing JSON records move into `internal/`.
 - Each organized trial now writes `internal/pipeline_structure.json` plus `02_pipeline_structure.ko.md`, so the executable `.py` pipeline remains the source of truth while users and later coding handoffs can read a notebook-like stage map.
-- `demo-guide` provides a demo-only interactive CMD flow that lists registered experiments, guides new workspace creation, asks the user to place manual data files, and then starts the one-cycle demo path when OpenAI API execution is explicitly confirmed.
+- `demo-guide` provides a demo-only interactive CMD flow that lists registered experiments, guides new workspace creation, asks the user to place manual data files, and then starts the LangGraph/RAG-backed one-cycle demo path when OpenAI API execution is explicitly confirmed.
 - Demo guide execution uses the OpenAI Responses API with `OPENAI_API_KEY` and overrides the one-cycle provider/model to `openai` / `gpt-5.5`; low-cost policy calls remain on OpenAI `gpt-5.6-luna`.
 - Demo guide can start from a competition URL. It attempts a lightweight page read and infers simple defaults such as Kaggle slug/platform; when the page is unreadable or dynamic, it now asks for only one optional `source_summary` instead of several separate problem/data/submission/evaluation/rule prompts. That summary is saved to `source_materials.md/json`, `overview.md`, `data_notes.md`, and `metric.md`, then included in the one-cycle planning context.
 - The policy gate records local/Colab/wait/ask_user execution decisions and LLM call/skip decisions in `decision_log.jsonl`.
@@ -103,6 +108,9 @@ start-competition / init
   -> run after validation
   -> run safe execution chain
   -> optionally run safe execution chain inside cycle / run-graph-cycle
+  -> record LangGraph node state/events for graph-run observability
+  -> build retrieval index / retrieve evidence documents
+  -> build planner/coder context packs before high-cost LLM calls
   -> apply patch plan
   -> prepare submission manifest
   -> submit after approval and leaderboard evidence
@@ -114,7 +122,7 @@ two-week demo path:
     -> ask for pasted source notes when URL content is unavailable
     -> guide new experiment metadata input
     -> create demo workspace and wait for manual data placement
-    -> start the one-cycle demo run with OpenAI API after explicit confirmation
+    -> start the LangGraph/RAG-backed one-cycle demo run with OpenAI API after explicit confirmation
   demo-one-cycle
     -> load context from Execution Profile and file memory
     -> create one experiment plan through mock/API LLM
@@ -122,6 +130,14 @@ two-week demo path:
     -> optionally run local test/train/predict with --run-now
     -> collect metrics and write demo result record
     -> organize trial artifacts into README / debug / internal
+  demo-graph-cycle
+    -> execute the same one-cycle demo as LangGraph nodes
+    -> retrieve file-based RAG context packs before planner/coder LLM calls
+    -> write graph_state.json and node_events.jsonl for node-level control visibility
+  demo-graph-auto-loop
+    -> repeat demo-graph-cycle for trial_001, trial_002, ...
+    -> rebuild RAG document index between trials
+    -> record demo_best_trial and loop summary under memory/<competition>/
   watch-demo-cycle
     -> read agent_status.json and agent_events.jsonl
     -> print current stage/progress/recent events in CMD

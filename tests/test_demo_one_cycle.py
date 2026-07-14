@@ -10,6 +10,8 @@ from unittest.mock import patch
 from kaggle_research_agent import simple_yaml
 from kaggle_research_agent.cli import main
 from kaggle_research_agent.demo_one_cycle import build_demo_plan_payload, run_demo_one_cycle
+from kaggle_research_agent.graph.demo_auto_loop import run_demo_graph_auto_loop
+from kaggle_research_agent.graph.demo_cycle_graph import run_demo_graph_cycle
 from kaggle_research_agent.trial_artifacts import trial_artifact_exists
 
 
@@ -42,6 +44,9 @@ class DemoOneCycleTest(unittest.TestCase):
             self.assertEqual("completed", result["workspace_run"]["status"])
             self.assertEqual("collected", result["metrics_collection"]["status"])
             self.assertEqual(0.88, result["record"]["local_score"])
+            self.assertEqual("ready", result["submission_manifest"]["status"])
+            self.assertTrue((trial / "submit_manifest.json").exists())
+            self.assertTrue((trial / "submit_manifest.md").exists())
             self.assertTrue((trial / "demo_context.md").exists())
             self.assertTrue((trial / "next_experiment.md").exists())
             self.assertTrue(trial_artifact_exists(trial, "workspace_coding_result.json"))
@@ -69,7 +74,153 @@ class DemoOneCycleTest(unittest.TestCase):
             plan_prompt = plan_request["input"][1]["content"]
             self.assertIn("Model/checkpoint artifacts are optional", plan_prompt)
             self.assertIn("required_for_separate_predict_command", plan_prompt)
+            self.assertIn("RAG Context Pack", plan_prompt)
+            self.assertIn("retrieved documents", plan_prompt.lower())
             self.assertIn("Artifact Policy", (trial / "demo_context.md").read_text(encoding="utf-8"))
+            self.assertTrue((trial / "context_pack_experiment_planning.json").exists())
+            self.assertTrue((trial / "retrieval_manifest_experiment_planning.json").exists())
+
+    def test_demo_graph_cycle_runs_same_one_cycle_with_graph_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            project = Path(tmp) / "project"
+            root.mkdir()
+            project.mkdir()
+            self._write_state(root)
+            self._write_profile(root, project)
+            self._write_project_scripts(project)
+            plan_response = self._write_plan_response(root)
+            code_response = self._write_code_response(root)
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = run_demo_graph_cycle(
+                    "demo",
+                    "trial_001",
+                    mock_plan_file=str(plan_response),
+                    mock_response_file=str(code_response),
+                    run_now=True,
+                )
+
+            trial = root / "experiments" / "demo" / "trial_001"
+            self.assertEqual("completed", result["status"])
+            self.assertTrue(result["graph_execution"]["enabled"])
+            self.assertEqual("accepted", result["code_writer"]["status"])
+            self.assertEqual("completed", result["workspace_run"]["status"])
+            self.assertEqual(0.88, result["record"]["local_score"])
+            self.assertEqual("ready", result["submission_manifest"]["status"])
+            self.assertTrue((trial / "demo_graph_cycle.json").exists())
+            self.assertTrue((trial / "submit_manifest.json").exists())
+            self.assertTrue(trial_artifact_exists(trial, "demo_one_cycle.json"))
+            self.assertTrue((trial / "graph_state.json").exists())
+            self.assertTrue((trial / "node_events.jsonl").exists())
+            graph_state = json.loads((trial / "graph_state.json").read_text(encoding="utf-8"))
+            self.assertEqual("completed", graph_state["status"])
+            self.assertEqual("finalize", graph_state["last_completed_node"])
+            events = [
+                json.loads(line)
+                for line in (trial / "node_events.jsonl").read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            self.assertEqual("load_context", events[0]["node"])
+            self.assertTrue(any(item["node"] == "record_result" and item["event"] == "completed" for item in events))
+            self.assertTrue(any(item["node"] == "prepare_submission" and item["event"] == "completed" for item in events))
+
+    def test_demo_graph_auto_loop_runs_two_trials_and_records_best(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            project = Path(tmp) / "project"
+            root.mkdir()
+            project.mkdir()
+            self._write_state(root)
+            self._write_profile(root, project)
+            self._write_project_scripts(project)
+            plan_response = self._write_plan_response(root)
+            code_response = self._write_code_response(root)
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = run_demo_graph_auto_loop(
+                    "demo",
+                    start_trial_id="trial_001",
+                    max_trials=2,
+                    mock_plan_file=str(plan_response),
+                    mock_response_file=str(code_response),
+                    run_now=True,
+                )
+
+            self.assertEqual("completed", result["status"])
+            self.assertEqual(["trial_001", "trial_002"], [row["trial_id"] for row in result["trials"]])
+            self.assertEqual("trial_001", result["best_trial"]["trial_id"])
+            self.assertTrue(result["trials"][0]["is_best"])
+            self.assertFalse(result["trials"][1]["is_best"])
+            memory = root / "memory" / "demo"
+            self.assertTrue((memory / "demo_best_trial.json").exists())
+            self.assertTrue((memory / "demo_graph_auto_loop.json").exists())
+            self.assertTrue((memory / "document_index.jsonl").exists())
+            self.assertTrue((root / "experiments" / "demo" / "trial_002" / "context_pack_experiment_planning.json").exists())
+            index_text = (memory / "document_index.jsonl").read_text(encoding="utf-8")
+            self.assertIn("experiments/demo/trial_001/user_view/02_pipeline_structure.ko.md", index_text)
+            state = simple_yaml.load(root / "competitions" / "demo" / "state.yaml")
+            self.assertEqual("trial_001", state["current_state"]["best_trial"]["trial_id"])
+
+    def test_demo_graph_auto_loop_stops_after_no_improvement_threshold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            project = Path(tmp) / "project"
+            root.mkdir()
+            project.mkdir()
+            self._write_state(root)
+            self._write_profile(root, project)
+            self._write_project_scripts(project)
+            plan_response = self._write_plan_response(root)
+            code_response = self._write_code_response(root)
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = run_demo_graph_auto_loop(
+                    "demo",
+                    start_trial_id="trial_001",
+                    max_trials=3,
+                    stop_no_improvement=1,
+                    mock_plan_file=str(plan_response),
+                    mock_response_file=str(code_response),
+                    run_now=True,
+                )
+
+            self.assertEqual("stopped_no_improvement", result["status"])
+            self.assertEqual(2, len(result["trials"]))
+            self.assertEqual(1, result["no_improvement_count"])
+
+    def test_demo_graph_auto_loop_cli(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            project = Path(tmp) / "project"
+            root.mkdir()
+            project.mkdir()
+            self._write_state(root)
+            self._write_profile(root, project)
+            self._write_project_scripts(project)
+            plan_response = self._write_plan_response(root)
+            code_response = self._write_code_response(root)
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                code = main(
+                    [
+                        "demo-graph-auto-loop",
+                        "--competition",
+                        "demo",
+                        "--start-trial",
+                        "trial_001",
+                        "--max-trials",
+                        "2",
+                        "--mock-plan-file",
+                        str(plan_response),
+                        "--mock-response-file",
+                        str(code_response),
+                        "--run-now",
+                    ]
+                )
+
+            self.assertEqual(0, code)
+            self.assertTrue((root / "memory" / "demo" / "demo_graph_auto_loop.json").exists())
 
     def test_demo_one_cycle_resumes_from_completed_plan_and_code_result(self):
         with tempfile.TemporaryDirectory() as tmp:

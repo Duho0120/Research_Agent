@@ -21,9 +21,16 @@ class CodeWriterClient(Protocol):
 
 
 class OpenAIResponsesClient:
-    def __init__(self, *, api_key: str | None = None, base_url: str = "https://api.openai.com/v1/responses"):
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        base_url: str = "https://api.openai.com/v1/responses",
+        timeout_seconds: int | None = None,
+    ):
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
         self.base_url = base_url
+        self.timeout_seconds = timeout_seconds or _llm_timeout_seconds()
 
     def create_response(self, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.api_key:
@@ -39,7 +46,7 @@ class OpenAIResponsesClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=120) as response:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as error:
             detail = error.read().decode("utf-8", errors="replace")
@@ -54,11 +61,13 @@ class AnthropicMessagesClient:
         base_url: str = "https://api.anthropic.com/v1/messages",
         anthropic_version: str = "2023-06-01",
         max_tokens: int = 4096,
+        timeout_seconds: int | None = None,
     ):
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         self.base_url = base_url
         self.anthropic_version = anthropic_version
         self.max_tokens = max_tokens
+        self.timeout_seconds = timeout_seconds or _llm_timeout_seconds()
 
     def create_response(self, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.api_key:
@@ -76,7 +85,7 @@ class AnthropicMessagesClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=120) as response:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
                 raw_response = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as error:
             detail = error.read().decode("utf-8", errors="replace")
@@ -118,6 +127,16 @@ def normalize_provider(provider: str | None) -> str:
         "openai_responses": "openai",
     }
     return aliases.get(normalized, normalized)
+
+
+def _llm_timeout_seconds() -> int:
+    raw = os.environ.get("RESEARCH_AGENT_LLM_TIMEOUT_SECONDS")
+    if raw:
+        try:
+            return max(30, int(raw))
+        except ValueError:
+            pass
+    return 300
 
 
 def build_anthropic_messages_payload(payload: dict[str, Any], *, max_tokens: int) -> dict[str, Any]:

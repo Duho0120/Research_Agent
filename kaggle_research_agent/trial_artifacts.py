@@ -85,6 +85,9 @@ def build_trial_summary(competition: str, trial_id: str) -> dict[str, Any]:
     workspace_run = read_trial_json(out_dir, "workspace_run.json")
     code_result = read_trial_json(out_dir, "workspace_coding_result.json")
     metrics_collection = read_trial_json(out_dir, "metrics_collection.json")
+    submit_manifest = _read_json(out_dir / "submit_manifest.json")
+    submission_run = _read_json(out_dir / "submission_run.json")
+    submission_result = _latest_submission_result(competition, trial_id)
     profile = _load_execution_profile(competition)
 
     status = (
@@ -116,7 +119,33 @@ def build_trial_summary(competition: str, trial_id: str) -> dict[str, Any]:
         "project_root": profile.get("project_root"),
         "workspace_status": workspace_run.get("status"),
         "metrics_collection_status": metrics_collection.get("status"),
+        "submit_manifest": submit_manifest,
+        "submission_run": submission_run,
+        "submission_result": submission_result,
+        "submission_prepare_status": submit_manifest.get("status"),
+        "submission_file": submit_manifest.get("submission_file"),
+        "submitted_lb_score": submission_result.get("submitted_lb_score"),
+        "submitted_rank": submission_result.get("submitted_rank"),
+        "is_best_submission": submission_result.get("is_best"),
+        "requires_user_approval": submit_manifest.get("requires_user_approval"),
     }
+
+
+def _latest_submission_result(competition: str, trial_id: str) -> dict[str, Any]:
+    log_path = paths.project_root() / "submissions" / competition / "submission_log.jsonl"
+    if not log_path.is_file():
+        return {}
+    latest: dict[str, Any] = {}
+    for line in log_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict) and row.get("trial_id") == trial_id:
+            latest = row
+    return latest
 
 
 def build_pipeline_structure(out_dir: Path, summary: dict[str, Any]) -> dict[str, Any]:
@@ -738,12 +767,7 @@ def _extract_pipeline_facts(
 
     numeric = _feature_list(metrics, constants, "numeric")
     categorical = _feature_list(metrics, constants, "categorical")
-    features = [
-        str(item)
-        for item in metrics.get("features")
-        or metrics.get("feature_columns")
-        or constants.get("FEATURE_COLUMNS", [])
-    ]
+    features = _final_feature_list(metrics, constants)
     if numeric:
         facts["preprocessing"].append(f"수치형 피처는 {', '.join(numeric)}입니다.")
     if categorical:
@@ -759,6 +783,14 @@ def _extract_pipeline_facts(
         if "handle_unknown=\"ignore\"" in code_text or "handle_unknown='ignore'" in code_text:
             encoder_note = "`OneHotEncoder(handle_unknown=\"ignore\")`를 적용합니다."
         facts["preprocessing"].append(f"범주형 피처에는 {encoder_note}")
+    preprocessing_meta = metrics.get("preprocessing") if isinstance(metrics.get("preprocessing"), dict) else {}
+    if not any("결측치" in item or "imputation" in item.lower() for item in facts["preprocessing"]):
+        if preprocessing_meta.get("numeric"):
+            facts["preprocessing"].append(f"수치형 피처 처리: {preprocessing_meta['numeric']}.")
+        if preprocessing_meta.get("categorical"):
+            facts["preprocessing"].append(f"범주형 피처 처리: {preprocessing_meta['categorical']}.")
+    if preprocessing_meta.get("fit_scope"):
+        facts["preprocessing"].append(str(preprocessing_meta["fit_scope"]))
 
     validation_method = metrics.get("validation_method")
     if validation_method:
@@ -871,12 +903,7 @@ def _extract_pipeline_details(
     required_files = _workspace_config_required_files(code_files)
     numeric = _feature_list(metrics, constants, "numeric")
     categorical = _feature_list(metrics, constants, "categorical")
-    final_features = [
-        str(item)
-        for item in metrics.get("features")
-        or metrics.get("feature_columns")
-        or constants.get("FEATURE_COLUMNS", [])
-    ]
+    final_features = _final_feature_list(metrics, constants)
     derived_features = _derived_feature_details(lowered, final_features)
     raw_feature_columns = _raw_feature_columns(numeric, categorical, derived_features)
     preprocessing_steps = _preprocessing_step_details(metrics, code_text, lowered, numeric, categorical)
@@ -961,13 +988,31 @@ def _derived_feature_details(lowered: str, final_features: list[str]) -> list[di
                 "purpose": "혼자 탑승했는지 여부를 binary feature로 표현",
             }
         )
-    if "title" in lowered and ("extract_title" in lowered or "_extract_title" in lowered):
+    if final_lookup.get("title") or ("title" in lowered and ("extract_title" in lowered or "_extract_title" in lowered or "str.extract" in lowered)):
         details.append(
             {
                 "name": final_lookup.get("title") or "Title",
                 "source_columns": ["Name"],
                 "formula": "Name에서 쉼표와 마침표 사이의 호칭을 추출하고 일부 호칭을 정규화",
                 "purpose": "성별/사회적 호칭 정보를 범주형 피처로 사용",
+            }
+        )
+    if final_lookup.get("deck") or "deck" in lowered:
+        details.append(
+            {
+                "name": final_lookup.get("deck") or "Deck",
+                "source_columns": ["Cabin"],
+                "formula": "Cabin first letter, missing/blank values -> U",
+                "purpose": "객실 구역 정보를 범주형 피처로 사용",
+            }
+        )
+    if final_lookup.get("fareperperson") or "fareperperson" in lowered:
+        details.append(
+            {
+                "name": final_lookup.get("fareperperson") or "FarePerPerson",
+                "source_columns": ["Fare", family_name or "FamilySize"],
+                "formula": "Fare / FamilySize",
+                "purpose": "가족 규모를 고려한 1인당 운임 피처",
             }
         )
     return details
@@ -984,11 +1029,32 @@ def _feature_list(metrics: dict[str, Any], constants: dict[str, list[Any]], kind
         value = metrics.get(key)
         if isinstance(value, list):
             return [str(item) for item in value]
+    feature_summary = metrics.get("feature_summary") if isinstance(metrics.get("feature_summary"), dict) else {}
+    summary_value = feature_summary.get(f"{kind}_features")
+    if isinstance(summary_value, list):
+        return [str(item) for item in summary_value]
     for key in constant_keys:
         value = constants.get(key)
         if isinstance(value, list):
             return [str(item) for item in value]
     return []
+
+
+def _final_feature_list(metrics: dict[str, Any], constants: dict[str, list[Any]]) -> list[str]:
+    value = metrics.get("features") or metrics.get("feature_columns")
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    feature_summary = metrics.get("feature_summary") if isinstance(metrics.get("feature_summary"), dict) else {}
+    numeric = feature_summary.get("numeric_features") if isinstance(feature_summary.get("numeric_features"), list) else []
+    categorical = (
+        feature_summary.get("categorical_features")
+        if isinstance(feature_summary.get("categorical_features"), list)
+        else []
+    )
+    combined = [str(item) for item in [*numeric, *categorical]]
+    if combined:
+        return combined
+    return [str(item) for item in constants.get("FEATURE_COLUMNS", [])]
 
 
 def _raw_feature_columns(
@@ -1017,8 +1083,14 @@ def _preprocessing_step_details(
 ) -> list[dict[str, Any]]:
     steps: list[dict[str, Any]] = []
     preprocessing_meta = metrics.get("preprocessing") if isinstance(metrics.get("preprocessing"), dict) else {}
-    numeric_imputation = preprocessing_meta.get("numeric_imputation")
-    categorical_imputation = preprocessing_meta.get("categorical_imputation")
+    numeric_imputation = _imputation_strategy(
+        preprocessing_meta.get("numeric_imputation") or preprocessing_meta.get("numeric"),
+        default="median",
+    )
+    categorical_imputation = _imputation_strategy(
+        preprocessing_meta.get("categorical_imputation") or preprocessing_meta.get("categorical"),
+        default="most_frequent",
+    )
     numeric_scaling = preprocessing_meta.get("numeric_scaling")
     categorical_encoding = preprocessing_meta.get("categorical_encoding")
     if (
@@ -1071,6 +1143,21 @@ def _preprocessing_step_details(
             }
         )
     return steps
+
+
+def _imputation_strategy(value: Any, *, default: str) -> str | None:
+    if value is None:
+        return None
+    text = str(value).lower().replace("-", "_")
+    if "most_frequent" in text or "most frequent" in text:
+        return "most_frequent"
+    if "median" in text:
+        return "median"
+    if "mean" in text:
+        return "mean"
+    if "constant" in text:
+        return "constant"
+    return str(value) or default
 
 
 def _validation_details(metrics: dict[str, Any], code_text: str, lowered: str) -> dict[str, Any]:
@@ -1843,6 +1930,9 @@ def _key_files(out_dir: Path) -> list[str]:
         "workspace_result_cycle.md",
         "workspace_after_coding_cycle.md",
         "metrics.json",
+        "submit_manifest.md",
+        "submission_run.md",
+        "submission_result.md",
     ]
     return [name for name in candidates if (out_dir / name).exists()]
 
@@ -1863,10 +1953,10 @@ def _write_browse_view(competition: str, trial_id: str, out_dir: Path, summary: 
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(item, destination)
             copied.append(relative.as_posix())
-    paths_file = browse_dir / "05_paths.ko.md"
+    paths_file = browse_dir / "06_paths.ko.md"
     write_text(paths_file, render_compact_browse_paths(competition, trial_id, out_dir, browse_dir, summary))
-    if "05_paths.ko.md" not in copied:
-        copied.append("05_paths.ko.md")
+    if "06_paths.ko.md" not in copied:
+        copied.append("06_paths.ko.md")
     write_compact_browse_index(competition, browse_root)
     return sorted(copied)
 
@@ -1926,7 +2016,8 @@ def _render_browse_paths(
         "2. `02_pipeline_structure.ko.md`: 단계별 파이프라인 구조",
         "3. `03_code_pipeline.ko.md`: 코드 파일 구성",
         "4. `04_result.ko.md`: 실행 결과와 점수",
-        "5. `code/`: 이번 trial에서 생성 또는 수정된 코드 복사본",
+        "5. `05_submission.ko.md`: 제출 준비 상태와 다음 조치",
+        "6. `code/`: 이번 trial에서 생성 또는 수정된 코드 복사본",
         "",
         "## 실행 로그",
         "",

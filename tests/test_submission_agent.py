@@ -140,8 +140,8 @@ class SubmissionAgentTest(unittest.TestCase):
                 calls.append(args)
                 if args == ["kaggle", "--version"]:
                     return {"returncode": 0, "stdout": "Kaggle API 1.6.17\n", "stderr": ""}
-                if args == ["kaggle", "config", "view"]:
-                    return {"returncode": 0, "stdout": "username: hidden\n", "stderr": ""}
+                if args == ["kaggle", "competitions", "list", "--page-size", "1"]:
+                    return {"returncode": 0, "stdout": "ref,title\nplayground,demo\n", "stderr": ""}
                 if args[:3] == ["kaggle", "competitions", "submit"]:
                     return {"returncode": 0, "stdout": "Successfully submitted\n", "stderr": ""}
                 if args[:3] == ["kaggle", "competitions", "leaderboard"]:
@@ -171,6 +171,56 @@ class SubmissionAgentTest(unittest.TestCase):
             self.assertTrue((root / "submissions" / "demo" / "submission_log.jsonl").exists())
             self.assertTrue((trial / "BEST_MARKER.md").exists())
 
+    def test_submit_trial_reads_kaggle_submission_public_score_without_leaderboard_polling(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trial = root / "experiments" / "demo" / "trial_kaggle_score"
+            trial.mkdir(parents=True)
+            (trial / "submission.csv").write_text("id,target\n1,1\n", encoding="utf-8")
+            (trial / "metrics.json").write_text(
+                json.dumps({"cv_score": 0.86, "objective": "maximize"}),
+                encoding="utf-8",
+            )
+            calls = []
+
+            def runner(args, cwd):
+                calls.append(args)
+                if args == ["kaggle", "--version"]:
+                    return {"returncode": 0, "stdout": "Kaggle API 1.6.17\n", "stderr": ""}
+                if args == ["kaggle", "competitions", "list", "--page-size", "1"]:
+                    return {"returncode": 0, "stdout": "ref,title\nplayground,demo\n", "stderr": ""}
+                if args[:3] == ["kaggle", "competitions", "submit"]:
+                    return {"returncode": 0, "stdout": "Successfully submitted\n", "stderr": ""}
+                if args[:3] == ["kaggle", "competitions", "submissions"]:
+                    return {
+                        "returncode": 0,
+                        "stdout": (
+                            "ref,fileName,date,description,status,publicScore,privateScore\n"
+                            "2,submission.csv,2026-07-14 06:13:40,demo trial kaggle v01,"
+                            "SubmissionStatus.COMPLETE,0.77511,\n"
+                        ),
+                        "stderr": "",
+                    }
+                return {"returncode": 1, "stdout": "", "stderr": "unexpected command"}
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = submit_trial(
+                    competition="demo",
+                    trial_id="trial_kaggle_score",
+                    version_name="demo_trial_kaggle_v01",
+                    submission_file="experiments/demo/trial_kaggle_score/submission.csv",
+                    objective="maximize",
+                    kaggle_competition_slug="demo-competition",
+                    kaggle_message="demo trial kaggle v01",
+                    kaggle_runner=runner,
+                )
+
+            self.assertEqual(result["status"], "submitted")
+            self.assertEqual(result["submitted_lb_score"], 0.77511)
+            self.assertIsNone(result["submitted_rank"])
+            self.assertTrue(any(call[:3] == ["kaggle", "competitions", "submissions"] for call in calls))
+            self.assertTrue((trial / "BEST_MARKER.md").exists())
+
     def test_submit_trial_does_not_record_when_kaggle_auth_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -182,7 +232,7 @@ class SubmissionAgentTest(unittest.TestCase):
             def runner(args, cwd):
                 if args == ["kaggle", "--version"]:
                     return {"returncode": 0, "stdout": "Kaggle API 1.6.17\n", "stderr": ""}
-                if args == ["kaggle", "config", "view"]:
+                if args == ["kaggle", "competitions", "list", "--page-size", "1"]:
                     return {"returncode": 1, "stdout": "", "stderr": "Could not find kaggle.json\n"}
                 return {"returncode": 1, "stdout": "", "stderr": "should not submit"}
 
@@ -215,8 +265,8 @@ class SubmissionAgentTest(unittest.TestCase):
             def runner(args, cwd):
                 if args == ["kaggle", "--version"]:
                     return {"returncode": 0, "stdout": "Kaggle API 1.6.17\n", "stderr": ""}
-                if args == ["kaggle", "config", "view"]:
-                    return {"returncode": 0, "stdout": "username: hidden\n", "stderr": ""}
+                if args == ["kaggle", "competitions", "list", "--page-size", "1"]:
+                    return {"returncode": 0, "stdout": "ref,title\nplayground,demo\n", "stderr": ""}
                 if args[:3] == ["kaggle", "competitions", "submit"]:
                     return {"returncode": 0, "stdout": "Successfully submitted\n", "stderr": ""}
                 if args[:3] == ["kaggle", "competitions", "leaderboard"]:

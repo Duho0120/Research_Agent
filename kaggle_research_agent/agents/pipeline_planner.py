@@ -5,7 +5,7 @@ from typing import Any
 
 from ..policies import load_policy
 from ..store import load_state, write_text
-from ..paths import trial_dir
+from ..paths import competition_submissions_dir, trial_dir
 from .result_analyst import diagnose_trial
 
 
@@ -18,6 +18,13 @@ def plan_pipeline_improvement(competition: str, trial_id: str) -> dict[str, Any]
         raise FileNotFoundError(f"Missing metrics file: {metrics_path}")
 
     metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    submission = _latest_submission(competition, trial_id)
+    effective_lb_score = metrics.get("lb_score")
+    if effective_lb_score is None and submission:
+        effective_lb_score = submission.get("submitted_lb_score")
+    effective_rank = metrics.get("rank")
+    if effective_rank is None and submission:
+        effective_rank = submission.get("submitted_rank")
     state = load_state(competition)
     diagnosis = diagnose_trial(competition, trial_id)
     policy = load_policy("pipeline_improvement_policy")
@@ -41,7 +48,9 @@ def plan_pipeline_improvement(competition: str, trial_id: str) -> dict[str, Any]
         "rationale": _rationale(primary_axis, diagnosis, metrics),
         "evidence_used": {
             "cv_score": metrics.get("cv_score"),
-            "lb_score": metrics.get("lb_score"),
+            "lb_score": effective_lb_score,
+            "rank": effective_rank,
+            "leaderboard_source": "submission_log" if submission and metrics.get("lb_score") is None else "metrics",
             "issues": diagnosis.get("issues", []),
             "strategy_recommendation": diagnosis.get("strategy_recommendation"),
             "segment_errors_present": bool(metrics.get("segment_errors")),
@@ -52,6 +61,23 @@ def plan_pipeline_improvement(competition: str, trial_id: str) -> dict[str, Any]
     write_text(out_dir / "pipeline_improvement_plan.json", json.dumps(plan, ensure_ascii=False, indent=2) + "\n")
     write_text(out_dir / "pipeline_improvement_plan.md", render_pipeline_improvement_plan(plan))
     return plan
+
+
+def _latest_submission(competition: str, trial_id: str) -> dict[str, Any] | None:
+    path = competition_submissions_dir(competition) / "submission_log.jsonl"
+    if not path.exists():
+        return None
+    rows = []
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if row.get("trial_id") == trial_id:
+            rows.append(row)
+    return rows[-1] if rows else None
 
 
 def render_pipeline_improvement_plan(plan: dict[str, Any]) -> str:

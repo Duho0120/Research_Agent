@@ -15,8 +15,8 @@ class CompetitionOnboardingTest(unittest.TestCase):
             def runner(args, cwd):
                 if args == ["kaggle", "--version"]:
                     return {"returncode": 0, "stdout": "Kaggle API 1.6.17\n", "stderr": ""}
-                if args == ["kaggle", "config", "view"]:
-                    return {"returncode": 0, "stdout": "username: hidden\n", "stderr": ""}
+                if args == ["kaggle", "competitions", "list", "--page-size", "1"]:
+                    return {"returncode": 0, "stdout": "ref,title\nplayground,demo\n", "stderr": ""}
                 if args == ["kaggle", "competitions", "files", "-c", "titanic"]:
                     return {
                         "returncode": 0,
@@ -56,7 +56,7 @@ class CompetitionOnboardingTest(unittest.TestCase):
             def runner(args, cwd):
                 if args == ["kaggle", "--version"]:
                     return {"returncode": 0, "stdout": "Kaggle API 1.6.17\n", "stderr": ""}
-                if args == ["kaggle", "config", "view"]:
+                if args == ["kaggle", "competitions", "list", "--page-size", "1"]:
                     return {"returncode": 1, "stdout": "", "stderr": "Could not find kaggle.json\n"}
                 return {"returncode": 1, "stdout": "", "stderr": "should not fetch"}
 

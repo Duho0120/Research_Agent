@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import Any, Callable, TextIO
 
 from . import paths
-from .demo_one_cycle import render_demo_cycle_cli_summary, run_demo_one_cycle
+from .demo_one_cycle import render_demo_cycle_cli_summary
+from .graph.demo_cycle_graph import run_demo_graph_cycle
 from .store import read_text, write_text
 from .trial_artifacts import trial_artifact_exists
 from .workspace_preparer import prepare_workspace
@@ -32,7 +33,7 @@ def run_demo_guide(
     input_fn: InputFn = input,
     output: TextIO | None = None,
     prepare_workspace_fn: PrepareWorkspaceFn = prepare_workspace,
-    run_cycle_fn: RunCycleFn = run_demo_one_cycle,
+    run_cycle_fn: RunCycleFn = run_demo_graph_cycle,
 ) -> int:
     stream = output or sys.stdout
     _print_header(stream)

@@ -2,6 +2,8 @@
 
 이 문서는 데모 시연자가 CMD에서 그대로 따라 실행할 수 있도록 정리한 가이드입니다.
 
+현재 `demo-guide`는 LangGraph 기반 데모 루프를 실행합니다. 내부적으로는 `load_context -> plan_experiment -> write_code -> run_local -> collect_metrics -> record_result -> finalize` 노드 흐름을 타고, F-02 실험 계획과 F-03 코드 작성 전에 파일 기반 RAG context pack을 만들어 LLM 입력 근거로 사용합니다.
+
 데모 목표는 다음 흐름이 실제로 연결되어 작동하는지 보여주는 것입니다.
 
 ```text

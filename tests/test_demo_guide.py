@@ -16,6 +16,9 @@ from kaggle_research_agent.workspace_preparer import prepare_workspace
 
 
 class DemoGuideTest(unittest.TestCase):
+    def test_demo_guide_defaults_to_langgraph_cycle(self):
+        self.assertEqual("run_demo_graph_cycle", run_demo_guide.__kwdefaults__["run_cycle_fn"].__name__)
+
     def test_demo_guide_can_exit_from_menu(self):
         output = io.StringIO()
         inputs = iter(["4"])
