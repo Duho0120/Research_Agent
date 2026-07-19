@@ -564,6 +564,65 @@ class DemoOneCycleTest(unittest.TestCase):
             self.assertEqual("trial_001", recovered["recommended_base_trial"])
             self.assertNotIn("model_family", recovered["accepted_axes"])
 
+    def test_decision_card_resets_axis_attempts_after_axis_success(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            root.mkdir()
+
+            from kaggle_research_agent.trial_decision import write_trial_decision_card
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                write_trial_decision_card(
+                    "demo",
+                    "trial_001",
+                    plan={"plan_type": "initial_pipeline_plan"},
+                    metrics={"cv_score": 0.80, "objective": "maximize"},
+                )
+                write_trial_decision_card(
+                    "demo",
+                    "trial_002",
+                    plan={
+                        "plan_type": "continuation_delta_plan",
+                        "source_trial_id": "trial_001",
+                        "primary_change_axis": "model_family",
+                        "change_details": ["Candidate: RandomForest"],
+                    },
+                    metrics={"cv_score": 0.79, "objective": "maximize"},
+                )
+                accepted = write_trial_decision_card(
+                    "demo",
+                    "trial_003",
+                    plan={
+                        "plan_type": "continuation_delta_plan",
+                        "source_trial_id": "trial_001",
+                        "primary_change_axis": "model_family",
+                        "change_details": ["Candidate: GradientBoosting"],
+                    },
+                    metrics={"cv_score": 0.82, "objective": "maximize"},
+                )
+                after_success_failure = write_trial_decision_card(
+                    "demo",
+                    "trial_004",
+                    plan={
+                        "plan_type": "continuation_delta_plan",
+                        "source_trial_id": "trial_003",
+                        "primary_change_axis": "model_family",
+                        "change_details": ["Candidate: ExtraTrees"],
+                    },
+                    metrics={"cv_score": 0.81, "objective": "maximize"},
+                )
+
+            self.assertEqual("provisional_accept", accepted["decision"])
+            self.assertEqual(2, accepted["axis_attempt_count"])
+            self.assertEqual("continue_axis_refinement", after_success_failure["decision"])
+            self.assertEqual(1, after_success_failure["axis_attempt_count"])
+            self.assertNotIn("model_family", after_success_failure["rejected_axes"])
+            self.assertEqual(
+                ["model_family: candidate=ExtraTrees"],
+                after_success_failure["active_axis_rejected_candidates"],
+            )
+            self.assertIn("model_family: candidate=RandomForest", after_success_failure["rejected_candidates"])
+
     def test_decision_card_ignores_future_trials_when_reprocessing_old_trial(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "agent"

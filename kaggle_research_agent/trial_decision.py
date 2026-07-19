@@ -68,8 +68,12 @@ def write_trial_decision_card(
         lb_status=previous_lb_status,
         lb_score=lb_score,
     )
-    axis_attempt_count = _axis_attempt_count(previous_cards, current_axis) + (1 if current_axis else 0)
+    unresolved_axis_cards = _unresolved_axis_cards(previous_cards, current_axis)
+    axis_attempt_count = len(unresolved_axis_cards) + (1 if current_axis else 0)
     rejected_candidates_by_axis = _previous_rejected_candidates_by_axis(previous_cards)
+    active_rejected_candidates_by_axis = (
+        _previous_rejected_candidates_by_axis(unresolved_axis_cards) if current_axis else {}
+    )
     rejected_candidates = _flatten_rejected_candidates(rejected_candidates_by_axis)
     candidate_label = _candidate_label(plan)
     decision = _decision(
@@ -84,6 +88,11 @@ def write_trial_decision_card(
     if (_continues_axis(decision) or _rejects_axis(decision)) and candidate_label:
         rejected_candidates_by_axis = _add_rejected_candidate(
             rejected_candidates_by_axis,
+            current_axis or "unknown_axis",
+            candidate_label,
+        )
+        active_rejected_candidates_by_axis = _add_rejected_candidate(
+            active_rejected_candidates_by_axis,
             current_axis or "unknown_axis",
             candidate_label,
         )
@@ -127,7 +136,7 @@ def write_trial_decision_card(
         "candidate_label": candidate_label,
         "rejected_candidates": rejected_candidates,
         "rejected_candidates_by_axis": rejected_candidates_by_axis,
-        "active_axis_rejected_candidates": rejected_candidates_by_axis.get(current_axis, []) if current_axis else [],
+        "active_axis_rejected_candidates": active_rejected_candidates_by_axis.get(current_axis, []) if current_axis else [],
         "recommended_base_trial": recommended_base_trial,
         "rejected_axes": rejected_axes,
         "accepted_axes": accepted_axes,
@@ -535,10 +544,18 @@ def _previous_accepted_axes(cards: list[dict[str, Any]]) -> list[str]:
     return axes
 
 
-def _axis_attempt_count(cards: list[dict[str, Any]], axis: str) -> int:
+def _unresolved_axis_cards(cards: list[dict[str, Any]], axis: str) -> list[dict[str, Any]]:
     if not axis:
-        return 0
-    return sum(1 for row in cards if row.get("change_axis") == axis)
+        return []
+    unresolved: list[dict[str, Any]] = []
+    for row in cards:
+        if row.get("change_axis") != axis:
+            continue
+        if row.get("decision") in {"accept", "provisional_accept"}:
+            unresolved = []
+            continue
+        unresolved.append(row)
+    return unresolved
 
 
 def _candidate_label(plan: dict[str, Any]) -> str:
