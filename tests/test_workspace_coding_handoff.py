@@ -29,6 +29,13 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             self.assertEqual(["src/", "tests/", "train.py"], result["allowed_write_paths"])
             self.assertIn("outputs/metrics.json", result["forbidden_paths"])
             self.assertIn("outputs/submission.csv", result["forbidden_paths"])
+            self.assertEqual("patch_only", result["edit_policy"]["mode"])
+            self.assertTrue(result["edit_policy"]["prefer_patch_updates"])
+            self.assertFalse(result["edit_policy"]["allow_full_file_updates"])
+            self.assertTrue(result["edit_policy"]["restore_base_before_patch"])
+            self.assertEqual("trial_001", result["source_trial_id"])
+            self.assertEqual("trial_001", result["code_base_trial_id"])
+            self.assertEqual("experiments/demo/trial_001/internal/code_snapshot", result["edit_policy"]["base_code_source"])
             self.assertEqual("outputs/metrics.json", result["metrics_output_contract"]["path"])
             self.assertEqual("cv_score", result["metrics_output_contract"]["score_key"])
             self.assertIn("cv_score", result["metrics_output_contract"]["required_keys"])
@@ -43,6 +50,9 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             self.assertIn("experiments/demo/trial_002/context_pack_workspace_code_writing.md", result["context_files"])
             self.assertIn("experiments/demo/trial_002/retrieval_manifest_workspace_code_writing.json", result["context_files"])
             self.assertEqual("workspace_code_writing", result["retrieval_context"]["task"])
+            self.assertEqual("Survived", result["data_card_summary"]["target_column"])
+            self.assertIn("Pclass", result["data_card_summary"]["include_features_first"])
+            self.assertIn("Name", result["data_card_summary"]["defer_features_first"])
             self.assertTrue((trial / "workspace_coding_handoff.json").exists())
             self.assertTrue((trial / "context_pack_workspace_code_writing.json").exists())
             self.assertTrue((trial / "retrieval_manifest_workspace_code_writing.json").exists())
@@ -50,11 +60,12 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             self.assertTrue(snapshot.exists())
             snapshot_text = snapshot.read_text(encoding="utf-8")
             self.assertIn("Previous Trial Evidence", snapshot_text)
-            self.assertIn("Current Project Code", snapshot_text)
-            self.assertIn("pipeline_structure.json", snapshot_text)
-            self.assertIn("Data Split / CV Strategy", snapshot_text)
+            self.assertIn("Recommended Base Trial Code Snapshot", snapshot_text)
+            self.assertIn("Current Workspace Code", snapshot_text)
             self.assertIn("train.py", snapshot_text)
+            self.assertIn("MODEL = 'source'", snapshot_text)
             self.assertIn("MODEL = 'baseline'", snapshot_text)
+            self.assertNotIn("tests/README.md", snapshot_text)
             request = trial / "workspace_coding_agent_request.md"
             self.assertTrue(request.exists())
             text = request.read_text(encoding="utf-8")
@@ -62,10 +73,16 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             self.assertIn("src/", text)
             self.assertIn("Do not run training", text)
             self.assertIn("Metrics Output Contract", text)
+            self.assertIn("Edit Policy", text)
+            self.assertIn("patch_updates", text)
+            self.assertIn("restore_base_before_patch: True", text)
+            self.assertIn("base_code_source", text)
             self.assertIn("cv_score", text)
             self.assertIn("Artifact Policy", text)
             self.assertIn("Do not persist trained model", text)
             self.assertIn("RAG Context Pack", text)
+            self.assertIn("Data Card Summary", text)
+            self.assertIn("Survived", text)
             log = root / "memory" / "demo" / "decision_log.jsonl"
             last = json.loads(log.read_text(encoding="utf-8").splitlines()[-1])
             self.assertEqual("workspace_coding_handoff", last["decision_type"])
@@ -167,11 +184,34 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             },
             comp / "execution_profile.yaml",
         )
+        (comp / "competition_data_card.json").write_text(
+            json.dumps(
+                {
+                    "task_type": "tabular_classification",
+                    "target_column": "Survived",
+                    "id_column": "PassengerId",
+                    "submission_prediction_column": "Survived",
+                    "train_file": "train.csv",
+                    "test_file": "test.csv",
+                    "sample_submission_file": "gender_submission.csv",
+                    "baseline_recommendation": {
+                        "include_features_first": ["Pclass", "Sex", "Age", "SibSp", "Parch", "Fare", "Embarked"],
+                        "defer_features_first": ["Name", "Ticket", "Cabin"],
+                        "exclude_columns": ["PassengerId", "Survived"],
+                        "preferred_model_families": ["logistic_regression_or_linear_classifier_for_binary_classification"],
+                        "avoid_first_trial": ["gaussian_naive_bayes_for_mixed_numeric_and_categorical_data"],
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
 
     def _write_next_trial(self, root: Path, *, continuation_mode: str) -> None:
         source = root / "experiments" / "demo" / "trial_001"
         (source / "internal").mkdir(parents=True, exist_ok=True)
         (source / "user_view").mkdir(parents=True, exist_ok=True)
+        (source / "user_view" / "code" / "src").mkdir(parents=True, exist_ok=True)
+        (source / "user_view" / "code" / "src" / "model.py").write_text("MODEL = 'source'\n", encoding="utf-8")
         (source / "internal" / "pipeline_structure.json").write_text(
             json.dumps(
                 {

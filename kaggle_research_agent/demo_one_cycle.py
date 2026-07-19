@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import csv
 import json
 import os
 import time
@@ -17,6 +18,8 @@ from .policies import load_policy, select_model_for_call
 from .retrieval.context_pack import build_context_pack, context_pack_prompt_summary
 from .store import load_recent_trials, load_state, now_iso, read_text, write_text
 from .trial_artifacts import organize_trial_artifacts, trial_artifact_path
+from .trial_decision import load_latest_decision_context, write_trial_decision_card
+from .trial_memory_card import write_trial_memory_card
 from .workspace_code_writer import run_workspace_code_writer, validate_workspace_coding_result
 from .workspace_coding_handoff import prepare_workspace_coding_handoff
 from .workspace_metrics_collector import collect_workspace_metrics
@@ -52,6 +55,7 @@ def run_demo_one_cycle(
             task="experiment_planning",
             query=(
                 "competition overview metric data notes source materials execution profile "
+                "competition data card data profile target id columns feature recommendations "
                 "previous trial plan metrics pipeline structure result"
             ),
         )
@@ -480,6 +484,12 @@ def read_demo_agent_events(competition: str, trial_id: str, *, limit: int = 8) -
 def _load_ready_demo_plan(out_dir: Path) -> dict[str, Any] | None:
     plan = _load_json(trial_artifact_path(out_dir, "demo_experiment_plan.json"), default={})
     if isinstance(plan, dict) and plan.get("status") == "ready":
+        context = _load_json(out_dir / "demo_context.json", default={})
+        if isinstance(context, dict) and context:
+            plan = _normalize_plan(plan, context)
+            write_text(out_dir / "demo_experiment_plan.md", render_demo_plan(plan))
+            if not (out_dir / "next_experiment.md").exists():
+                write_text(out_dir / "next_experiment.md", render_demo_plan(plan))
         return plan
     return None
 
@@ -872,11 +882,16 @@ def load_demo_context(competition: str, trial_id: str) -> dict[str, Any]:
         profile = load_execution_profile(competition)
     state = load_state(competition)
     inventory = _load_json(competition_dir(competition) / "workspace_inventory.json", default={})
-    recent_trials = load_recent_trials(competition, limit=3)
+    recent_trials = _load_demo_recent_trials(competition, current_trial_id=trial_id, limit=3)
+    decision_context = load_latest_decision_context(competition)
+    source_trial_id = _select_demo_source_trial_id(recent_trials, trial_id, decision_context)
     competition_docs = _load_demo_competition_docs(competition)
+    data_profile = _build_demo_data_profile(competition, profile, state)
     context = {
         "competition": competition,
         "trial_id": trial_id,
+        "plan_type": "continuation_delta_plan" if source_trial_id else "initial_pipeline_plan",
+        "source_trial_id": source_trial_id,
         "status": "ready" if validation["status"] == "ready" else "blocked",
         "issues": validation["issues"],
         "metric": state.get("competition", {}).get("metric", "unknown"),
@@ -889,8 +904,11 @@ def load_demo_context(competition: str, trial_id: str) -> dict[str, Any]:
         "metrics_contract": profile.get("metrics_contract", {}),
         "artifact_policy": load_policy("artifact_policy"),
         "inventory_summary": _inventory_summary(inventory),
+        "data_profile": data_profile,
+        "baseline_guardrails": _baseline_guardrails(data_profile),
         "competition_docs": competition_docs,
         "recent_trials": recent_trials,
+        "decision_context": decision_context,
         "llm_call": False,
     }
     out_dir = trial_dir(competition, trial_id)
@@ -908,6 +926,10 @@ def load_demo_context(competition: str, trial_id: str) -> dict[str, Any]:
             "profile_status": validation["status"],
             "recent_trial_count": len(recent_trials),
             "competition_doc_count": len([value for value in competition_docs.values() if value]),
+            "data_profile_status": data_profile.get("status"),
+            "data_files": [item.get("name") for item in data_profile.get("files", [])],
+            "recommended_base_trial": decision_context.get("recommended_base_trial"),
+            "rejected_axes": decision_context.get("rejected_axes", []),
         },
         next_action="create-demo-experiment-plan" if context["status"] == "ready" else "fix-execution-profile",
     )
@@ -1010,6 +1032,44 @@ def create_demo_experiment_plan(
 
 def build_demo_plan_payload(context: dict[str, Any], *, model: str) -> dict[str, Any]:
     context_pack = context.get("planning_context_pack", {})
+    prompt_data_profile = _compact_data_profile_for_prompt(context.get("data_profile", {}))
+    prompt_context = _compact_demo_context_for_prompt(context)
+    recent_trials = context.get("recent_trials", [])
+    source_trial_id = context.get("source_trial_id")
+    cycle_instruction = (
+        "Create exactly one continuation delta plan for this ML workspace."
+        if source_trial_id
+        else "Create exactly one first-cycle experiment plan for this ML workspace."
+    )
+    continuation_instruction = (
+        [
+            "This is not the first trial. Use previous trial evidence from the RAG context and structured context.",
+            f"The source trial is `{source_trial_id}`. Treat its pipeline as the base pipeline.",
+            "Use decision_context before long notes: latest_decision_card, active_axis, recommended_base_trial, rejected_axes, rejected_candidates, and planner_constraints are the highest-priority evidence.",
+            "If decision_context.active_axis is present, keep that same primary axis and choose a different candidate or parameter variant within the axis.",
+            "Do not switch away from active_axis until the decision context explicitly marks that axis as rejected.",
+            "If recommended_base_trial is different from the latest completed trial, start from recommended_base_trial and avoid stacking on the rejected latest change.",
+            "Do not keep a rejected axis unless the new primary axis is explicitly rollback/validation-reliability.",
+            "Do not repeat any rejected_candidate; use it as evidence for what was already tried inside the active axis.",
+            "Do not redesign the whole pipeline unless the evidence explicitly says the current pipeline is invalid.",
+            "Write the plan as a delta from the source trial: keep most of the pipeline fixed and change exactly one primary improvement axis.",
+            "Explicitly state the previous best/local score you used, what changed in the previous pipeline, and exactly one improvement axis for this trial.",
+            "Avoid generic wording such as 'improve performance'; name the concrete split, preprocessing, feature, model, or parameter change.",
+            "Do not call the plan first-cycle or baseline unless the evidence truly shows no completed prior trial.",
+            "Return continuation fields when applicable: primary_change_axis, keep_unchanged, change_details, code_change_targets, success_criteria, failure_decision.",
+            "The plan should be concise. Do not repeat the full pipeline blueprint except for the parts affected by the chosen change axis.",
+        ]
+        if source_trial_id
+        else [
+            "Because this is the first trial, prioritize a simple reproducible baseline and submission-format verification.",
+            "For the first trial, the compact data_profile and baseline_guardrails are mandatory evidence. Do not fall back to a generic CSV schema-discovery baseline when concrete columns are available.",
+            "For tabular supervised classification, prefer a stable baseline such as imputation + low-cardinality categorical encoding + logistic-regression/linear classifier, or a similarly conservative tree baseline.",
+            "Avoid Gaussian Naive Bayes as the first mixed-tabular baseline unless the data profile strongly supports independent numeric Gaussian features.",
+            "Do not include high-cardinality free-text/id-like columns in the first baseline merely because they exist. Exclude or defer them unless you explicitly engineer a safe derived feature.",
+            "For initial_pipeline_plan, these fields are required: plan_type, plan_title, objective, rationale, pipeline_blueprint, code_change_targets, success_criteria, implementation_notes, expected_outputs.",
+            "Do not omit pipeline_blueprint, code_change_targets, or success_criteria; they are the coder handoff and next-trial memory.",
+        ]
+    )
     return {
         "model": model,
         "input": [
@@ -1021,22 +1081,34 @@ def build_demo_plan_payload(context: dict[str, Any], *, model: str) -> dict[str,
                 "role": "user",
                 "content": "\n".join(
                     [
-                        "Create exactly one first-cycle experiment plan for this ML workspace.",
+                        cycle_instruction,
                         "Do not include leaderboard submission, human review, ensembling, or multi-trial axis switching.",
                         "Model/checkpoint artifacts are optional. Follow artifact_policy: do not persist a trained model by default.",
                         "If a model artifact is needed, justify it using an allowed_when reason such as required_for_separate_predict_command.",
                         "Always preserve metrics, submission output, code snapshot, and pipeline summary as the primary trial memory.",
-                        "Return JSON with plan_title, objective, rationale, implementation_notes, expected_outputs.",
+                        "Return JSON with plan_type, plan_title, objective, rationale, implementation_notes, expected_outputs.",
+                        "Keep the JSON concise but concrete: do not restate full evidence, avoid generic performance wording, and prefer short bullets with actual columns, split values, preprocessing, model, and output files.",
+                        "For pipeline_blueprint/change_details, include only the planned pipeline facts needed by the coder and the next trial memory; avoid essay-style explanations.",
                         "Use the RAG context pack as evidence. Prefer concrete details from retrieved documents over generic ML advice.",
+                        "Treat the compact data_profile and baseline_guardrails below as higher priority than broad RAG summaries for first-trial baseline design.",
                         "Mention the applied data, split, preprocessing, model, and output assumptions when they are available in evidence.",
+                        *continuation_instruction,
+                        "",
+                        "## Compact Data Profile",
+                        "",
+                        json.dumps(prompt_data_profile, ensure_ascii=False, indent=2),
+                        "",
+                        "## Baseline Guardrails",
+                        "",
+                        json.dumps(context.get("baseline_guardrails", {}), ensure_ascii=False, indent=2),
                         "",
                         "## RAG Context Pack",
                         "",
-                        context_pack_prompt_summary(context_pack) if context_pack else "No RAG context pack available.",
+                        _planning_context_pack_prompt_summary(context_pack) if context_pack else "No RAG context pack available.",
                         "",
                         "## Structured Demo Context",
                         "",
-                        json.dumps(context, ensure_ascii=False, indent=2),
+                        json.dumps(prompt_context, ensure_ascii=False, indent=2),
                     ]
                 ),
             },
@@ -1076,6 +1148,29 @@ def record_demo_cycle_result(
         "project_root": context.get("project_root"),
         "plan_title": plan.get("plan_title"),
         "rationale": plan.get("rationale"),
+    }
+    write_text(out_dir / "demo_cycle_record.json", json.dumps(record, ensure_ascii=False, indent=2) + "\n")
+    write_text(out_dir / "demo_cycle_record.md", render_demo_cycle_record(record))
+    decision_card = write_trial_decision_card(
+        competition,
+        trial_id,
+        plan=plan,
+        metrics=metrics_collection,
+    )
+    record["decision"] = decision_card.get("decision")
+    record["decision_card_path"] = f"experiments/{competition}/{trial_id}/decision_card.json"
+    memory_card = write_trial_memory_card(
+        competition,
+        trial_id,
+        plan=plan,
+        metrics=metrics_collection,
+        decision_card=decision_card,
+    )
+    record["trial_memory_card_path"] = f"experiments/{competition}/{trial_id}/trial_memory_card.json"
+    record["memory_card_summary"] = {
+        "change_axis": memory_card.get("change_axis"),
+        "decision": memory_card.get("decision"),
+        "recommended_base_trial": memory_card.get("recommended_base_trial"),
     }
     write_text(out_dir / "demo_cycle_record.json", json.dumps(record, ensure_ascii=False, indent=2) + "\n")
     write_text(out_dir / "demo_cycle_record.md", render_demo_cycle_record(record))
@@ -1181,6 +1276,13 @@ def render_demo_context(context: dict[str, Any]) -> str:
 
 def _compact_context_pack(context_pack: dict[str, Any]) -> dict[str, Any]:
     documents = []
+    budget = context_pack.get("budget") if isinstance(context_pack.get("budget"), dict) else {}
+    max_chars = 900
+    if budget.get("max_chars_per_document") is not None:
+        try:
+            max_chars = min(max_chars, int(budget["max_chars_per_document"]))
+        except (TypeError, ValueError):
+            pass
     for doc in context_pack.get("documents", []):
         documents.append(
             {
@@ -1188,7 +1290,7 @@ def _compact_context_pack(context_pack: dict[str, Any]) -> dict[str, Any]:
                 "source_kind": doc.get("source_kind"),
                 "trial_id": doc.get("trial_id"),
                 "score": doc.get("score"),
-                "text": str(doc.get("text", ""))[:1800],
+                "text": str(doc.get("text", ""))[:max_chars],
             }
         )
     compact = dict(context_pack)
@@ -1196,11 +1298,24 @@ def _compact_context_pack(context_pack: dict[str, Any]) -> dict[str, Any]:
     return compact
 
 
+def _planning_context_pack_prompt_summary(context_pack: dict[str, Any]) -> str:
+    compact = dict(context_pack)
+    compact["documents"] = [
+        doc
+        for doc in context_pack.get("documents", [])
+        if doc.get("source_kind") not in {"data_profile", "competition_data_card"}
+    ]
+    return context_pack_prompt_summary(compact)
+
+
 def render_demo_plan(plan: dict[str, Any]) -> str:
+    plan_type = plan.get("plan_type")
     lines = [
         f"# {plan.get('trial_id')} Demo Experiment Plan",
         "",
         f"- status: {plan.get('status')}",
+        f"- plan_type: {plan_type}",
+        f"- source_trial_id: {plan.get('source_trial_id')}",
         f"- title: {plan.get('plan_title')}",
         f"- next_action: {plan.get('next_action')}",
         "",
@@ -1212,10 +1327,45 @@ def render_demo_plan(plan: dict[str, Any]) -> str:
         "",
         plan.get("rationale", ""),
         "",
-        "## Implementation Notes",
-        "",
     ]
+    if plan_type == "continuation_delta_plan":
+        lines.extend(
+            [
+                "## Primary Change Axis",
+                "",
+                str(plan.get("primary_change_axis") or "Not specified"),
+                "",
+                "## Keep Unchanged",
+                "",
+            ]
+        )
+        lines.extend(f"- {item}" for item in _normalize_plan_items(plan.get("keep_unchanged")) or ["None"])
+        lines.extend(["", "## Change Details", ""])
+        lines.extend(f"- {item}" for item in _normalize_plan_items(plan.get("change_details")) or ["None"])
+    else:
+        lines.extend(["## Pipeline Blueprint", ""])
+        lines.extend(f"- {item}" for item in _normalize_plan_items(plan.get("pipeline_blueprint")) or ["None"])
+    lines.extend(
+        [
+            "",
+            "## Code Change Targets",
+            "",
+        ]
+    )
+    lines.extend(f"- {item}" for item in _normalize_plan_items(plan.get("code_change_targets")) or ["None"])
+    lines.extend(
+        [
+            "",
+            "## Implementation Notes",
+            "",
+        ]
+    )
     lines.extend(f"- {item}" for item in _normalize_plan_items(plan.get("implementation_notes")) or ["None"])
+    lines.extend(["", "## Success Criteria", ""])
+    lines.extend(f"- {item}" for item in _normalize_plan_items(plan.get("success_criteria")) or ["None"])
+    if plan_type == "continuation_delta_plan":
+        lines.extend(["", "## Failure Decision", ""])
+        lines.extend(f"- {item}" for item in _normalize_plan_items(plan.get("failure_decision")) or ["None"])
     lines.extend(["", "## Expected Outputs", ""])
     lines.extend(f"- {item}" for item in _normalize_plan_items(plan.get("expected_outputs")) or ["None"])
     lines.extend(["", "## Issues", ""])
@@ -1325,14 +1475,23 @@ def _finish(
     return result
 
 
-def _write_continuation_context(competition: str, trial_id: str) -> None:
+def _write_continuation_context(competition: str, trial_id: str, source_trial_id: str | None = None) -> None:
     out_dir = trial_dir(competition, trial_id)
+    decision_context = load_latest_decision_context(competition)
+    source_trial_id = source_trial_id or _select_demo_source_trial_id(
+        _load_demo_recent_trials(competition, current_trial_id=trial_id, limit=3),
+        trial_id,
+        decision_context,
+    )
     context = {
         "competition": competition,
         "trial_id": trial_id,
+        "source_trial_id": source_trial_id,
+        "next_trial_id": trial_id,
         "continuation_mode": "can_continue",
         "pending_human_review": False,
         "demo_scope": "one_cycle_without_F05_F07_submission_or_UI",
+        "decision_context": decision_context,
     }
     write_text(out_dir / "continuation_context.json", json.dumps(context, ensure_ascii=False, indent=2) + "\n")
     write_text(
@@ -1341,6 +1500,7 @@ def _write_continuation_context(competition: str, trial_id: str) -> None:
             [
                 f"# {trial_id} Continuation Context",
                 "",
+                f"- source_trial_id: {source_trial_id}",
                 "- continuation_mode: can_continue",
                 "- pending_human_review: false",
                 "- demo_scope: one cycle only",
@@ -1348,6 +1508,337 @@ def _write_continuation_context(competition: str, trial_id: str) -> None:
             ]
         ),
     )
+
+
+def _build_demo_data_profile(competition: str, profile: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+    project_root = Path(str(profile.get("project_root") or ""))
+    data_dir = project_root / "data"
+    workspace_config = _load_json(project_root / "workspace_config.json", default={}) if project_root else {}
+    competition_state = state.get("competition", {}) if isinstance(state, dict) else {}
+    target_column = profile.get("target_column") or workspace_config.get("target_column") or competition_state.get("target_column")
+    id_column = profile.get("id_column") or workspace_config.get("id_column") or competition_state.get("id_column")
+    required_files = list(
+        profile.get("required_data_files", [])
+        or workspace_config.get("required_data_files", [])
+        or competition_state.get("required_data_files", [])
+        or []
+    )
+    files: list[dict[str, Any]] = []
+    if data_dir.is_dir():
+        for path in sorted(data_dir.glob("*.csv")):
+            files.append(_profile_demo_csv(path, data_dir, target_column=target_column, id_column=id_column))
+    train = next((item for item in files if item.get("role") == "train"), None)
+    test = next((item for item in files if item.get("role") == "test"), None)
+    sample = next((item for item in files if item.get("role") == "sample_submission"), None)
+    data_profile = {
+        "schema_version": "1.0",
+        "competition": competition,
+        "status": "ready" if files else "missing_local_csv",
+        "project_root": str(project_root) if project_root else None,
+        "data_dir": str(data_dir) if data_dir else None,
+        "required_data_files": required_files,
+        "target_column": target_column,
+        "id_column": id_column,
+        "submission_prediction_column": workspace_config.get("submission_prediction_column") or target_column,
+        "validation_size": workspace_config.get("validation_size"),
+        "random_seed": workspace_config.get("random_seed"),
+        "task_type": _infer_demo_task_type(train, target_column),
+        "files": files,
+        "train_file": train.get("name") if train else None,
+        "test_file": test.get("name") if test else None,
+        "sample_submission_file": sample.get("name") if sample else None,
+        "baseline_recommendation": _demo_baseline_recommendation(train, target_column=target_column, id_column=id_column),
+    }
+    root = competition_dir(competition)
+    write_text(root / "data_profile.json", json.dumps(data_profile, ensure_ascii=False, indent=2) + "\n")
+    write_text(root / "data_profile.md", _render_demo_data_profile(data_profile))
+    write_text(root / "competition_data_card.json", json.dumps(data_profile, ensure_ascii=False, indent=2) + "\n")
+    write_text(root / "competition_data_card.md", _render_demo_data_profile(data_profile))
+    return data_profile
+
+
+def _profile_demo_csv(path: Path, data_dir: Path, *, target_column: str | None, id_column: str | None) -> dict[str, Any]:
+    rows: list[dict[str, str]] = []
+    with path.open("r", encoding="utf-8-sig", newline="") as file:
+        reader = csv.DictReader(file)
+        columns = list(reader.fieldnames or [])
+        for index, row in enumerate(reader):
+            if index >= 80:
+                break
+            rows.append(dict(row))
+    role = _infer_demo_file_role(path.name, columns, target_column)
+    return {
+        "name": path.relative_to(data_dir).as_posix(),
+        "role": role,
+        "format": path.suffix.lower().lstrip("."),
+        "columns": columns,
+        "rows_sampled": len(rows),
+        "column_profiles": [
+            _profile_demo_column(column, [row.get(column, "") for row in rows], target_column=target_column, id_column=id_column)
+            for column in columns
+        ],
+    }
+
+
+def _profile_demo_column(column: str, values: list[str], *, target_column: str | None, id_column: str | None) -> dict[str, Any]:
+    non_missing = [value for value in values if value not in {"", None, "NA", "N/A", "nan", "NaN", "null", "None"}]
+    unique_values = sorted({str(value) for value in non_missing})
+    inferred_type = _infer_demo_column_type(non_missing)
+    unique_count = len(unique_values)
+    sample_values = unique_values[:8]
+    role = "feature"
+    if target_column and column == target_column:
+        role = "target"
+    elif id_column and column == id_column:
+        role = "id"
+    lower = column.lower()
+    looks_text_like = inferred_type == "categorical_or_text" and (
+        unique_count > 20 or any(token in lower for token in ["name", "ticket", "text", "description", "comment"])
+    )
+    looks_sparse = len(non_missing) < max(3, int(len(values) * 0.5)) if values else False
+    return {
+        "name": column,
+        "role": role,
+        "type": inferred_type,
+        "missing_in_sample": len(values) - len(non_missing),
+        "unique_in_sample": unique_count,
+        "sample_values": sample_values,
+        "baseline_use": _baseline_column_use(role, inferred_type, unique_count, looks_text_like, looks_sparse),
+    }
+
+
+def _infer_demo_file_role(name: str, columns: list[str], target_column: str | None) -> str:
+    lowered = name.lower()
+    stem = Path(lowered).stem
+    if "sample_submission" in lowered or "gender_submission" in lowered:
+        return "sample_submission"
+    if stem == "train" or (target_column and target_column in columns):
+        return "train"
+    if stem == "test" or (target_column and target_column not in columns):
+        return "test"
+    return "unknown"
+
+
+def _infer_demo_column_type(values: list[str]) -> str:
+    if not values:
+        return "unknown"
+    numeric = 0
+    for value in values:
+        try:
+            float(value)
+            numeric += 1
+        except (TypeError, ValueError):
+            pass
+    return "numeric" if numeric / len(values) >= 0.9 else "categorical_or_text"
+
+
+def _baseline_column_use(role: str, inferred_type: str, unique_count: int, looks_text_like: bool, looks_sparse: bool) -> str:
+    if role in {"target", "id"}:
+        return "exclude"
+    if looks_text_like:
+        return "defer_or_engineer"
+    if looks_sparse and inferred_type == "categorical_or_text":
+        return "defer_sparse_categorical"
+    if inferred_type == "numeric":
+        return "include_numeric"
+    if unique_count <= 20:
+        return "include_low_cardinality_categorical"
+    return "defer_high_cardinality_categorical"
+
+
+def _infer_demo_task_type(train: dict[str, Any] | None, target_column: str | None) -> str:
+    if not train or not target_column:
+        return "unknown"
+    target = next((item for item in train.get("column_profiles", []) if item.get("name") == target_column), None)
+    if not target:
+        return "tabular_unknown_target"
+    if target.get("unique_in_sample", 0) <= 20:
+        return "tabular_classification"
+    return "tabular_regression_or_ranking"
+
+
+def _demo_baseline_recommendation(
+    train: dict[str, Any] | None,
+    *,
+    target_column: str | None,
+    id_column: str | None,
+) -> dict[str, Any]:
+    columns = train.get("column_profiles", []) if train else []
+    include = [item["name"] for item in columns if str(item.get("baseline_use", "")).startswith("include_")]
+    defer = [item["name"] for item in columns if str(item.get("baseline_use", "")).startswith("defer")]
+    exclude = [item["name"] for item in columns if item.get("baseline_use") == "exclude"]
+    return {
+        "first_trial_policy": "stable_supervised_tabular_baseline",
+        "target_column": target_column,
+        "id_column": id_column,
+        "include_features_first": include,
+        "defer_features_first": defer,
+        "exclude_columns": exclude,
+        "preferred_model_families": [
+            "logistic_regression_or_linear_classifier_for_binary_classification",
+            "small_random_forest_or_gradient_boosted_tree_if_available",
+        ],
+        "avoid_first_trial": [
+            "gaussian_naive_bayes_for_mixed_numeric_and_categorical_data",
+            "raw_high_cardinality_text_or_identifier_one_hot_features",
+            "broad_schema_discovery_when_target_id_and_columns_are_known",
+        ],
+        "notes": [
+            "Use concrete data_profile columns before generic RAG summaries.",
+            "Keep the first baseline simple, supervised, deterministic, and submission-format checked.",
+        ],
+    }
+
+
+def _baseline_guardrails(data_profile: dict[str, Any]) -> dict[str, Any]:
+    recommendation = data_profile.get("baseline_recommendation", {}) if isinstance(data_profile, dict) else {}
+    return {
+        "priority": "first_trial_quality_over_generic_flexibility",
+        "data_profile_is_mandatory": data_profile.get("status") == "ready",
+        "recommended_features": recommendation.get("include_features_first", []),
+        "deferred_features": recommendation.get("defer_features_first", []),
+        "excluded_columns": recommendation.get("exclude_columns", []),
+        "preferred_model_families": recommendation.get("preferred_model_families", []),
+        "avoid_first_trial": recommendation.get("avoid_first_trial", []),
+    }
+
+
+def _compact_data_profile_for_prompt(data_profile: Any) -> dict[str, Any]:
+    if not isinstance(data_profile, dict):
+        return {}
+    recommendation = data_profile.get("baseline_recommendation", {})
+    files = data_profile.get("files", []) if isinstance(data_profile.get("files"), list) else []
+    compact_files: list[dict[str, Any]] = []
+    train_columns: set[str] = set()
+    for file_profile in files:
+        if not isinstance(file_profile, dict):
+            continue
+        role = file_profile.get("role")
+        if role not in {"train", "test", "sample_submission"}:
+            continue
+        column_profiles = [item for item in file_profile.get("column_profiles", []) if isinstance(item, dict)]
+        if role == "train":
+            columns = []
+            for column in column_profiles:
+                name = str(column.get("name") or "")
+                if name:
+                    train_columns.add(name)
+                columns.append(
+                    {
+                        "name": column.get("name"),
+                        "role": column.get("role"),
+                        "type": column.get("type"),
+                        "unique": column.get("unique_in_sample"),
+                        "missing": column.get("missing_in_sample"),
+                        "baseline_use": column.get("baseline_use"),
+                    }
+                )
+            compact_files.append(
+                {
+                    "name": file_profile.get("name"),
+                    "role": role,
+                    "columns": columns,
+                }
+            )
+            continue
+        column_names = [column.get("name") for column in column_profiles]
+        file_summary: dict[str, Any] = {
+            "name": file_profile.get("name"),
+            "role": role,
+            "columns": column_names,
+        }
+        if role == "test":
+            expected_test_columns = {name for name in train_columns if name != data_profile.get("target_column")}
+            file_summary["same_feature_schema_as_train"] = set(str(name) for name in column_names) == expected_test_columns
+            file_summary["target_present"] = data_profile.get("target_column") in column_names
+        compact_files.append(file_summary)
+    return {
+        "status": data_profile.get("status"),
+        "task_type": data_profile.get("task_type"),
+        "target_column": data_profile.get("target_column"),
+        "id_column": data_profile.get("id_column"),
+        "submission_prediction_column": data_profile.get("submission_prediction_column"),
+        "train_file": data_profile.get("train_file"),
+        "test_file": data_profile.get("test_file"),
+        "validation_size": data_profile.get("validation_size"),
+        "random_seed": data_profile.get("random_seed"),
+        "include_features_first": recommendation.get("include_features_first", []),
+        "defer_features_first": recommendation.get("defer_features_first", []),
+        "exclude_columns": recommendation.get("exclude_columns", []),
+        "preferred_model_families": recommendation.get("preferred_model_families", []),
+        "avoid_first_trial": recommendation.get("avoid_first_trial", []),
+        "files": compact_files,
+    }
+
+
+def _compact_demo_context_for_prompt(context: dict[str, Any]) -> dict[str, Any]:
+    decision_context = context.get("decision_context", {})
+    return {
+        "competition": context.get("competition"),
+        "trial_id": context.get("trial_id"),
+        "plan_type": context.get("plan_type"),
+        "source_trial_id": context.get("source_trial_id"),
+        "metric": context.get("metric"),
+        "objective": context.get("objective"),
+        "platform": context.get("platform"),
+        "project_root": context.get("project_root"),
+        "commands": context.get("commands", {}),
+        "write_scope": context.get("write_scope", {}),
+        "artifact_policy_summary": {
+            "save_metrics": context.get("artifact_policy", {}).get("save_metrics"),
+            "save_submission": context.get("artifact_policy", {}).get("save_submission"),
+            "save_pipeline_summary": context.get("artifact_policy", {}).get("save_pipeline_summary"),
+            "save_model_default": context.get("artifact_policy", {}).get("save_model_default"),
+        },
+        "recent_trials": context.get("recent_trials", []),
+            "decision_context": {
+                "decision": decision_context.get("decision"),
+                "active_axis": decision_context.get("active_axis"),
+                "axis_attempt_count": decision_context.get("axis_attempt_count"),
+                "axis_attempt_limit": decision_context.get("axis_attempt_limit"),
+                "recommended_base_trial": decision_context.get("recommended_base_trial"),
+                "rejected_axes": decision_context.get("rejected_axes", []),
+                "rejected_candidates": decision_context.get("rejected_candidates", [])[:12],
+                "active_axis_rejected_candidates": decision_context.get("active_axis_rejected_candidates", [])[:5],
+                "planner_constraints": decision_context.get("planner_constraints", []),
+            },
+    }
+
+
+def _render_demo_data_profile(profile: dict[str, Any]) -> str:
+    rec = profile.get("baseline_recommendation", {})
+    lines = [
+        f"# Competition Data Card: {profile.get('competition')}",
+        "",
+        f"- status: {profile.get('status')}",
+        f"- task_type: {profile.get('task_type')}",
+        f"- target_column: {profile.get('target_column')}",
+        f"- id_column: {profile.get('id_column')}",
+        f"- train_file: {profile.get('train_file')}",
+        f"- test_file: {profile.get('test_file')}",
+        "",
+        "## First Baseline Recommendation",
+        "",
+        f"- include_features_first: {', '.join(rec.get('include_features_first', [])) or 'None'}",
+        f"- defer_features_first: {', '.join(rec.get('defer_features_first', [])) or 'None'}",
+        f"- exclude_columns: {', '.join(rec.get('exclude_columns', [])) or 'None'}",
+        f"- preferred_model_families: {', '.join(rec.get('preferred_model_families', [])) or 'None'}",
+        f"- avoid_first_trial: {', '.join(rec.get('avoid_first_trial', [])) or 'None'}",
+        "",
+        "## Files",
+        "",
+    ]
+    for file_profile in profile.get("files", []):
+        lines.append(f"### {file_profile.get('name')} [{file_profile.get('role')}]")
+        for column in file_profile.get("column_profiles", []):
+            lines.append(
+                "- "
+                f"{column.get('name')}: role={column.get('role')}, type={column.get('type')}, "
+                f"unique_sample={column.get('unique_in_sample')}, missing_sample={column.get('missing_in_sample')}, "
+                f"baseline_use={column.get('baseline_use')}"
+            )
+        lines.append("")
+    return "\n".join(lines)
 
 
 def _load_demo_competition_docs(competition: str, *, max_chars_per_file: int = 3000) -> dict[str, str]:
@@ -1389,18 +1880,122 @@ def _extract_output_text(raw_response: dict[str, Any]) -> str:
 
 def _normalize_plan(plan: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(plan)
+    plan_type = context.get("plan_type") or ("continuation_delta_plan" if context.get("source_trial_id") else "initial_pipeline_plan")
     normalized.setdefault("schema_version", "1.0")
-    normalized.setdefault("plan_title", "First local baseline experiment")
+    normalized.setdefault("plan_type", plan_type)
+    normalized.setdefault("source_trial_id", context.get("source_trial_id"))
+    normalized.setdefault(
+        "plan_title",
+        "Initial local baseline experiment" if plan_type == "initial_pipeline_plan" else "Continuation delta experiment",
+    )
     normalized.setdefault("objective", f"Create and run one local experiment for {context['competition']}.")
     normalized.setdefault("rationale", "Use the available Execution Profile and local metric artifact to verify the loop.")
+    normalized.setdefault("pipeline_blueprint", [])
+    normalized.setdefault("primary_change_axis", "")
+    normalized.setdefault("keep_unchanged", [])
+    normalized.setdefault("change_details", [])
+    normalized.setdefault("code_change_targets", [])
+    normalized.setdefault("success_criteria", [])
+    normalized.setdefault("failure_decision", [])
     normalized.setdefault("implementation_notes", [])
     normalized.setdefault("expected_outputs", ["metrics.json", "submission.csv"])
     normalized.setdefault("issues", [])
+    normalized["plan_title"] = _normalize_plan_text(normalized.get("plan_title"))
+    normalized["objective"] = _normalize_plan_text(normalized.get("objective"))
+    normalized["rationale"] = _normalize_plan_text(normalized.get("rationale"))
+    normalized["primary_change_axis"] = _normalize_plan_text(normalized.get("primary_change_axis"))
+    normalized["pipeline_blueprint"] = _normalize_plan_items(normalized.get("pipeline_blueprint"))
+    normalized["keep_unchanged"] = _normalize_plan_items(normalized.get("keep_unchanged"))
+    normalized["change_details"] = _normalize_plan_items(normalized.get("change_details"))
+    normalized["code_change_targets"] = _normalize_plan_items(normalized.get("code_change_targets"))
+    normalized["success_criteria"] = _normalize_plan_items(normalized.get("success_criteria"))
+    normalized["failure_decision"] = _normalize_plan_items(normalized.get("failure_decision"))
     normalized["implementation_notes"] = _normalize_plan_items(normalized.get("implementation_notes"))
     normalized["expected_outputs"] = _normalize_plan_items(normalized.get("expected_outputs"))
+    if plan_type == "continuation_delta_plan":
+        _promote_implementation_notes(normalized)
     if not isinstance(normalized["issues"], list):
         normalized["issues"] = [str(normalized["issues"])]
     return normalized
+
+
+def _promote_implementation_notes(plan: dict[str, Any]) -> None:
+    promoted = _implementation_note_buckets(plan.get("implementation_notes", []))
+    if not plan.get("keep_unchanged") and promoted["keep_unchanged"]:
+        plan["keep_unchanged"] = promoted["keep_unchanged"]
+    if not plan.get("change_details") and promoted["change_details"]:
+        plan["change_details"] = promoted["change_details"]
+    if not plan.get("code_change_targets") and promoted["code_change_targets"]:
+        plan["code_change_targets"] = promoted["code_change_targets"]
+
+
+def _implementation_note_buckets(notes: list[str]) -> dict[str, list[str]]:
+    buckets = {"keep_unchanged": [], "change_details": [], "code_change_targets": []}
+    prefixes = {
+        "keep unchanged": "keep_unchanged",
+        "change details": "change_details",
+        "code change targets": "code_change_targets",
+    }
+    for note in notes:
+        if not isinstance(note, str):
+            continue
+        label, separator, body = note.partition(":")
+        if not separator:
+            continue
+        bucket = prefixes.get(label.strip().casefold())
+        if bucket and body.strip():
+            buckets[bucket].append(body.strip())
+    return buckets
+
+
+def _load_demo_recent_trials(competition: str, *, current_trial_id: str, limit: int = 3) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    rows.extend(load_recent_trials(competition, limit=limit * 2))
+    demo_index = competition_memory_dir(competition) / "demo_trial_index.jsonl"
+    if demo_index.exists():
+        for line in demo_index.read_text(encoding="utf-8-sig").splitlines():
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if row.get("competition") == competition:
+                rows.append(row)
+    deduped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        trial = str(row.get("trial_id") or "")
+        if not trial or trial == current_trial_id or trial in seen:
+            continue
+        seen.add(trial)
+        deduped.append(row)
+    return deduped[-limit:]
+
+
+def _latest_source_trial_id(recent_trials: list[dict[str, Any]], current_trial_id: str) -> str | None:
+    for row in reversed(recent_trials):
+        trial_id = row.get("trial_id")
+        if trial_id and trial_id != current_trial_id:
+            return str(trial_id)
+    return None
+
+
+def _latest_demo_source_trial_id(competition: str, trial_id: str) -> str | None:
+    recent_trials = _load_demo_recent_trials(competition, current_trial_id=trial_id, limit=3)
+    decision_context = load_latest_decision_context(competition)
+    return _select_demo_source_trial_id(recent_trials, trial_id, decision_context)
+
+
+def _select_demo_source_trial_id(
+    recent_trials: list[dict[str, Any]],
+    current_trial_id: str,
+    decision_context: dict[str, Any],
+) -> str | None:
+    recommended = decision_context.get("recommended_base_trial")
+    if recommended and recommended != current_trial_id:
+        return str(recommended)
+    return _latest_source_trial_id(recent_trials, current_trial_id)
 
 
 def _normalize_plan_items(value: Any) -> list[str]:
@@ -1411,6 +2006,15 @@ def _normalize_plan_items(value: Any) -> list[str]:
     for item in items:
         normalized.extend(_flatten_plan_item(_coerce_plan_item(item)))
     return [item for item in normalized if item]
+
+
+def _normalize_plan_text(value: Any) -> str:
+    items = _normalize_plan_items(value)
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    return "\n".join(f"- {item}" for item in items)
 
 
 def _coerce_plan_item(item: Any) -> Any:

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 
+from .. import paths
 from ..agents.code_writer_adapter import FileResponseClient
 from ..demo_one_cycle import (
     _compact_context_pack,
@@ -20,7 +21,7 @@ from ..demo_one_cycle import (
 )
 from ..paths import trial_dir
 from ..retrieval.context_pack import build_context_pack
-from ..store import write_text
+from ..store import now_iso, write_text
 from ..workspace_code_writer import run_workspace_code_writer
 from ..workspace_coding_handoff import prepare_workspace_coding_handoff
 from ..workspace_metrics_collector import collect_workspace_metrics
@@ -146,6 +147,7 @@ def load_context_node(state: DemoCycleGraphState) -> dict[str, Any]:
             task="experiment_planning",
             query=(
                 "competition overview metric data notes source materials execution profile "
+                "competition data card data profile target id columns feature recommendations "
                 "previous trial plan metrics pipeline structure result"
             ),
         )
@@ -375,16 +377,18 @@ def finalize_node(state: DemoCycleGraphState) -> dict[str, Any]:
         status = "completed"
     out_dir = trial_dir(state["competition"], state["trial_id"])
     options = _graph_options(state)
+    context = state.get("context") or _load_json_object(out_dir / "demo_context.json")
+    handoff = state.get("handoff") or _load_json_object(out_dir / "workspace_coding_handoff.json")
     result = {
         "competition": state["competition"],
         "trial_id": state["trial_id"],
         "status": status,
         "run_now": bool(options.get("run_now")),
         "steps": state.get("steps", []),
-        "context": state.get("context") or _load_json_object(out_dir / "demo_context.json"),
+        "context": context,
         "model_policy": state.get("model_policy"),
         "plan": state.get("plan") or _load_json_object(out_dir / "demo_experiment_plan.json"),
-        "handoff": state.get("handoff") or _load_json_object(out_dir / "workspace_coding_handoff.json"),
+        "handoff": handoff,
         "code_writer": state.get("code_writer") or _load_json_object(out_dir / "workspace_coding_result_validation.json"),
         "workspace_run": state.get("workspace_run") or _load_json_object(out_dir / "workspace_run.json"),
         "metrics_collection": state.get("metrics_collection") or _load_json_object(out_dir / "metrics_collection.json"),
@@ -396,8 +400,10 @@ def finalize_node(state: DemoCycleGraphState) -> dict[str, Any]:
             "enabled": True,
             "graph_state_file": f"experiments/{state['competition']}/{state['trial_id']}/graph_state.json",
             "node_events_file": f"experiments/{state['competition']}/{state['trial_id']}/node_events.jsonl",
+            "graph_rag_manifest_file": f"experiments/{state['competition']}/{state['trial_id']}/graph_rag_manifest.json",
         },
     }
+    result["graph_rag_manifest"] = _write_graph_rag_manifest(out_dir, result)
     final = _finish(state["competition"], state["trial_id"], result)
     write_text(
         trial_dir(state["competition"], state["trial_id"]) / "demo_graph_cycle.json",
@@ -435,3 +441,116 @@ def _graph_options(state: DemoCycleGraphState) -> dict[str, Any]:
     if isinstance(state.get("graph_options"), dict):
         return dict(state["graph_options"])
     return _load_json_object(trial_dir(state["competition"], state["trial_id"]) / "demo_graph_options.json")
+
+
+def _write_graph_rag_manifest(out_dir: Path, result: dict[str, Any]) -> dict[str, Any]:
+    manifest = {
+        "schema_version": "1.0",
+        "built_at": now_iso(),
+        "competition": result["competition"],
+        "trial_id": result["trial_id"],
+        "status": result["status"],
+        "graph": {
+            "orchestrator": "langgraph_state_graph",
+            "nodes": [
+                "load_context",
+                "plan_experiment",
+                "write_code",
+                "run_local",
+                "collect_metrics",
+                "record_result",
+                "prepare_submission",
+                "finalize",
+            ],
+            "steps": result.get("steps", []),
+            "graph_state_file": result.get("graph_execution", {}).get("graph_state_file"),
+            "node_events_file": result.get("graph_execution", {}).get("node_events_file"),
+        },
+        "rag_contexts": _graph_rag_contexts(result),
+        "manifest_file": f"experiments/{result['competition']}/{result['trial_id']}/graph_rag_manifest.json",
+        "summary_file": f"experiments/{result['competition']}/{result['trial_id']}/graph_rag_manifest.md",
+    }
+    write_text(out_dir / "graph_rag_manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+    write_text(out_dir / "graph_rag_manifest.md", _render_graph_rag_manifest(manifest))
+    return manifest
+
+
+def _graph_rag_contexts(result: dict[str, Any]) -> list[dict[str, Any]]:
+    contexts: list[dict[str, Any]] = []
+    planning = (result.get("context") or {}).get("planning_context_pack")
+    if isinstance(planning, dict) and planning:
+        contexts.append(_compact_graph_rag_context("experiment_planning", planning))
+    coding = (result.get("handoff") or {}).get("retrieval_context")
+    if isinstance(coding, dict) and coding:
+        contexts.append(_compact_graph_rag_context("workspace_code_writing", coding))
+    return contexts
+
+
+def _compact_graph_rag_context(task: str, context: dict[str, Any]) -> dict[str, Any]:
+    context_pack_file = context.get("context_pack_file")
+    context_pack_md_file = context.get("context_pack_md_file")
+    retrieval_manifest_file = context.get("retrieval_manifest_file")
+    return {
+        "task": context.get("task") or task,
+        "query": context.get("query"),
+        "document_count": context.get("document_count"),
+        "context_pack_file": context_pack_file,
+        "context_pack_md_file": context_pack_md_file,
+        "retrieval_manifest_file": retrieval_manifest_file,
+        "files_exist": {
+            "context_pack_file": _relative_file_exists(context_pack_file),
+            "context_pack_md_file": _relative_file_exists(context_pack_md_file),
+            "retrieval_manifest_file": _relative_file_exists(retrieval_manifest_file),
+        },
+        "documents": [
+            {
+                "source_path": doc.get("source_path"),
+                "source_kind": doc.get("source_kind"),
+                "trial_id": doc.get("trial_id"),
+                "score": doc.get("score"),
+            }
+            for doc in context.get("documents", [])
+            if isinstance(doc, dict)
+        ],
+    }
+
+
+def _relative_file_exists(value: Any) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return False
+    return (paths.project_root() / value).is_file()
+
+
+def _render_graph_rag_manifest(manifest: dict[str, Any]) -> str:
+    lines = [
+        f"# Graph/RAG Manifest - {manifest['competition']} / {manifest['trial_id']}",
+        "",
+        f"- status: {manifest['status']}",
+        f"- graph_state_file: `{manifest['graph']['graph_state_file']}`",
+        f"- node_events_file: `{manifest['graph']['node_events_file']}`",
+        f"- steps: {', '.join(manifest['graph'].get('steps', []))}",
+        "",
+        "## RAG Contexts",
+        "",
+    ]
+    for context in manifest.get("rag_contexts", []):
+        lines.extend(
+            [
+                f"### {context.get('task')}",
+                "",
+                f"- documents: {context.get('document_count')}",
+                f"- context_pack: `{context.get('context_pack_md_file')}`",
+                f"- manifest: `{context.get('retrieval_manifest_file')}`",
+                f"- files_exist: {context.get('files_exist')}",
+                "",
+            ]
+        )
+        for doc in context.get("documents", [])[:8]:
+            lines.append(
+                f"- `{doc.get('source_path')}` | kind={doc.get('source_kind')} | "
+                f"trial={doc.get('trial_id') or '-'} | score={doc.get('score')}"
+            )
+        lines.append("")
+    if not manifest.get("rag_contexts"):
+        lines.append("- No RAG context pack was recorded.")
+    return "\n".join(lines)

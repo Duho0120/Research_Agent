@@ -92,6 +92,30 @@ class WorkspaceMetricsCollectorTest(unittest.TestCase):
             self.assertEqual(0.79, metrics["cv_score"])
             self.assertEqual(712, metrics["training_rows"])
 
+    def test_collects_direct_metric_key_from_competition_metric(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            project = Path(tmp) / "project"
+            root.mkdir()
+            project.mkdir()
+            source = project / "outputs" / "metrics.json"
+            source.parent.mkdir()
+            source.write_text(
+                json.dumps({"accuracy": 0.91, "metric": "accuracy", "objective": "maximize"}),
+                encoding="utf-8",
+            )
+            self._write_workspace(root, project, "trial_direct_metric", status="completed")
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = collect_workspace_metrics("demo", "trial_direct_metric")
+
+            self.assertEqual("collected", result["status"])
+            self.assertEqual("accuracy", result["score_source"])
+            self.assertEqual(0.91, result["cv_score"])
+            metrics = json.loads((root / "experiments" / "demo" / "trial_direct_metric" / "metrics.json").read_text())
+            self.assertEqual(0.91, metrics["cv_score"])
+            self.assertEqual(0.91, metrics["accuracy"])
+
     def test_missing_score_mapping_requests_review_without_writing_metrics(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "agent"
@@ -100,7 +124,7 @@ class WorkspaceMetricsCollectorTest(unittest.TestCase):
             project.mkdir()
             source = project / "outputs" / "metrics.json"
             source.parent.mkdir()
-            source.write_text(json.dumps({"accuracy": 0.91}), encoding="utf-8")
+            source.write_text(json.dumps({"score": 0.91}), encoding="utf-8")
             self._write_workspace(root, project, "trial_003", status="completed")
 
             with patch("kaggle_research_agent.paths.project_root", return_value=root):

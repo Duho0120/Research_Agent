@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import os
+import sys
 from . import simple_yaml
 from .baseline_generator import generate_baseline_pipeline
 from .competition_inspector import inspect_competition
@@ -48,6 +51,7 @@ from .trial_artifacts import organize_trial_artifacts
 
 
 def main(argv: list[str] | None = None) -> int:
+    _configure_utf8_console()
     parser = argparse.ArgumentParser(prog="research-agent")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -896,6 +900,21 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if result["status"] in {"job_created", "executed", "ready_to_evaluate"} else 1
 
     return 1
+
+
+def _configure_utf8_console() -> None:
+    """Prefer UTF-8 for Korean CLI output on Windows terminals."""
+    if os.name == "nt":
+        try:
+            ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+            ctypes.windll.kernel32.SetConsoleCP(65001)
+        except Exception:
+            pass
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 
 def _render_workspace_pipeline_summary(result: dict) -> str:

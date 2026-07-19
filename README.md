@@ -35,6 +35,7 @@ Completed:
 - `run-auto-loop` can run a bounded safe research loop across multiple trials with a no-improvement stop policy and submission disabled by default.
 - `run-graph-cycle` exposes the same conservative one-trial flow through a LangGraph `StateGraph` orchestration layer while keeping the existing Python tools as graph nodes.
 - `run-graph-cycle` now records LangGraph node observability artifacts for each trial: `graph_state.json` captures the latest graph checkpoint-like state, while `node_events.jsonl` records node started/completed/failed events.
+- Graph-backed demo runs also write `graph_rag_manifest.json/md`, tying the executed LangGraph nodes to the planning/coding RAG context packs and their retrieval manifests for easier audit and debugging.
 - File-based RAG groundwork is available through `build-retrieval-index` and `retrieve-documents`: competition docs, memory logs, trial metrics, pipeline structures, and user-facing trial summaries can be indexed into `memory/<competition>/document_index.jsonl`.
 - Planner/coder LLM calls now have a RAG context-pack path: demo planning writes `context_pack_experiment_planning.*`, while workspace coding handoff writes `context_pack_workspace_code_writing.*` and `retrieval_manifest_workspace_code_writing.json` so later prompts can cite retrieved evidence instead of relying on raw file dumps.
 - Policy files under `configs/policies/` control token use, execution decisions, and human-review decisions.

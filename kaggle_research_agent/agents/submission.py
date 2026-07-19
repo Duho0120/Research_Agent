@@ -8,6 +8,8 @@ from .. import paths
 from ..integrations import kaggle_cli
 from ..paths import competition_memory_dir, competition_submissions_dir, experiments_dir, trial_dir
 from ..store import load_state, now_iso, save_state, write_text
+from ..trial_decision import write_trial_decision_card
+from ..trial_memory_card import write_trial_memory_card
 
 
 def record_submission_result(
@@ -52,6 +54,18 @@ def record_submission_result(
     }
     _append_submission_log(competition, row)
     _write_trial_files(competition, trial_id, row)
+    decision_card = write_trial_decision_card(
+        competition,
+        trial_id,
+        metrics={"cv_score": cv_score, "objective": objective},
+        submission={"submitted_lb_score": submitted_lb_score, "submitted_rank": submitted_rank},
+    )
+    write_trial_memory_card(
+        competition,
+        trial_id,
+        metrics={"cv_score": cv_score, "objective": objective},
+        decision_card=decision_card,
+    )
     if is_best:
         _write_best_files(competition, trial_id, row)
     return row

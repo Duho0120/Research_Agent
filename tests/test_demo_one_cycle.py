@@ -47,6 +47,8 @@ class DemoOneCycleTest(unittest.TestCase):
             self.assertEqual("ready", result["submission_manifest"]["status"])
             self.assertTrue((trial / "submit_manifest.json").exists())
             self.assertTrue((trial / "submit_manifest.md").exists())
+            self.assertTrue(trial_artifact_exists(trial, "decision_card.json"))
+            self.assertTrue(trial_artifact_exists(trial, "trial_memory_card.json"))
             self.assertTrue((trial / "demo_context.md").exists())
             self.assertTrue((trial / "next_experiment.md").exists())
             self.assertTrue(trial_artifact_exists(trial, "workspace_coding_result.json"))
@@ -61,6 +63,8 @@ class DemoOneCycleTest(unittest.TestCase):
             self.assertTrue(any('"event": "stage_started"' in line for line in events))
             self.assertTrue(any('"event": "cycle_completed"' in line for line in events))
             self.assertTrue((root / "memory" / "demo" / "demo_trial_index.jsonl").exists())
+            self.assertTrue((root / "memory" / "demo" / "latest_decision_card.json").exists())
+            self.assertTrue((root / "memory" / "demo" / "latest_trial_memory_card.json").exists())
             usage_lines = (root / "memory" / "demo" / "token_usage.jsonl").read_text(encoding="utf-8").splitlines()
             self.assertEqual(2, len(usage_lines))
             usages = [json.loads(line) for line in usage_lines]
@@ -113,6 +117,15 @@ class DemoOneCycleTest(unittest.TestCase):
             self.assertTrue(trial_artifact_exists(trial, "demo_one_cycle.json"))
             self.assertTrue((trial / "graph_state.json").exists())
             self.assertTrue((trial / "node_events.jsonl").exists())
+            self.assertTrue((trial / "graph_rag_manifest.json").exists())
+            self.assertTrue((trial / "graph_rag_manifest.md").exists())
+            self.assertEqual(
+                "experiments/demo/trial_001/graph_rag_manifest.json",
+                result["graph_execution"]["graph_rag_manifest_file"],
+            )
+            manifest = json.loads((trial / "graph_rag_manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(["experiment_planning", "workspace_code_writing"], [item["task"] for item in manifest["rag_contexts"]])
+            self.assertTrue(all(item["files_exist"]["context_pack_md_file"] for item in manifest["rag_contexts"]))
             graph_state = json.loads((trial / "graph_state.json").read_text(encoding="utf-8"))
             self.assertEqual("completed", graph_state["status"])
             self.assertEqual("finalize", graph_state["last_completed_node"])
@@ -157,6 +170,15 @@ class DemoOneCycleTest(unittest.TestCase):
             self.assertTrue((memory / "demo_graph_auto_loop.json").exists())
             self.assertTrue((memory / "document_index.jsonl").exists())
             self.assertTrue((root / "experiments" / "demo" / "trial_002" / "context_pack_experiment_planning.json").exists())
+            trial_002_manifest = json.loads(
+                (root / "experiments" / "demo" / "trial_002" / "graph_rag_manifest.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            planning_context = next(
+                item for item in trial_002_manifest["rag_contexts"] if item["task"] == "experiment_planning"
+            )
+            self.assertTrue(any(doc.get("trial_id") == "trial_001" for doc in planning_context["documents"]))
             index_text = (memory / "document_index.jsonl").read_text(encoding="utf-8")
             self.assertIn("experiments/demo/trial_001/user_view/02_pipeline_structure.ko.md", index_text)
             state = simple_yaml.load(root / "competitions" / "demo" / "state.yaml")
@@ -221,6 +243,405 @@ class DemoOneCycleTest(unittest.TestCase):
 
             self.assertEqual(0, code)
             self.assertTrue((root / "memory" / "demo" / "demo_graph_auto_loop.json").exists())
+
+    def test_demo_plan_payload_uses_continuation_instructions_when_recent_trials_exist(self):
+        context = {
+            "competition": "demo",
+            "trial_id": "trial_002",
+            "source_trial_id": "trial_001",
+            "plan_type": "continuation_delta_plan",
+            "recent_trials": [{"trial_id": "trial_001", "cv_score": 0.83}],
+            "planning_context_pack": {"documents": []},
+        }
+
+        payload = build_demo_plan_payload(context, model="gpt-5.5")
+        prompt = payload["input"][1]["content"]
+
+        self.assertIn("continuation delta plan", prompt)
+        self.assertIn("source trial is `trial_001`", prompt)
+        self.assertIn("Treat its pipeline as the base pipeline", prompt)
+        self.assertIn("previous best/local score", prompt)
+        self.assertIn("exactly one improvement axis", prompt)
+        self.assertIn("primary_change_axis", prompt)
+        self.assertNotIn("Create exactly one first-cycle experiment plan", prompt)
+
+    def test_initial_demo_plan_payload_requires_coder_handoff_fields(self):
+        context = {
+            "competition": "demo",
+            "trial_id": "trial_001",
+            "source_trial_id": None,
+            "plan_type": "initial_pipeline_plan",
+            "planning_context_pack": {"documents": []},
+            "data_profile": {
+                "status": "ready",
+                "task_type": "tabular_classification",
+                "target_column": "target",
+                "id_column": "id",
+                "baseline_recommendation": {"include_features_first": ["feature_a"]},
+            },
+        }
+
+        prompt = build_demo_plan_payload(context, model="gpt-5.5")["input"][1]["content"]
+
+        self.assertIn("For initial_pipeline_plan, these fields are required", prompt)
+        self.assertIn("pipeline_blueprint", prompt)
+        self.assertIn("code_change_targets", prompt)
+        self.assertIn("success_criteria", prompt)
+
+    def test_demo_context_uses_demo_trial_index_as_source_trial(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            project = Path(tmp) / "project"
+            root.mkdir()
+            project.mkdir()
+            self._write_state(root)
+            self._write_profile(root, project)
+            memory = root / "memory" / "demo"
+            memory.mkdir(parents=True, exist_ok=True)
+            (memory / "demo_trial_index.jsonl").write_text(
+                json.dumps(
+                    {
+                        "competition": "demo",
+                        "trial_id": "trial_001",
+                        "local_score": 0.83,
+                        "cv_score": 0.83,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            from kaggle_research_agent.demo_one_cycle import load_demo_context
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                context = load_demo_context("demo", "trial_002")
+
+            self.assertEqual("continuation_delta_plan", context["plan_type"])
+            self.assertEqual("trial_001", context["source_trial_id"])
+
+    def test_demo_context_keeps_active_axis_after_single_failed_candidate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            project = Path(tmp) / "project"
+            root.mkdir()
+            project.mkdir()
+            self._write_state(root)
+            self._write_profile(root, project)
+
+            from kaggle_research_agent.demo_one_cycle import build_demo_plan_payload, load_demo_context
+            from kaggle_research_agent.trial_decision import write_trial_decision_card
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                write_trial_decision_card(
+                    "demo",
+                    "trial_001",
+                    plan={"plan_type": "initial_pipeline_plan"},
+                    metrics={"cv_score": 0.80, "objective": "maximize"},
+                )
+                write_trial_decision_card(
+                    "demo",
+                    "trial_002",
+                    plan={
+                        "plan_type": "continuation_delta_plan",
+                        "source_trial_id": "trial_001",
+                        "primary_change_axis": "feature_engineering_family_size",
+                        "change_details": ["Candidate: FamilySize"],
+                    },
+                    metrics={"cv_score": 0.80, "objective": "maximize"},
+                    submission={"submitted_lb_score": 0.75},
+                )
+                context = load_demo_context("demo", "trial_003")
+
+            self.assertEqual("continuation_delta_plan", context["plan_type"])
+            self.assertEqual("trial_001", context["source_trial_id"])
+            self.assertEqual("trial_001", context["decision_context"]["recommended_base_trial"])
+            self.assertEqual("feature_engineering_family_size", context["decision_context"]["active_axis"])
+            self.assertEqual(1, context["decision_context"]["axis_attempt_count"])
+            self.assertNotIn("feature_engineering_family_size", context["decision_context"]["rejected_axes"])
+            self.assertTrue(context["decision_context"]["rejected_candidates"])
+            prompt = build_demo_plan_payload(context, model="gpt-5.5")["input"][1]["content"]
+            self.assertIn("active_axis", prompt)
+            self.assertIn("keep that same primary axis", prompt)
+            self.assertIn("rejected_axes", prompt)
+            self.assertIn("rejected_candidates", prompt)
+            self.assertIn("recommended_base_trial", prompt)
+
+    def test_demo_context_keeps_active_axis_after_two_failed_candidates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            project = Path(tmp) / "project"
+            root.mkdir()
+            project.mkdir()
+            self._write_state(root)
+            self._write_profile(root, project)
+
+            from kaggle_research_agent.demo_one_cycle import build_demo_plan_payload, load_demo_context
+            from kaggle_research_agent.trial_decision import write_trial_decision_card
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                write_trial_decision_card(
+                    "demo",
+                    "trial_001",
+                    plan={"plan_type": "initial_pipeline_plan"},
+                    metrics={"cv_score": 0.80, "objective": "maximize"},
+                )
+                for index, candidate in enumerate(["RandomForest", "GradientBoosting"], start=2):
+                    write_trial_decision_card(
+                        "demo",
+                        f"trial_00{index}",
+                        plan={
+                            "plan_type": "continuation_delta_plan",
+                            "source_trial_id": "trial_001",
+                            "primary_change_axis": "model_family",
+                            "change_details": [f"Candidate: {candidate}"],
+                        },
+                        metrics={"cv_score": 0.80, "objective": "maximize"},
+                    )
+                context = load_demo_context("demo", "trial_004")
+
+            self.assertEqual("continuation_delta_plan", context["plan_type"])
+            self.assertEqual("trial_001", context["source_trial_id"])
+            self.assertEqual("model_family", context["decision_context"]["active_axis"])
+            self.assertEqual(2, context["decision_context"]["axis_attempt_count"])
+            self.assertNotIn("model_family", context["decision_context"]["rejected_axes"])
+            self.assertEqual(2, len(context["decision_context"]["rejected_candidates"]))
+            prompt = build_demo_plan_payload(context, model="gpt-5.5")["input"][1]["content"]
+            self.assertIn("keep that same primary axis", prompt)
+            self.assertIn("choose a different candidate or parameter variant within the axis", prompt)
+            self.assertIn("Do not repeat any rejected_candidate", prompt)
+            self.assertIn("Do not switch away from active_axis", prompt)
+
+    def test_decision_card_rejects_axis_after_three_failed_candidates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            root.mkdir()
+
+            from kaggle_research_agent.trial_decision import write_trial_decision_card
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                write_trial_decision_card(
+                    "demo",
+                    "trial_001",
+                    plan={"plan_type": "initial_pipeline_plan"},
+                    metrics={"cv_score": 0.80, "objective": "maximize"},
+                )
+                for index, candidate in enumerate(["RandomForest", "GradientBoosting", "BalancedLogReg"], start=2):
+                    card = write_trial_decision_card(
+                        "demo",
+                        f"trial_00{index}",
+                        plan={
+                            "plan_type": "continuation_delta_plan",
+                            "source_trial_id": "trial_001",
+                            "primary_change_axis": "model_family",
+                            "change_details": [f"Candidate: {candidate}"],
+                        },
+                        metrics={"cv_score": 0.80, "objective": "maximize"},
+                    )
+
+            self.assertEqual("reject_or_hold", card["decision"])
+            self.assertIn("model_family", card["rejected_axes"])
+            self.assertIsNone(card["active_axis"])
+            self.assertEqual(3, card["axis_attempt_count"])
+            self.assertEqual(3, len(card["rejected_candidates"]))
+
+    def test_decision_card_compacts_candidate_memory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            root.mkdir()
+
+            from kaggle_research_agent.trial_decision import write_trial_decision_card
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                write_trial_decision_card(
+                    "demo",
+                    "trial_001",
+                    plan={"plan_type": "initial_pipeline_plan"},
+                    metrics={"cv_score": 0.80, "objective": "maximize"},
+                )
+                card = write_trial_decision_card(
+                    "demo",
+                    "trial_002",
+                    plan={
+                        "plan_type": "continuation_delta_plan",
+                        "source_trial_id": "trial_001",
+                        "primary_change_axis": "model_logistic_regularization",
+                        "change_details": [
+                            "紐⑤뜽: LogisticRegression",
+                            "Replace: penalty=l1, solver=liblinear, C=1.0",
+                            "Penalty: elasticnet",
+                        ],
+                    },
+                    metrics={"cv_score": 0.79, "objective": "maximize"},
+                )
+
+            self.assertNotIn("紐⑤뜽", card["candidate_label"])
+            self.assertIn("LogisticRegression", card["candidate_label"])
+            self.assertIn("penalty=l1", card["candidate_label"])
+            self.assertLessEqual(len(card["candidate_label"]), 180)
+            self.assertEqual(card["rejected_candidates"], card["active_axis_rejected_candidates"])
+            self.assertIn("model_logistic_regularization", card["rejected_candidates_by_axis"])
+
+    def test_decision_card_groups_legacy_rejected_candidates_by_label_axis(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            root.mkdir()
+
+            from kaggle_research_agent.paths import competition_memory_dir
+            from kaggle_research_agent.trial_decision import write_trial_decision_card
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                memory = competition_memory_dir("demo")
+                memory.mkdir(parents=True)
+                legacy = {
+                    "trial_id": "trial_002",
+                    "decision": "continue_axis_refinement",
+                    "change_axis": "model_family",
+                    "local_score": 0.79,
+                    "objective": "maximize",
+                    "rejected_candidates": [
+                        "feature_engineering_family_size: FamilySize",
+                        "model_family: RandomForest",
+                    ],
+                }
+                (memory / "decision_cards.jsonl").write_text(json.dumps(legacy) + "\n", encoding="utf-8")
+                card = write_trial_decision_card(
+                    "demo",
+                    "trial_003",
+                    plan={
+                        "plan_type": "continuation_delta_plan",
+                        "source_trial_id": "trial_001",
+                        "primary_change_axis": "model_family",
+                        "change_details": ["Candidate: GradientBoosting"],
+                    },
+                    metrics={"cv_score": 0.79, "objective": "maximize"},
+                )
+
+            self.assertEqual(["model_family: RandomForest", "model_family: candidate=GradientBoosting"], card["active_axis_rejected_candidates"])
+            self.assertEqual(["feature_engineering_family_size: FamilySize"], card["rejected_candidates_by_axis"]["feature_engineering_family_size"])
+
+    def test_decision_card_does_not_promote_recovery_that_only_matches_best(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            root.mkdir()
+
+            from kaggle_research_agent.trial_decision import write_trial_decision_card
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                baseline = write_trial_decision_card(
+                    "demo",
+                    "trial_001",
+                    plan={"plan_type": "initial_pipeline_plan"},
+                    metrics={"cv_score": 0.85, "objective": "maximize"},
+                )
+                failed = write_trial_decision_card(
+                    "demo",
+                    "trial_002",
+                    plan={
+                        "plan_type": "continuation_delta_plan",
+                        "source_trial_id": "trial_001",
+                        "primary_change_axis": "model_family",
+                        "change_details": ["Candidate: weaker model"],
+                    },
+                    metrics={"cv_score": 0.83, "objective": "maximize"},
+                )
+                recovered = write_trial_decision_card(
+                    "demo",
+                    "trial_003",
+                    plan={
+                        "plan_type": "continuation_delta_plan",
+                        "source_trial_id": "trial_001",
+                        "primary_change_axis": "model_family",
+                        "change_details": ["Candidate: recovered model"],
+                    },
+                    metrics={"cv_score": 0.85, "objective": "maximize"},
+                )
+
+            self.assertEqual("baseline_established", baseline["decision"])
+            self.assertEqual("continue_axis_refinement", failed["decision"])
+            self.assertEqual("continue_axis_refinement", recovered["decision"])
+            self.assertEqual("flat", recovered["local_status"])
+            self.assertEqual("improved", recovered["previous_local_status"])
+            self.assertEqual("trial_001", recovered["recommended_base_trial"])
+            self.assertNotIn("model_family", recovered["accepted_axes"])
+
+    def test_decision_card_ignores_future_trials_when_reprocessing_old_trial(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            root.mkdir()
+
+            from kaggle_research_agent.trial_decision import write_trial_decision_card
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                write_trial_decision_card(
+                    "demo",
+                    "trial_001",
+                    plan={"plan_type": "initial_pipeline_plan"},
+                    metrics={"cv_score": 0.85, "objective": "maximize"},
+                )
+                write_trial_decision_card(
+                    "demo",
+                    "trial_002",
+                    plan={
+                        "plan_type": "continuation_delta_plan",
+                        "source_trial_id": "trial_001",
+                        "primary_change_axis": "model_family",
+                        "change_details": ["Candidate: weaker model"],
+                    },
+                    metrics={"cv_score": 0.83, "objective": "maximize"},
+                )
+                write_trial_decision_card(
+                    "demo",
+                    "trial_004",
+                    plan={
+                        "plan_type": "continuation_delta_plan",
+                        "source_trial_id": "trial_002",
+                        "primary_change_axis": "model_family",
+                        "change_details": ["Candidate: future model"],
+                    },
+                    metrics={"cv_score": 0.82, "objective": "maximize"},
+                )
+                reprocessed = write_trial_decision_card(
+                    "demo",
+                    "trial_003",
+                    plan={
+                        "plan_type": "continuation_delta_plan",
+                        "source_trial_id": "trial_001",
+                        "primary_change_axis": "model_family",
+                        "change_details": ["Candidate: recovered model"],
+                    },
+                    metrics={"cv_score": 0.85, "objective": "maximize"},
+                )
+
+            self.assertEqual(2, reprocessed["axis_attempt_count"])
+            self.assertEqual("continue_axis_refinement", reprocessed["decision"])
+            self.assertEqual("trial_001", reprocessed["recommended_base_trial"])
+
+    def test_continuation_context_records_source_trial_for_demo_handoff(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            project = Path(tmp) / "project"
+            root.mkdir()
+            project.mkdir()
+            self._write_state(root)
+            self._write_profile(root, project)
+            memory = root / "memory" / "demo"
+            memory.mkdir(parents=True, exist_ok=True)
+            (memory / "demo_trial_index.jsonl").write_text(
+                json.dumps({"competition": "demo", "trial_id": "trial_001", "local_score": 0.83}) + "\n",
+                encoding="utf-8",
+            )
+
+            from kaggle_research_agent.demo_one_cycle import _write_continuation_context
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                _write_continuation_context("demo", "trial_002")
+
+            context = json.loads(
+                (root / "experiments" / "demo" / "trial_002" / "continuation_context.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual("trial_001", context["source_trial_id"])
 
     def test_demo_one_cycle_resumes_from_completed_plan_and_code_result(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -520,8 +941,16 @@ class DemoOneCycleTest(unittest.TestCase):
                     "output_text": json.dumps(
                         {
                             "status": "completed",
-                            "summary": "Wrote improved first-cycle train script.",
+                            "summary": "Confirmed the demo train script remains valid.",
                             "changed_files": ["train_step.py"],
+                            "patch_updates": [
+                                {
+                                    "path": "train_step.py",
+                                    "find": "Path('outputs').mkdir(exist_ok=True)\n",
+                                    "replace": "Path('outputs').mkdir(exist_ok=True)\n",
+                                    "reason": "No-op patch used by the mock response to satisfy patch-only edit mode.",
+                                }
+                            ],
                             "file_updates": [
                                 {
                                     "path": "train_step.py",

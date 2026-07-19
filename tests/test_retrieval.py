@@ -86,6 +86,35 @@ class RetrievalIndexTest(unittest.TestCase):
             self.assertTrue((trial / "retrieval_manifest_experiment_planning.json").exists())
             manifest = json.loads((trial / "retrieval_manifest_experiment_planning.json").read_text(encoding="utf-8"))
             self.assertEqual("memory/demo/document_index.jsonl", manifest["index_file"])
+            self.assertLessEqual(pack["document_count"], 5)
+            self.assertLessEqual(pack["budget"]["max_chars_per_document"], 900)
+
+    def test_context_pack_prefers_decision_and_memory_cards_under_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_sample_project(root)
+            memory = root / "memory" / "demo"
+            (memory / "latest_decision_card.md").write_text(
+                "# Decision\n\n- rejected_axes: feature_engineering_family_size\n- recommended_base_trial: trial_001\n",
+                encoding="utf-8",
+            )
+            (memory / "latest_trial_memory_card.md").write_text(
+                "# Memory\n\n- change_axis: feature_engineering_family_size\n- local_score: 0.83\n",
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                pack = build_context_pack(
+                    "demo",
+                    "trial_002",
+                    task="experiment_planning",
+                    query="decision rejected axes memory score pipeline",
+                )
+
+            kinds = [doc["source_kind"] for doc in pack["documents"]]
+            self.assertIn("decision_card", kinds[:2])
+            self.assertIn("trial_memory_card", kinds[:3])
+            self.assertLessEqual(pack["document_count"], 5)
 
     def test_cli_build_retrieval_index_command(self):
         with tempfile.TemporaryDirectory() as tmp:

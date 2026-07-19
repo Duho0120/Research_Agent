@@ -6,9 +6,30 @@ from unittest.mock import patch
 
 from kaggle_research_agent import simple_yaml
 from kaggle_research_agent.trial_artifacts import organize_trial_artifacts, trial_artifact_exists
+from kaggle_research_agent.trial_user_view import _plan_note_lines
 
 
 class TrialArtifactsTest(unittest.TestCase):
+    def test_plan_note_lines_preserve_pipeline_blueprint_literals(self):
+        lines = _plan_note_lines(
+            {
+                "plan_type": "initial_pipeline_plan",
+                "pipeline_blueprint": [
+                    "Train File: train.csv",
+                    "Test File: test.csv",
+                    "Submission Columns: PassengerId",
+                    "Submission Columns: Survived",
+                    "Method: train_test_split",
+                ],
+            }
+        )
+
+        joined = "\n".join(lines)
+        self.assertIn("Pipeline blueprint: Test File: test.csv", joined)
+        self.assertIn("Pipeline blueprint: Submission Columns: PassengerId", joined)
+        self.assertNotIn("test_step.py", joined)
+        self.assertNotIn("predict_step.py", joined)
+
     def test_organize_trial_artifacts_writes_readme_and_moves_debug_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -75,6 +96,37 @@ class TrialArtifactsTest(unittest.TestCase):
                 encoding="utf-8",
             )
             (trial / "next_experiment.md").write_text("- title: Baseline\n", encoding="utf-8")
+            (trial / "demo_experiment_plan.json").write_text(
+                json.dumps(
+                    {
+                        "plan_type": "initial_pipeline_plan",
+                        "title": "First-cycle baseline",
+                        "objective": "Build a first-cycle Titanic baseline and create metrics.json and submission.csv.",
+                        "pipeline_blueprint": [
+                            "Numeric: Age, Fare",
+                            "Categorical: Sex, Embarked",
+                            "Method: StratifiedKFold(n_splits=5, shuffle=True, random_state=42)",
+                            "Model: LogisticRegression(max_iter=1000, random_state=42)",
+                            "Excluded: Name, Ticket, Cabin",
+                            "Persist Trained Model: false",
+                        ],
+                        "implementation_notes": [
+                            "Do not use GaussianNB, raw Name/Ticket/Cabin one-hot encoding, ensembling, leaderboard submission, or human review.",
+                        ],
+                        "success_criteria": [
+                            "Validation accuracy is recorded under an accuracy key.",
+                            "submission.csv contains PassengerId and Survived with the same row count as test.csv.",
+                            "pipeline_summary.json records feature, preprocessing, model, split, and seed choices.",
+                        ],
+                        "expected_outputs": [
+                            "metrics.json",
+                            "submission.csv",
+                            "pipeline_summary.json",
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
             (trial / "workspace_coding_api_request.json").write_text("{}", encoding="utf-8")
             (trial / "workspace_coding_api_response.json").write_text("{}", encoding="utf-8")
 
@@ -137,10 +189,18 @@ class TrialArtifactsTest(unittest.TestCase):
             self.assertTrue((root / "runs" / "demo" / "README.ko.md").exists())
             user_plan = (browse / "01_plan.ko.md").read_text(encoding="utf-8")
             user_structure = (browse / "02_pipeline_structure.ko.md").read_text(encoding="utf-8")
-            self.assertIn("이번 실험의 핵심 선택", user_plan)
+            self.assertIn("## 목적", user_plan)
             self.assertNotIn("평가: `cv_score`", user_plan)
-            self.assertIn("| 단계 | 실제 적용 내용 | 확인 포인트 |", user_structure)
-            self.assertIn("## 단계별 체크", user_structure)
+            self.assertIn("재현 가능한 첫 baseline 파이프라인을 만들고", user_plan)
+            self.assertIn("다음 항목은 이번 회차에서 사용하지 않습니다", user_plan)
+            self.assertIn("원문 `Name`/`Ticket`/`Cabin` 컬럼의 직접 one-hot 인코딩", user_plan)
+            self.assertIn("검증 정확도가 `accuracy` 계열 키로 기록됩니다.", user_plan)
+            self.assertIn("파이프라인 요약: 데이터 가정, split, 전처리, 모델, 출력 형식을 기록합니다.", user_plan)
+            self.assertNotIn("Do not use", user_plan)
+            self.assertNotIn("Validation accuracy is recorded", user_plan)
+            self.assertIn("재현 파이프라인 구조도", user_structure)
+            self.assertIn("## 실행 명령 순서", user_structure)
+            self.assertIn("## 노트북형 실행 흐름", user_structure)
             self.assertIn("StratifiedKFold", user_structure)
             self.assertIn("StandardScaler", user_structure)
             self.assertIn("LogisticRegression", user_structure)
@@ -392,6 +452,64 @@ class TrialArtifactsTest(unittest.TestCase):
             self.assertIn("Pclass", user_structure)
             self.assertIn("Sex", user_structure)
             self.assertIn("pickle", json.dumps(checkpoint))
+
+    def test_organize_trial_artifacts_prefers_internal_code_snapshot_over_current_workspace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trial = root / "experiments" / "demo" / "trial_001"
+            internal = trial / "internal"
+            snapshot = internal / "code_snapshot" / "src"
+            snapshot.mkdir(parents=True)
+            (snapshot / "baseline.py").write_text(
+                "from sklearn.ensemble import RandomForestClassifier\n"
+                "FEATURES = ['Pclass', 'Sex']\n"
+                "model = RandomForestClassifier(n_estimators=200, random_state=42)\n",
+                encoding="utf-8",
+            )
+            (internal / "code_snapshot_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "snapshot_dir": "internal/code_snapshot",
+                        "files": [{"path": "src/baseline.py"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            project = root / "workspace"
+            (project / "src").mkdir(parents=True)
+            (project / "src" / "baseline.py").write_text(
+                "from sklearn.linear_model import LogisticRegression\n"
+                "FEATURES = ['CabinKnown']\n"
+                "model = LogisticRegression(random_state=42)\n",
+                encoding="utf-8",
+            )
+            comp = root / "competitions" / "demo"
+            comp.mkdir(parents=True)
+            simple_yaml.dump({"project_root": str(project)}, comp / "execution_profile.yaml")
+            (trial / "metrics.json").write_text(
+                json.dumps({"cv_score": 0.8, "metric": "accuracy", "objective": "maximize"}),
+                encoding="utf-8",
+            )
+            (trial / "metrics_collection.json").write_text(json.dumps({"status": "collected"}), encoding="utf-8")
+            (trial / "workspace_run.json").write_text(json.dumps({"status": "completed"}), encoding="utf-8")
+            (trial / "workspace_coding_result.json").write_text(
+                json.dumps({"changed_files": ["src/baseline.py"]}),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                organize_trial_artifacts("demo", "trial_001")
+
+            user_code = (root / "runs" / "demo" / "trial_001" / "code" / "src" / "baseline.py").read_text(
+                encoding="utf-8"
+            )
+            structure = json.loads((trial / "internal" / "pipeline_structure.json").read_text(encoding="utf-8"))
+            structure_text = json.dumps(structure)
+            self.assertIn("RandomForestClassifier", user_code)
+            self.assertNotIn("LogisticRegression", user_code)
+            self.assertIn("RandomForestClassifier", structure_text)
+            self.assertNotIn("LogisticRegression", structure_text)
 
 
 if __name__ == "__main__":

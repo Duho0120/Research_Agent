@@ -89,14 +89,25 @@ def collect_workspace_metrics(competition: str, trial_id: str) -> dict[str, Any]
         objective = competition_state.get("objective", "maximize")
 
     canonical = dict(source_metrics)
+    plan_metadata = _plan_metadata(out_dir)
     canonical.update(
         {
+            "competition": competition,
+            "trial": trial_id,
             "trial_id": trial_id,
+            "base_trial": plan_metadata.get("base_trial"),
+            "change_axis": plan_metadata.get("change_axis"),
             "metric": source_metrics.get("metric") or competition_state.get("metric", "unknown"),
             "cv_score": cv_score,
             "objective": objective,
             "source_metrics_path": str(source_path.resolve()),
         }
+    )
+    canonical["pipeline_summary"] = _canonical_pipeline_summary(
+        canonical.get("pipeline_summary"),
+        competition=competition,
+        trial_id=trial_id,
+        plan_metadata=plan_metadata,
     )
     result.update(
         {
@@ -132,6 +143,35 @@ def _finish(out_dir: Path, result: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _plan_metadata(out_dir: Path) -> dict[str, Any]:
+    plan = read_trial_json(out_dir, "demo_experiment_plan.json")
+    return {
+        "base_trial": plan.get("source_trial_id"),
+        "change_axis": plan.get("primary_change_axis") or None,
+        "plan_title": plan.get("plan_title"),
+    }
+
+
+def _canonical_pipeline_summary(
+    value: Any,
+    *,
+    competition: str,
+    trial_id: str,
+    plan_metadata: dict[str, Any],
+) -> dict[str, Any]:
+    summary = dict(value) if isinstance(value, dict) else {}
+    summary.update(
+        {
+            "competition": competition,
+            "trial": trial_id,
+            "trial_id": trial_id,
+            "base_trial": plan_metadata.get("base_trial"),
+            "change_axis": plan_metadata.get("change_axis"),
+        }
+    )
+    return summary
+
+
 def _resolve_score(
     source_metrics: dict[str, Any],
     profile: dict[str, Any],
@@ -147,7 +187,7 @@ def _resolve_score(
 
     metric = str(competition_state.get("metric") or profile.get("metric") or "").strip().casefold()
     if metric:
-        for candidate in (f"validation_{metric}", f"val_{metric}", f"valid_{metric}"):
+        for candidate in (f"validation_{metric}", f"val_{metric}", f"valid_{metric}", metric):
             value = source_metrics.get(candidate)
             if _is_finite_number(value):
                 return value, candidate

@@ -10,7 +10,9 @@ from .agents.result_analyst import diagnose_trial, evaluate_trial
 from .agents.review_pack import prepare_review_pack
 from .paths import competition_memory_dir, experiment_dir, trial_dir
 from .store import load_trial_index, write_text
-from .trial_artifacts import read_trial_json
+from .trial_artifacts import organize_trial_artifacts, read_trial_json
+from .trial_decision import write_trial_decision_card
+from .trial_memory_card import write_trial_memory_card
 
 
 def process_workspace_result(competition: str, trial_id: str) -> dict[str, Any]:
@@ -62,6 +64,7 @@ def process_workspace_result(competition: str, trial_id: str) -> dict[str, Any]:
         None,
     )
     if existing:
+        decision_artifacts = _write_decision_memory_cards(competition, trial_id)
         return _finish(
             out_dir,
             {
@@ -71,6 +74,7 @@ def process_workspace_result(competition: str, trial_id: str) -> dict[str, Any]:
                 "steps": ["duplicate_memory_blocked"],
                 "issues": [],
                 "memory": existing,
+                **decision_artifacts,
                 "next_action": "plan-next-experiment",
             },
         )
@@ -97,6 +101,8 @@ def process_workspace_result(competition: str, trial_id: str) -> dict[str, Any]:
 
     memory = remember_trial(competition, trial_id)
     steps.append("remembered")
+    decision_artifacts = _write_decision_memory_cards(competition, trial_id)
+    steps.append("decision_memory_written")
     review_pack = None
     if human_review["timing"] == "request_now":
         deferred_items = _load_deferred_items(competition)
@@ -126,6 +132,7 @@ def process_workspace_result(competition: str, trial_id: str) -> dict[str, Any]:
         "human_review": human_review,
         "review_pack": review_pack,
         "memory": memory,
+        **decision_artifacts,
         "next_action": next_action,
     }
     return _finish(out_dir, result)
@@ -133,6 +140,9 @@ def process_workspace_result(competition: str, trial_id: str) -> dict[str, Any]:
 
 def _finish(out_dir: Path, result: dict[str, Any]) -> dict[str, Any]:
     _write_result(out_dir, result)
+    _maybe_organize_artifacts(result)
+    if "artifact_summary" in result or "artifact_issues" in result:
+        _write_result(out_dir, result)
     log_decision(
         result["competition"],
         result["trial_id"],
@@ -148,6 +158,24 @@ def _finish(out_dir: Path, result: dict[str, Any]) -> dict[str, Any]:
         next_action=result["next_action"],
     )
     return result
+
+
+def _maybe_organize_artifacts(result: dict[str, Any]) -> None:
+    if result.get("status") == "blocked":
+        return
+    try:
+        result["artifact_summary"] = organize_trial_artifacts(result["competition"], result["trial_id"])
+    except Exception as error:  # pragma: no cover - defensive, result processing should still be recorded.
+        result["artifact_issues"] = [f"artifact_organization_failed:{error}"]
+
+
+def _write_decision_memory_cards(competition: str, trial_id: str) -> dict[str, Any]:
+    decision_card = write_trial_decision_card(competition, trial_id)
+    trial_memory_card = write_trial_memory_card(competition, trial_id, decision_card=decision_card)
+    return {
+        "decision_card": decision_card,
+        "trial_memory_card": trial_memory_card,
+    }
 
 
 def _queue_deferred_review(

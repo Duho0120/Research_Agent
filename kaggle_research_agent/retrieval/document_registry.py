@@ -17,6 +17,8 @@ COMPETITION_FILES = {
     "source_materials.json": "source_materials",
     "data_profile.md": "data_profile",
     "data_profile.json": "data_profile",
+    "competition_data_card.md": "competition_data_card",
+    "competition_data_card.json": "competition_data_card",
     "execution_profile.yaml": "execution_profile",
     "workspace_inventory.md": "workspace_inventory",
     "workspace_inventory.json": "workspace_inventory",
@@ -32,6 +34,12 @@ MEMORY_FILES = {
     "user_feedback.jsonl": "user_feedback",
     "token_usage.jsonl": "token_usage",
     "best_trial.json": "best_trial",
+    "decision_cards.jsonl": "decision_cards",
+    "latest_decision_card.json": "decision_card",
+    "latest_decision_card.md": "decision_card",
+    "trial_memory_cards.jsonl": "trial_memory_cards",
+    "latest_trial_memory_card.json": "trial_memory_card",
+    "latest_trial_memory_card.md": "trial_memory_card",
 }
 
 TRIAL_FILES = {
@@ -46,8 +54,14 @@ TRIAL_FILES = {
     "workspace_context_snapshot.md": "workspace_context_snapshot",
     "workspace_coding_result.md": "coding_result",
     "workspace_run.md": "workspace_run",
+    "decision_card.json": "decision_card",
+    "decision_card.md": "decision_card",
+    "trial_memory_card.json": "trial_memory_card",
+    "trial_memory_card.md": "trial_memory_card",
     "graph_state.json": "graph_state",
     "node_events.jsonl": "graph_events",
+    "graph_rag_manifest.json": "graph_rag_manifest",
+    "graph_rag_manifest.md": "graph_rag_manifest",
 }
 
 TRIAL_NESTED_FILES = {
@@ -57,11 +71,14 @@ TRIAL_NESTED_FILES = {
     "internal/demo_cycle_record.json": "trial_record",
     "internal/metrics_collection.json": "metrics_collection",
     "internal/workspace_run.json": "workspace_run",
+    "internal/decision_card.json": "decision_card",
+    "internal/trial_memory_card.json": "trial_memory_card",
     "user_view/README.ko.md": "user_summary",
     "user_view/01_plan.ko.md": "user_plan",
     "user_view/02_pipeline_structure.ko.md": "user_pipeline_structure",
     "user_view/03_code_pipeline.ko.md": "user_code_pipeline",
     "user_view/04_result.ko.md": "user_result",
+    "user_view/06_decision.ko.md": "user_decision",
 }
 
 

@@ -17,6 +17,7 @@ def render_user_view_files(out_dir: Path, summary: dict[str, Any], copied_files:
         "03_code_pipeline.ko.md": render_user_code_pipeline(summary, copied_files),
         "04_result.ko.md": render_user_result(summary),
         "05_submission.ko.md": render_user_submission(summary),
+        "06_decision.ko.md": render_user_decision(summary),
     }
 
 
@@ -52,37 +53,24 @@ def render_user_readme(summary: dict[str, Any]) -> str:
 
 def render_user_plan(out_dir: Path, summary: dict[str, Any]) -> str:
     plan = _read_plan_json(out_dir)
-    choices = _planned_choice_lines(out_dir, plan)
     objective = _compact_block(_read_markdown_section(out_dir / "demo_experiment_plan.md", "Objective"))
     rationale = _compact_block(_read_markdown_section(out_dir / "demo_experiment_plan.md", "Rationale"))
-    expected_outputs = _normalize_plan_items(plan.get("expected_outputs")) if plan else []
     if not objective:
         objective = _compact_block(str(plan.get("objective") or ""))
     if not rationale:
         rationale = _compact_block(str(plan.get("rationale") or ""))
-    objective = _koreanize_plan_summary(objective, kind="objective")
-    rationale = _koreanize_plan_summary(rationale, kind="rationale")
     lines = [
         f"# {summary['trial_id']} 실험 계획 요약",
         "",
-        "## 목표",
+        "## 기본 정보",
         "",
         f"- 대회/주제: `{summary['competition']}`",
         f"- 평가 지표: `{_display_value(summary.get('metric'))}`",
         f"- 목표 방향: `{_display_value(summary.get('objective'))}`",
         f"- 계획명: {_display_value(summary.get('plan_title'))}",
         "",
-        "## 이번 실험의 핵심 선택",
-        "",
     ]
-    lines.extend(f"- {item}" for item in choices or ["계획서에서 핵심 선택을 추출하지 못했습니다."])
-    if objective:
-        lines.extend(["", "## LLM 계획 요약", "", f"- {objective}"])
-    if rationale:
-        lines.extend(["", "## 선택 근거", "", f"- {rationale}"])
-    if expected_outputs:
-        lines.extend(["", "## 예상 산출물", ""])
-        lines.extend(f"- {_koreanize_expected_output(item)}" for item in expected_outputs[:6])
+    lines.extend(_render_plan_detail_sections(plan, objective=objective, rationale=rationale, summary=summary))
     lines.extend(
         [
             "",
@@ -97,53 +85,449 @@ def render_user_plan(out_dir: Path, summary: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _render_plan_detail_sections(
+    plan: dict[str, Any],
+    *,
+    objective: str,
+    rationale: str,
+    summary: dict[str, Any],
+) -> list[str]:
+    if not isinstance(plan, dict) or not plan:
+        return ["", "## 목적", "", "- 계획서에서 목적과 실험축을 추출하지 못했습니다."]
+    if plan.get("plan_type") == "continuation_delta_plan":
+        return _render_continuation_plan_sections(plan, objective=objective, rationale=rationale, summary=summary)
+    return _render_initial_plan_sections(plan, objective=objective, rationale=rationale, summary=summary)
+
+
+def _render_initial_plan_sections(
+    plan: dict[str, Any],
+    *,
+    objective: str,
+    rationale: str,
+    summary: dict[str, Any],
+) -> list[str]:
+    blueprint = _parse_pipeline_blueprint(plan.get("pipeline_blueprint"))
+    purpose = _koreanize_plan_summary(objective, kind="objective") or "재현 가능한 첫 baseline을 만들고 로컬 실행/결과 기록 루프가 연결되는지 확인합니다."
+    hypothesis = _initial_hypothesis(blueprint, rationale)
+    evidence = _initial_key_evidence(blueprint)
+    exclusions = _initial_intentional_exclusions(plan, blueprint)
+    success = _success_criteria_lines(plan.get("success_criteria"))
+    outputs = _expected_output_lines(plan.get("expected_outputs"))
+    lines = [
+        "",
+        "## 목적",
+        "",
+        f"- {purpose}",
+        "",
+        "## 기준 상태",
+        "",
+        "- 이전 trial이 없는 첫 회차입니다.",
+        "- 현재 best나 비교 기준이 없으므로 이번 trial을 이후 실험의 baseline으로 사용합니다.",
+        "",
+        "## 핵심 가설",
+        "",
+        f"- {hypothesis}",
+        "",
+        "## 실험축",
+        "",
+        "- 축: baseline 구축",
+        "- 이번 회차에서는 성능 최적화보다 재현 가능한 기준점과 제출 형식 검증을 우선합니다.",
+    ]
+    if evidence:
+        lines.extend(["- 핵심 근거: " + "; ".join(evidence)])
+    if exclusions:
+        lines.extend(["", "## 의도적으로 하지 않는 것", ""])
+        lines.extend(f"- {item}" for item in exclusions)
+    if success:
+        lines.extend(["", "## 성공 기준", ""])
+        lines.extend(f"- {item}" for item in success)
+    if outputs:
+        lines.extend(["", "## 주요 산출물", ""])
+        lines.extend(f"- {item}" for item in outputs)
+    lines.extend(
+        [
+            "",
+            "## 다음 판단",
+            "",
+            "- 이번 trial이 정상 완료되면 baseline으로 고정합니다.",
+            "- 다음 trial에서는 한 번에 하나의 개선축만 바꾸고, 상세 구현 차이는 `02_pipeline_structure.ko.md`와 내부 JSON을 기준으로 비교합니다.",
+        ]
+    )
+    return lines
+
+
+def _render_continuation_plan_sections(
+    plan: dict[str, Any],
+    *,
+    objective: str,
+    rationale: str,
+    summary: dict[str, Any],
+) -> list[str]:
+    axis = str(plan.get("primary_change_axis") or "").strip()
+    source = str(plan.get("source_trial_id") or "").strip()
+    purpose = _koreanize_plan_summary(objective, kind="objective") or "이전 trial을 기준으로 하나의 개선축만 바꿔 성능 변화를 검증합니다."
+    promoted = _implementation_note_buckets(plan.get("implementation_notes"))
+    raw_change_details = _normalize_plan_items(plan.get("change_details")) or promoted["change_details"]
+    raw_keep_unchanged = _normalize_plan_items(plan.get("keep_unchanged")) or promoted["keep_unchanged"]
+    change_details = [_koreanize_continuation_item(item) for item in raw_change_details[:8]]
+    keep_unchanged = [_koreanize_continuation_item(item) for item in raw_keep_unchanged[:8]]
+    success = _success_criteria_lines(plan.get("success_criteria"))
+    failure = [_koreanize_continuation_item(item) for item in _normalize_plan_items(plan.get("failure_decision"))[:5]]
+    lines = [
+        "",
+        "## 목적",
+        "",
+        f"- {purpose}",
+        "",
+        "## 기준 상태",
+        "",
+    ]
+    if source:
+        lines.append(f"- 기준 trial: `{source}`")
+    else:
+        lines.append("- 기준 trial을 찾지 못했습니다.")
+    lines.extend(
+        [
+            "- 이전 trial의 결과와 decision card를 기준으로 이번 변경을 평가합니다.",
+            "",
+            "## 핵심 가설",
+            "",
+            f"- {_koreanize_continuation_rationale(rationale, axis=axis, source=source)}",
+            "",
+            "## 실험축",
+            "",
+            f"- 축: {_display_value(axis)}",
+            "- 이번 회차에서는 이 축 하나만 바꾸고 나머지는 가능한 한 유지합니다.",
+        ]
+    )
+    if keep_unchanged:
+        lines.extend(["", "## 유지할 것", ""])
+        lines.extend(f"- {item}" for item in keep_unchanged)
+    if change_details:
+        lines.extend(["", "## 바꿀 것", ""])
+        lines.extend(f"- {item}" for item in change_details)
+    exclusions = _continuation_intentional_exclusions(plan)
+    if exclusions:
+        lines.extend(["", "## 의도적으로 하지 않는 것", ""])
+        lines.extend(f"- {item}" for item in exclusions)
+    if success:
+        lines.extend(["", "## 성공 기준", ""])
+        lines.extend(f"- {item}" for item in success)
+    if failure:
+        lines.extend(["", "## 실패 시 판단 기준", ""])
+        lines.extend(f"- {item}" for item in failure)
+    lines.extend(
+        [
+            "",
+            "## 다음 판단",
+            "",
+            "- 로컬 점수와 decision card를 기준으로 변경축을 유지, 보류, 기각할지 판단합니다.",
+            "- 상세 파라미터와 실제 코드 차이는 `02_pipeline_structure.ko.md`에서 확인합니다.",
+        ]
+    )
+    return lines
+
+
+def _render_plan_list_section(title: str, value: Any, *, limit: int, preserve_raw: bool = False) -> list[str]:
+    items = (_normalize_plan_items_raw(value) if preserve_raw else _normalize_plan_items(value))[:limit]
+    if not items:
+        return []
+    lines = ["", f"## {title}", ""]
+    lines.extend(f"- {item}" for item in items)
+    return lines
+
+
+def _initial_hypothesis(blueprint: dict[str, list[str]], rationale: str) -> str:
+    model = _first_blueprint_value(blueprint, "type") or _first_blueprint_value(blueprint, "family")
+    numeric = blueprint.get("numeric_features", [])
+    categorical = blueprint.get("categorical_features", [])
+    if not model and "logistic regression" in rationale.lower():
+        model = "LogisticRegression"
+    if model and numeric and categorical:
+        return (
+            f"표 형식 이진 분류 문제에서 기본 결측치 처리와 범주형 인코딩을 적용한 단일 `{model}` 모델로 "
+            "다음 실험의 비교 기준이 되는 안정적인 baseline을 만들 수 있다고 봅니다."
+        )
+    if rationale:
+        return _shorten(rationale.replace("\n", " "), 240)
+    return "복잡한 개선을 시작하기 전에, 단순하고 재현 가능한 baseline이 필요하다고 봅니다."
+
+
+def _initial_key_evidence(blueprint: dict[str, list[str]]) -> list[str]:
+    evidence: list[str] = []
+    method = _first_blueprint_value(blueprint, "method")
+    valid = _first_blueprint_value(blueprint, "validation_fraction") or _first_blueprint_value(blueprint, "validation_size")
+    stratify = _first_blueprint_value(blueprint, "stratify")
+    model = _first_blueprint_value(blueprint, "type") or _first_blueprint_value(blueprint, "family")
+    numeric_count = len(blueprint.get("numeric_features", []))
+    categorical_count = len(blueprint.get("categorical_features", []))
+    if method:
+        detail = method
+        if valid:
+            detail += f"(valid={valid})"
+        if stratify:
+            detail += f", stratify={stratify}"
+        evidence.append(f"로컬 검증은 `{detail}`로 둡니다")
+    if model:
+        evidence.append(f"모델은 빠르게 검증 가능한 `{model}`을 사용합니다")
+    if numeric_count or categorical_count:
+        evidence.append(f"입력은 수치형 {numeric_count}개, 범주형 {categorical_count}개 중심으로 제한합니다")
+    return evidence
+
+
+def _initial_intentional_exclusions(plan: dict[str, Any], blueprint: dict[str, list[str]]) -> list[str]:
+    lines: list[str] = []
+    excluded = [item for item in blueprint.get("excluded", []) if item]
+    if excluded:
+        lines.append(f"`{', '.join(excluded)}` 컬럼은 이번 회차에서 학습 입력으로 직접 사용하지 않습니다.")
+    notes = _normalize_plan_items_raw(plan.get("implementation_notes"))
+    for item in notes:
+        lowered = item.lower()
+        if "do not add" in lowered and "leaderboard" in lowered:
+            lines.append("Leaderboard 제출, Human Review, 앙상블, 다중 모델 탐색은 이번 회차 범위에서 제외합니다.")
+        elif "do not use gaussian naive bayes" in lowered:
+            lines.append("혼합형 tabular baseline에 부적절할 수 있는 Gaussian Naive Bayes나 고카디널리티 원문 컬럼의 직접 one-hot 사용은 피합니다.")
+        elif "do not use" in lowered:
+            lines.append(_koreanize_exclusion_note(item))
+    persist = _first_blueprint_value(blueprint, "persist_trained_model").lower()
+    if persist == "false":
+        lines.append("학습된 모델 파일은 기본 저장하지 않고, metrics/submission/code snapshot/pipeline summary를 주요 기록으로 남깁니다.")
+    return _unique_lines(lines)
+
+
+def _koreanize_exclusion_note(text: str) -> str:
+    raw = str(text).strip()
+    lowered = raw.lower()
+    excluded: list[str] = []
+    if "gaussiannb" in lowered or "gaussian naive bayes" in lowered:
+        excluded.append("GaussianNB")
+    if "name" in lowered or "ticket" in lowered or "cabin" in lowered:
+        excluded.append("원문 `Name`/`Ticket`/`Cabin` 컬럼의 직접 one-hot 인코딩")
+    if "ensemble" in lowered:
+        excluded.append("앙상블")
+    if "leaderboard" in lowered:
+        excluded.append("Leaderboard 제출")
+    if "human review" in lowered:
+        excluded.append("Human Review")
+    if excluded:
+        return f"다음 항목은 이번 회차에서 사용하지 않습니다: {', '.join(excluded)}."
+    return _shorten(raw, 180)
+
+
+def _continuation_intentional_exclusions(plan: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    notes = _normalize_plan_items_raw(plan.get("implementation_notes"))
+    for item in notes:
+        lowered = item.lower()
+        if "do not" in lowered or "avoid" in lowered:
+            lines.append(_koreanize_continuation_item(item))
+    if not lines:
+        lines.append("선택한 개선축 밖의 전처리, split, 모델 구조는 가능한 한 유지합니다.")
+    return _unique_lines(lines)
+
+
+def _success_criteria_lines(value: Any) -> list[str]:
+    result: list[str] = []
+    for item in _normalize_plan_items_raw(value):
+        result.append(_koreanize_success_criterion(item))
+    return _unique_lines(result)[:8]
+
+
+def _expected_output_lines(value: Any) -> list[str]:
+    result = [_koreanize_expected_output(item) for item in _normalize_plan_items_raw(value)]
+    return _unique_lines(result)[:6]
+
+
+def _koreanize_success_criterion(text: str) -> str:
+    lowered = str(text).lower()
+    if "validation accuracy is recorded" in lowered and "accuracy" in lowered:
+        return "검증 정확도가 `accuracy` 계열 키로 기록됩니다."
+    if "local validation" in lowered and "accuracy" in lowered and "record" in lowered:
+        return "로컬 검증 정확도와 사용한 split 정보가 함께 기록됩니다."
+    if "train_step.py completes" in lowered:
+        return "`train_step.py`가 넓은 스키마 탐색 없이 명시된 데이터 프로필 기준으로 완료됩니다."
+    if "metrics.json" in lowered and ("accuracy" in lowered or "score" in lowered):
+        return "`outputs/metrics.json`에 로컬 검증 점수와 split 정보가 기록됩니다."
+    if "submission.csv" in lowered and "passengerid" in lowered and "survived" in lowered:
+        return "`outputs/submission.csv`가 `PassengerId`, `Survived` 컬럼 형식으로 생성됩니다."
+    if "row count" in lowered and "test.csv" in lowered:
+        return "제출 파일의 행 수와 ID 순서가 `test.csv`와 일치합니다."
+    if "binary" in lowered or "0/1" in lowered:
+        return "예측값은 결측치 없는 0/1 정수 값으로 생성됩니다."
+    if "pipeline_summary" in lowered:
+        return "`outputs/pipeline_summary.json`에 피처, 전처리, 모델, split, seed가 기록됩니다."
+    if "pipeline summary" in lowered:
+        return "파이프라인 요약에 기준 trial과 이번 변경축이 기록됩니다."
+    if "code_snapshot" in lowered:
+        return "`outputs/code_snapshot.json`에 이번 trial의 코드 스냅샷이 기록됩니다."
+    if "test_step.py passes" in lowered:
+        return "`test_step.py` 검증이 생성된 metrics/submission 산출물을 기준으로 통과합니다."
+    if "no trained model" in lowered or "model artifact" in lowered:
+        return "별도 모델 파일은 저장하지 않습니다."
+    return _shorten(str(text), 180)
+
+
+def _koreanize_continuation_rationale(text: str, *, axis: str, source: str) -> str:
+    if not text:
+        return "선택한 개선축 하나가 기준 trial 대비 로컬 지표를 개선하거나, 최소한 다음 판단에 필요한 근거를 제공합니다."
+    lowered = text.lower()
+    if "change exactly one axis" in lowered or "model family" in lowered:
+        base = f"`{source}`" if source else "기준 trial"
+        selected = f"`{axis}`" if axis else "선택한 개선축"
+        return f"{base}의 파이프라인을 기준으로 두고, 이번 회차에서는 {selected} 하나만 바꿔 성능 변화를 확인합니다."
+    return _shorten(text.replace("\n", " "), 220)
+
+
+def _koreanize_continuation_item(text: str) -> str:
+    raw = str(text).strip()
+    lowered = raw.lower()
+    if lowered.startswith("data files:"):
+        return "데이터 파일은 기존 train/test 사용 방식을 유지합니다."
+    if lowered.startswith("target/id/output columns:"):
+        return "타깃, ID, 출력 컬럼은 기존 `Survived`, `PassengerId` 구성을 유지합니다."
+    if lowered.startswith("features:"):
+        return "입력 피처 목록은 기준 trial과 동일하게 유지합니다."
+    if lowered.startswith("deferred/excluded:"):
+        return "보류/제외 컬럼은 기준 trial과 동일하게 유지합니다."
+    if lowered.startswith("from:"):
+        return "변경 전: " + raw.split(":", 1)[1].strip()
+    if lowered.startswith("to:"):
+        return "변경 후: " + raw.split(":", 1)[1].strip()
+    if lowered.startswith("no leaderboard"):
+        return "Leaderboard 제출과 앙상블은 이번 회차에서 제외합니다."
+    if lowered.startswith("검증 분리:") and "preserve" in lowered:
+        return "검증 분리 방식과 seed는 기준 trial의 구현을 유지합니다."
+    if "modify only the estimator" in lowered:
+        return "모델 estimator 구성만 수정하고, 새 피처나 전처리 변경은 추가하지 않습니다."
+    if "do not persist" in lowered:
+        return "모델 파일은 기본 저장하지 않고, 꼭 필요한 경우에만 최소 artifact로 저장합니다."
+    if "validation_accuracy is not greater" in lowered:
+        return "`validation_accuracy`가 기준 점수를 넘지 못하면 이번 변경 후보를 기각하고 기준 trial을 유지합니다."
+    return _shorten(raw, 180)
+
+
+def _unique_lines(lines: Iterable[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for line in lines:
+        item = str(line or "").strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        result.append(item)
+    return result
+
+
+def _parse_pipeline_blueprint(value: Any) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = {
+        "numeric_features": [],
+        "categorical_features": [],
+        "numeric_processing": [],
+        "categorical_processing": [],
+    }
+    for raw in _normalize_plan_items_raw(value):
+        if ":" not in raw:
+            result.setdefault("notes", []).append(raw)
+            continue
+        key, body = raw.split(":", 1)
+        normalized = _normalize_plan_key(key)
+        item = body.strip()
+        if not item:
+            continue
+        if normalized == "numeric":
+            target = "numeric_processing" if _looks_like_processing_step(item) else "numeric_features"
+            result[target].append(item)
+        elif normalized == "categorical":
+            target = "categorical_processing" if _looks_like_processing_step(item) else "categorical_features"
+            result[target].append(item)
+        else:
+            result.setdefault(normalized, []).append(item)
+    return result
+
+
+def _looks_like_processing_step(text: str) -> bool:
+    lowered = text.lower()
+    return any(token in lowered for token in ["imputer", "scaler", "encoder", "onehot", "one-hot", "strategy=", "handle_unknown"])
+
+
+def _first_blueprint_value(blueprint: dict[str, list[str]], key: str) -> str:
+    values = blueprint.get(key, [])
+    return values[0] if values else ""
+
+
+def _label_value(label: str, value: Any) -> str:
+    text = str(value or "").strip()
+    return f"`{label}`={text}" if text else ""
+
+
+def _join_display_parts(parts: Iterable[Any]) -> str:
+    return "<br>".join(str(part).strip() for part in parts if str(part or "").strip())
+
+
 def render_user_pipeline_structure(out_dir: Path, summary: dict[str, Any]) -> str:
     structure = _read_json(out_dir / "internal" / "pipeline_structure.json")
+    workspace_run = _read_json(out_dir / "internal" / "workspace_run.json")
     stages = structure.get("stages", []) if isinstance(structure, dict) else []
     included_stages = [stage for stage in stages if stage.get("included")]
     lines = [
-        f"# {summary['trial_id']} 파이프라인 요약",
+        f"# {summary['trial_id']} 재현 파이프라인 구조도",
         "",
-        "실행 기준은 `.py` 코드입니다. 이 문서는 사람이 빠르게 확인하기 위한 요약입니다.",
+        "실행 기준은 `.py` 코드입니다. 이 문서는 노트북을 위에서 아래로 읽듯이 이번 trial의 실행 흐름과 재현 조건을 확인하기 위한 구조도입니다.",
         "",
-        "## 전체 요약",
+        "## 재현 목표",
         "",
-        "| 단계 | 실제 적용 내용 | 확인 포인트 |",
-        "|---|---|---|",
+        f"- 같은 데이터와 같은 설정으로 로컬 `{_display_value(summary.get('metric'))}` 점수를 다시 계산합니다.",
+        "- `outputs/metrics.json`과 `outputs/submission.csv`를 다시 생성할 수 있어야 합니다.",
+        "- 세부 구현의 원본은 `code/`에 복사된 `.py` 파일과 내부 `pipeline_structure.json`입니다.",
+        "",
+        "## 기준 정보",
+        "",
+        f"- workspace: `{_display_value(summary.get('project_root'))}`",
+        f"- 평가 지표: `{_display_value(summary.get('metric'))}`",
+        f"- 목표 방향: `{_display_value(summary.get('objective'))}`",
+        f"- 로컬 점수: `{_display_value(summary.get('local_score'))}`",
+        "",
+        "## 실행 명령 순서",
+        "",
     ]
-    for stage in included_stages:
-        lines.append(
-            "| "
-            + " | ".join(
-                [
-                    _stage_display_name(stage),
-                    _join_short(
-                        stage.get("actual_applied", []),
-                        limit=3,
-                        overflow_label="자세한 내용은 아래 단계별 체크 참조",
-                    ),
-                    _join_short(
-                        stage.get("checks", []),
-                        limit=2,
-                        overflow_label="추가 확인 포인트는 아래 참조",
-                    ),
-                ]
-            )
-            + " |"
-        )
-
-    lines.extend(["", "## 단계별 체크", ""])
-    for index, stage in enumerate(included_stages, 1):
-        detail_lines = _stage_detail_lines(stage)
+    command_lines = _workspace_command_lines(workspace_run)
+    if command_lines:
+        lines.extend(f"{index}. `{command}`" for index, command in enumerate(command_lines, 1))
+    else:
         lines.extend(
             [
-                f"### {index}. {_stage_display_name(stage)}",
-                "",
-                f"- 역할: {_display_value(stage.get('role'))}",
-                f"- 적용: {_join_short(stage.get('actual_applied', []), limit=8, overflow_label='세부 항목은 내부 JSON 참조')}",
+                "1. `python test_step.py`",
+                "2. `python train_step.py`",
+                "3. `python predict_step.py`",
             ]
         )
-        lines.extend(f"- {item}" for item in detail_lines)
+    lines.extend(["", "## 노트북형 실행 흐름", ""])
+    for index, stage in enumerate(included_stages, 1):
+        actual = _stage_items(stage.get("actual_applied"))
+        details = _stage_detail_lines(stage)
+        checks = _stage_items(stage.get("checks"))
+        lines.extend(
+            [
+                f"### {index}. {_notebook_stage_title(stage)}",
+                "",
+                f"- 목적: {_display_value(stage.get('role'))}",
+                f"- 입력: {_stage_input_summary(stage, summary)}",
+            ]
+        )
+        if actual:
+            lines.append("- 처리:")
+            lines.extend(f"  - {item}" for item in actual[:8])
+            if len(actual) > 8:
+                lines.append("  - 나머지 세부 처리 항목은 내부 JSON을 확인합니다.")
+        else:
+            lines.append("- 처리: 내부 구조화 정보에서 명시된 처리 내용이 없습니다.")
+        output = _stage_output_summary(stage)
+        if output:
+            lines.append(f"- 출력: {output}")
+        if details:
+            lines.append(f"- 핵심값: {'; '.join(_strip_detail_prefix(item) for item in details)}")
+        if checks:
+            lines.append(f"- 재현 체크: {_join_short(checks, limit=4, overflow_label='추가 체크는 내부 JSON 참조')}")
         locations = stage.get("code_locations", [])
         if locations:
             lines.append(f"- 코드: {_join_code_locations(locations, limit=3)}")
@@ -154,10 +538,154 @@ def render_user_pipeline_structure(out_dir: Path, summary: dict[str, Any]) -> st
             "## 내부 원본",
             "",
             f"- 구조화 JSON: `{summary.get('pipeline_structure_file')}`",
+            "- 사용자용 설명은 위 구조도를 보고, 에이전트/재실행용 세부 데이터는 내부 JSON을 기준으로 확인합니다.",
             "",
         ]
     )
     return "\n".join(lines)
+
+
+def _notebook_stage_title(stage: dict[str, Any]) -> str:
+    names = {
+        "imports_setup": "Setup / 준비",
+        "data_load": "Data Load / 데이터 로드",
+        "preprocessing": "Preprocessing / 전처리",
+        "feature_representation": "Feature Construction / 피처 구성",
+        "data_split_cv": "Data Split / 검증 분리",
+        "data_augmentation": "Data Augmentation / 증강",
+        "dataset_dataloader": "Dataset & DataLoader / 배치 구성",
+        "model_definition": "Model Definition / 모델 정의",
+        "loss_objective": "Loss & Metric / 손실·평가 기준",
+        "training": "Training / 학습",
+        "training_curve": "Training Curve / 학습 곡선",
+        "evaluation": "Evaluation / 평가",
+        "model_checkpoint": "Checkpoint / 모델 저장",
+        "test_inference_output": "Test Inference & Output / 추론·출력",
+    }
+    stage_id = str(stage.get("id") or "")
+    return names.get(stage_id, f"{_stage_display_name(stage)} / {stage_id or 'unknown'}")
+
+
+def _workspace_command_lines(workspace_run: dict[str, Any]) -> list[str]:
+    results = workspace_run.get("command_results") if isinstance(workspace_run, dict) else []
+    commands: list[str] = []
+    if isinstance(results, list):
+        for result in results:
+            if not isinstance(result, dict):
+                continue
+            command = str(result.get("command") or "").strip()
+            if command:
+                commands.append(_compact_command(command))
+    if commands:
+        return commands
+    command_groups = workspace_run.get("commands") if isinstance(workspace_run, dict) else {}
+    if not isinstance(command_groups, dict):
+        return []
+    for key in ["test", "train", "predict"]:
+        values = command_groups.get(key) or []
+        if isinstance(values, str):
+            values = [values]
+        for command in values:
+            if str(command or "").strip():
+                commands.append(_compact_command(str(command)))
+    return commands
+
+
+def _compact_command(command: str) -> str:
+    return (
+        command.replace("C:\\Users\\ASUS\\anaconda3\\python.exe", "python")
+        .replace(str(paths.project_root()) + "\\", "")
+        .replace(str(paths.project_root()) + "/", "")
+    )
+
+
+def _stage_items(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item or "").strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
+def _stage_input_summary(stage: dict[str, Any], summary: dict[str, Any]) -> str:
+    details = stage.get("structured_details") if isinstance(stage.get("structured_details"), dict) else {}
+    stage_id = str(stage.get("id") or "")
+    if stage_id == "imports_setup":
+        return "workspace 경로, 설정 파일, 필요한 Python 라이브러리"
+    if stage_id == "data_load":
+        files = details.get("required_files") or []
+        target = details.get("target_column")
+        id_column = details.get("id_column")
+        parts = []
+        if files:
+            parts.append(f"데이터 파일 {_inline_list(files, 6)}")
+        if target:
+            parts.append(f"타깃 `{target}`")
+        if id_column:
+            parts.append(f"ID `{id_column}`")
+        return ", ".join(parts) if parts else "원본 train/test 데이터"
+    if stage_id == "preprocessing":
+        raw = details.get("raw_feature_columns") or []
+        return f"원본 피처 {_inline_list(raw, 12)}" if raw else "로드된 학습 데이터"
+    if stage_id == "feature_representation":
+        raw = details.get("raw_feature_columns") or details.get("final_feature_columns") or []
+        return f"전처리 대상 피처 {_inline_list(raw, 12)}" if raw else "전처리된 피처"
+    if stage_id == "data_split_cv":
+        return "타깃이 포함된 학습 데이터와 split 설정"
+    if stage_id in {"model_definition", "loss_objective"}:
+        return "전처리 파이프라인과 평가 설정"
+    if stage_id == "training":
+        return "학습 split, 검증 split, 모델 정의"
+    if stage_id == "evaluation":
+        return "검증 데이터 예측값과 정답"
+    if stage_id == "test_inference_output":
+        id_column = details.get("id_column") or summary.get("id_column")
+        return f"test 데이터와 ID `{id_column}`" if id_column else "test 데이터와 학습된 파이프라인"
+    return "이전 단계의 출력"
+
+
+def _stage_output_summary(stage: dict[str, Any]) -> str:
+    details = stage.get("structured_details") if isinstance(stage.get("structured_details"), dict) else {}
+    stage_id = str(stage.get("id") or "")
+    if stage_id == "imports_setup":
+        return "재현 실행에 필요한 경로 상수와 설정값"
+    if stage_id == "data_load":
+        return "학습용 DataFrame, 테스트용 DataFrame, 타깃/ID 컬럼 확인 결과"
+    if stage_id == "preprocessing":
+        return "결측치 처리, 스케일링, 인코딩이 포함된 전처리 파이프라인"
+    if stage_id == "feature_representation":
+        final_features = details.get("final_feature_columns") or []
+        return f"최종 모델 입력 피처 {_inline_list(final_features, 12)}" if final_features else "모델 입력 feature set"
+    if stage_id == "data_split_cv":
+        return "학습 split과 검증 split"
+    if stage_id == "model_definition":
+        estimator = details.get("estimator")
+        return f"`{estimator}` 모델 객체" if estimator else "모델 객체"
+    if stage_id == "loss_objective":
+        metric = details.get("metric")
+        return f"`{metric}` 기준의 검증 점수" if metric else "평가 기준"
+    if stage_id == "training":
+        return "fit이 완료된 모델/파이프라인"
+    if stage_id == "evaluation":
+        score_parts = []
+        for key in ["cv_score", "validation_accuracy"]:
+            if details.get(key) is not None:
+                score_parts.append(f"{key} `{details[key]}`")
+        return ", ".join(score_parts) if score_parts else "검증 metric 기록"
+    if stage_id == "model_checkpoint":
+        checkpoint = details.get("checkpoint_path")
+        return f"모델 checkpoint `{checkpoint}`" if checkpoint else "선택적 모델 checkpoint"
+    if stage_id == "test_inference_output":
+        submission = details.get("submission_path")
+        return f"제출/추론 파일 `{submission}`" if submission else "test 예측 파일"
+    return "다음 단계로 전달되는 중간 산출물"
+
+
+def _strip_detail_prefix(text: str) -> str:
+    for prefix in ["세부: ", "점수: ", "출력: ", "모델 설정: ", "평가 기준: ", "저장 위치: "]:
+        if text.startswith(prefix):
+            return text[len(prefix) :]
+    return text
 
 
 def render_user_code_pipeline(summary: dict[str, Any], copied_files: list[str]) -> str:
@@ -291,6 +819,41 @@ def render_user_submission(summary: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def render_user_decision(summary: dict[str, Any]) -> str:
+    card = summary.get("decision_card") if isinstance(summary.get("decision_card"), dict) else {}
+    constraints = card.get("planner_constraints") if isinstance(card.get("planner_constraints"), list) else []
+    rejected = card.get("rejected_axes") if isinstance(card.get("rejected_axes"), list) else summary.get("rejected_axes", [])
+    lines = [
+        f"# {summary['trial_id']} 다음 실험 판단",
+        "",
+        "## 핵심 판단",
+        "",
+        f"- decision: {_display_value(card.get('decision') or summary.get('trial_decision'))}",
+        f"- change_axis: {_display_value(card.get('change_axis'))}",
+        f"- source_trial_id: {_display_value(card.get('source_trial_id'))}",
+        f"- recommended_base_trial: {_display_value(card.get('recommended_base_trial') or summary.get('recommended_base_trial'))}",
+        "",
+        "## 점수 비교",
+        "",
+        f"- local_score: {_display_value(card.get('local_score') or summary.get('local_score'))}",
+        f"- previous_local_score: {_display_value(card.get('previous_local_score'))}",
+        f"- local_status: {_display_value(card.get('local_status'))}",
+        f"- local_delta: {_display_value(card.get('local_delta'))}",
+        f"- lb_score: {_display_value(card.get('lb_score') or summary.get('submitted_lb_score'))}",
+        f"- previous_lb_score: {_display_value(card.get('previous_lb_score'))}",
+        f"- lb_status: {_display_value(card.get('lb_status'))}",
+        f"- lb_delta: {_display_value(card.get('lb_delta'))}",
+        "",
+        "## 다음 계획 제약",
+        "",
+    ]
+    lines.extend(f"- {item}" for item in constraints or ["아직 판단 카드가 없습니다."])
+    lines.extend(["", "## 기각/보류된 개선축", ""])
+    lines.extend(f"- {item}" for item in rejected or ["None"])
+    lines.extend(["", "## 메모", "", _display_value(card.get("next_guidance")), ""])
+    return "\n".join(lines)
+
+
 def write_browse_index(competition: str, browse_root: Path) -> None:
     trials = sorted(path.name for path in browse_root.iterdir() if path.is_dir())
     lines = [
@@ -393,8 +956,70 @@ def _planned_choice_lines(out_dir: Path, plan: dict[str, Any] | None = None) -> 
 
 
 def _plan_note_lines(plan: dict[str, Any]) -> list[str]:
-    notes = _normalize_plan_items(plan.get("implementation_notes")) if isinstance(plan, dict) else []
-    return [item for item in notes if item][:10]
+    if not isinstance(plan, dict):
+        return []
+    plan_type = plan.get("plan_type")
+    lines: list[str] = []
+    if plan_type == "continuation_delta_plan":
+        axis = str(plan.get("primary_change_axis") or "").strip()
+        if axis:
+            lines.append(f"Primary change axis: {axis}")
+        lines.extend(f"Keep unchanged: {item}" for item in _normalize_plan_items_raw(plan.get("keep_unchanged"))[:6])
+        lines.extend(f"Change detail: {item}" for item in _normalize_plan_items_raw(plan.get("change_details"))[:6])
+        lines.extend(f"Code target: {item}" for item in _normalize_plan_items_raw(plan.get("code_change_targets"))[:4])
+        lines.extend(f"Success criterion: {item}" for item in _normalize_plan_items_raw(plan.get("success_criteria"))[:4])
+        lines.extend(f"Failure decision: {item}" for item in _normalize_plan_items_raw(plan.get("failure_decision"))[:3])
+    else:
+        lines.extend(f"Pipeline blueprint: {item}" for item in _normalize_plan_items_raw(plan.get("pipeline_blueprint"))[:8])
+        lines.extend(f"Code target: {item}" for item in _normalize_plan_items_raw(plan.get("code_change_targets"))[:4])
+        lines.extend(f"Success criterion: {item}" for item in _normalize_plan_items_raw(plan.get("success_criteria"))[:4])
+    notes = _normalize_plan_items(plan.get("implementation_notes"))
+    lines.extend(item for item in notes if item)
+    return [item for item in lines if item][:12]
+
+
+def _implementation_note_buckets(value: Any) -> dict[str, list[str]]:
+    buckets = {"keep_unchanged": [], "change_details": [], "code_change_targets": []}
+    prefixes = {
+        "keep unchanged": "keep_unchanged",
+        "change details": "change_details",
+        "code change targets": "code_change_targets",
+    }
+    for item in _normalize_plan_items_raw(value):
+        label, separator, body = item.partition(":")
+        if not separator:
+            continue
+        bucket = prefixes.get(label.strip().casefold())
+        if bucket and body.strip():
+            buckets[bucket].append(body.strip())
+    return buckets
+
+
+def _normalize_plan_items_raw(value: Any) -> list[str]:
+    if value is None or value == "":
+        return []
+    items = value if isinstance(value, list) else [value]
+    result: list[str] = []
+    for item in items:
+        result.extend(_flatten_plan_item_raw(_coerce_plan_item(item)))
+    return [item for item in result if item]
+
+
+def _flatten_plan_item_raw(item: Any, *, label: str | None = None) -> list[str]:
+    if isinstance(item, dict):
+        lines: list[str] = []
+        for key, value in item.items():
+            lines.extend(_flatten_plan_item_raw(value, label=str(key).replace("_", " ")))
+        return lines
+    if isinstance(item, list):
+        lines: list[str] = []
+        for value in item:
+            lines.extend(_flatten_plan_item_raw(value, label=label))
+        return lines
+    text = str(item).strip()
+    if not text:
+        return []
+    return [f"{label}: {text}" if label else text]
 
 
 def _normalize_plan_items(value: Any) -> list[str]:
@@ -538,7 +1163,7 @@ def _koreanize_expected_output(text: str) -> str:
         return "`outputs/metrics.json`: 로컬 검증 점수와 파이프라인 메타데이터를 기록합니다."
     if "submission.csv" in lowered:
         return "`outputs/submission.csv`: `PassengerId`, `Survived` 형식의 예측 파일을 생성합니다."
-    if "pipeline summary" in lowered:
+    if "pipeline summary" in lowered or "pipeline_summary.json" in lowered:
         return "파이프라인 요약: 데이터 가정, split, 전처리, 모델, 출력 형식을 기록합니다."
     if "code snapshot" in lowered:
         return "코드 스냅샷: 이번 trial의 주요 코드 파일을 보관합니다."
@@ -552,6 +1177,8 @@ def _koreanize_plan_summary(text: str, *, kind: str) -> str:
         return ""
     lowered = text.lower()
     if kind == "objective":
+        if "previous best/local score" in lowered or "previous best" in lowered or "previous local" in lowered:
+            return "기준 trial의 로컬 검증 점수를 기준으로, 이번 변경이 실제로 성능을 개선하는지 확인합니다."
         if "baseline" in lowered and "metrics.json" in lowered and "submission.csv" in lowered:
             return "재현 가능한 첫 baseline 파이프라인을 만들고, `metrics.json`과 `submission.csv`까지 생성되는지 검증합니다."
         if "baseline" in lowered:

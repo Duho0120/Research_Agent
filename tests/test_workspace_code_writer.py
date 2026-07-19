@@ -58,8 +58,29 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
             self.assertIn("Artifact policy", prompt)
             self.assertIn("Do not persist trained model/checkpoint artifacts by default", prompt)
             self.assertIn("Use the RAG context pack", prompt)
+            self.assertIn("continuation_delta_plan", prompt)
+            self.assertIn("modify the existing pipeline incrementally", prompt)
+            self.assertIn("primary_change_axis", prompt)
             self.assertIn("context_pack_workspace_code_writing.md", prompt)
+            self.assertIn("Data card summary", prompt)
+            self.assertIn("Survived", prompt)
+            self.assertIn("Pclass", prompt)
+            self.assertIn("You are not expected to access the filesystem or run tools directly.", prompt)
+            self.assertIn("Return code changes in patch_updates when edit_policy.mode is patch_only", prompt)
+            self.assertIn("Do not block merely because this API response environment has no file read/write tools.", prompt)
+            self.assertIn("Output budget for continuation/patch-only coding", prompt)
+            self.assertIn("Return at most 2 patch_updates", prompt)
+            self.assertIn("validation_results must be []", prompt)
+            self.assertIn("copy the complete existing line or block from the authoritative code snapshot", prompt)
             self.assertEqual("FEATURE_FLAG = True\n", (project / "src" / "model.py").read_text(encoding="utf-8"))
+            self.assertEqual(
+                "FEATURE_FLAG = True\n",
+                (trial / "internal" / "code_snapshot" / "src" / "model.py").read_text(encoding="utf-8"),
+            )
+            snapshot_manifest = json.loads(
+                (trial / "internal" / "code_snapshot_manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(["src/model.py"], [item["path"] for item in snapshot_manifest["files"]])
             self.assertTrue((trial / "workspace_coding_api_request.json").exists())
             self.assertTrue((trial / "workspace_coding_api_response.json").exists())
             self.assertTrue((trial / "workspace_coding_result_validation.json").exists())
@@ -94,6 +115,41 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
             self.assertEqual("accepted", result["status"])
             self.assertEqual([], result["blocking_issues"])
             self.assertEqual("FEATURE_FLAG = True\n", (project / "src" / "model.py").read_text(encoding="utf-8"))
+
+    def test_run_workspace_code_writer_accepts_single_validation_result_object(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_handoff(root, project)
+            client = FakeWorkspaceCodeWriterClient(
+                {
+                    "output_text": json.dumps(
+                        {
+                            "status": "completed",
+                            "summary": "Updated model feature flag.",
+                            "changed_files": ["src/model.py"],
+                            "file_updates": [{"path": "src/model.py", "content": "FEATURE_FLAG = True\n"}],
+                            "validation_results": {
+                                "status": "not_run_in_response_environment",
+                                "intended_command": "{python} -m pytest tests -q",
+                            },
+                            "blocking_issues": [],
+                        }
+                    ),
+                }
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
+
+            self.assertEqual("accepted", result["status"])
+            saved = json.loads(
+                (root / "experiments" / "demo" / "trial_002" / "workspace_coding_result.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertIsInstance(saved["validation_results"], list)
+            self.assertEqual("not_run_in_response_environment", saved["validation_results"][0]["status"])
 
     def test_run_workspace_code_writer_blocks_forbidden_artifact_update_before_write(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -234,6 +290,223 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
             self.assertEqual(0, code)
             self.assertEqual("print('updated')\n", (project / "train.py").read_text(encoding="utf-8"))
 
+    def test_run_workspace_code_writer_applies_patch_updates_in_patch_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_handoff(root, project, edit_policy={"mode": "patch_only", "allow_full_file_updates": False})
+            client = FakeWorkspaceCodeWriterClient(
+                {
+                    "output_text": json.dumps(
+                        {
+                            "status": "completed",
+                            "summary": "Patched feature flag only.",
+                            "changed_files": ["src/model.py"],
+                            "patch_updates": [
+                                {
+                                    "path": "src/model.py",
+                                    "find": "FEATURE_FLAG = False\n",
+                                    "replace": "FEATURE_FLAG = True\n",
+                                    "reason": "Enable the planned flag without rewriting the file.",
+                                }
+                            ],
+                            "file_updates": [],
+                            "validation_results": [],
+                            "blocking_issues": [],
+                        }
+                    )
+                }
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
+
+            self.assertEqual("accepted", result["status"])
+            self.assertEqual("FEATURE_FLAG = True\n", (project / "src" / "model.py").read_text(encoding="utf-8"))
+            self.assertEqual(
+                "FEATURE_FLAG = True\n",
+                (
+                    root
+                    / "experiments"
+                    / "demo"
+                    / "trial_002"
+                    / "internal"
+                    / "code_snapshot"
+                    / "src"
+                    / "model.py"
+                ).read_text(encoding="utf-8"),
+            )
+
+    def test_run_workspace_code_writer_restores_base_snapshot_before_patch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            (project / "src" / "model.py").write_text("FEATURE_FLAG = FAILED_TRIAL\n", encoding="utf-8")
+            source_code = root / "experiments" / "demo" / "trial_001" / "user_view" / "code" / "src"
+            source_code.mkdir(parents=True)
+            (source_code / "model.py").write_text("FEATURE_FLAG = False\n", encoding="utf-8")
+            self._write_handoff(
+                root,
+                project,
+                edit_policy={
+                    "mode": "patch_only",
+                    "allow_full_file_updates": False,
+                    "restore_base_before_patch": True,
+                    "base_code_source": "experiments/demo/trial_001/user_view/code",
+                },
+                source_trial_id="trial_001",
+            )
+            client = FakeWorkspaceCodeWriterClient(
+                {
+                    "output_text": json.dumps(
+                        {
+                            "status": "completed",
+                            "summary": "Patched from source trial snapshot.",
+                            "changed_files": ["src/model.py"],
+                            "patch_updates": [
+                                {
+                                    "path": "src/model.py",
+                                    "find": "FEATURE_FLAG = False\n",
+                                    "replace": "FEATURE_FLAG = True\n",
+                                    "reason": "Apply the next delta on the recommended base trial code.",
+                                }
+                            ],
+                            "file_updates": [],
+                            "validation_results": [],
+                            "blocking_issues": [],
+                        }
+                    )
+                }
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
+
+            self.assertEqual("accepted", result["status"])
+            self.assertEqual("FEATURE_FLAG = True\n", (project / "src" / "model.py").read_text(encoding="utf-8"))
+
+    def test_run_workspace_code_writer_prefers_internal_base_snapshot_before_patch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            (project / "src" / "model.py").write_text("FEATURE_FLAG = FAILED_TRIAL\n", encoding="utf-8")
+            source_internal = root / "experiments" / "demo" / "trial_001" / "internal"
+            source_snapshot = source_internal / "code_snapshot" / "src"
+            source_snapshot.mkdir(parents=True)
+            (source_snapshot / "model.py").write_text("FEATURE_FLAG = False\n", encoding="utf-8")
+            (source_internal / "code_snapshot_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "snapshot_dir": "internal/code_snapshot",
+                        "files": [{"path": "src/model.py"}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            stale_user_view = root / "experiments" / "demo" / "trial_001" / "user_view" / "code" / "src"
+            stale_user_view.mkdir(parents=True)
+            (stale_user_view / "model.py").write_text("FEATURE_FLAG = POLLUTED\n", encoding="utf-8")
+            self._write_handoff(
+                root,
+                project,
+                edit_policy={
+                    "mode": "patch_only",
+                    "allow_full_file_updates": False,
+                    "restore_base_before_patch": True,
+                    "base_code_source": "experiments/demo/trial_001/internal/code_snapshot",
+                },
+                source_trial_id="trial_001",
+            )
+            client = FakeWorkspaceCodeWriterClient(
+                {
+                    "output_text": json.dumps(
+                        {
+                            "status": "completed",
+                            "summary": "Patched from internal source snapshot.",
+                            "changed_files": ["src/model.py"],
+                            "patch_updates": [
+                                {
+                                    "path": "src/model.py",
+                                    "find": "FEATURE_FLAG = False\n",
+                                    "replace": "FEATURE_FLAG = True\n",
+                                    "reason": "Apply the next delta on the durable base snapshot.",
+                                }
+                            ],
+                            "file_updates": [],
+                            "validation_results": [],
+                            "blocking_issues": [],
+                        }
+                    )
+                }
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
+
+            self.assertEqual("accepted", result["status"])
+            self.assertEqual("FEATURE_FLAG = True\n", (project / "src" / "model.py").read_text(encoding="utf-8"))
+
+    def test_run_workspace_code_writer_blocks_full_file_updates_in_patch_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_handoff(root, project, edit_policy={"mode": "patch_only", "allow_full_file_updates": False})
+            client = FakeWorkspaceCodeWriterClient(
+                {
+                    "output_text": json.dumps(
+                        {
+                            "status": "completed",
+                            "summary": "Tried whole-file update.",
+                            "changed_files": ["src/model.py"],
+                            "file_updates": [{"path": "src/model.py", "content": "FEATURE_FLAG = True\n"}],
+                            "validation_results": [],
+                            "blocking_issues": [],
+                        }
+                    )
+                }
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
+
+            self.assertEqual("blocked", result["status"])
+            self.assertIn("full_file_update_not_allowed_in_patch_only:src/model.py", result["issues"])
+            self.assertEqual("FEATURE_FLAG = False\n", (project / "src" / "model.py").read_text(encoding="utf-8"))
+
+    def test_run_workspace_code_writer_blocks_too_many_patch_updates_in_patch_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            (project / "src" / "model.py").write_text("A = 1\nB = 2\nC = 3\n", encoding="utf-8")
+            self._write_handoff(root, project, edit_policy={"mode": "patch_only", "allow_full_file_updates": False})
+            client = FakeWorkspaceCodeWriterClient(
+                {
+                    "output_text": json.dumps(
+                        {
+                            "status": "completed",
+                            "summary": "Tried too many small patches.",
+                            "changed_files": ["src/model.py"],
+                            "patch_updates": [
+                                {"path": "src/model.py", "find": "A = 1\n", "replace": "A = 10\n", "reason": "A"},
+                                {"path": "src/model.py", "find": "B = 2\n", "replace": "B = 20\n", "reason": "B"},
+                                {"path": "src/model.py", "find": "C = 3\n", "replace": "C = 30\n", "reason": "C"},
+                            ],
+                            "file_updates": [],
+                            "validation_results": [],
+                            "blocking_issues": [],
+                        }
+                    )
+                }
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
+
+            self.assertEqual("blocked", result["status"])
+            self.assertIn("too_many_patch_updates_for_budget:3", result["issues"])
+            self.assertEqual("A = 1\nB = 2\nC = 3\n", (project / "src" / "model.py").read_text(encoding="utf-8"))
+
     def _write_project(self, root: Path) -> Path:
         project = root / "external_project"
         (project / "src").mkdir(parents=True)
@@ -247,7 +520,13 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
         (project / "outputs" / "submission.csv").write_text("id,target\n1,0\n", encoding="utf-8")
         return project
 
-    def _write_handoff(self, root: Path, project: Path) -> None:
+    def _write_handoff(
+        self,
+        root: Path,
+        project: Path,
+        edit_policy: dict | None = None,
+        source_trial_id: str | None = None,
+    ) -> None:
         trial = root / "experiments" / "demo" / "trial_002"
         trial.mkdir(parents=True)
         (trial / "next_experiment.md").write_text("# trial_002\n\nImprove model feature.\n", encoding="utf-8")
@@ -262,6 +541,8 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                     "status": "ready",
                     "objective": "Implement the next workspace experiment.",
                     "project_root": str(project),
+                    "source_trial_id": source_trial_id,
+                    "code_base_trial_id": source_trial_id,
                     "context_files": ["experiments/demo/trial_002/next_experiment.md"],
                     "retrieval_context": {
                         "task": "workspace_code_writing",
@@ -269,6 +550,15 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                         "context_pack_md_file": "experiments/demo/trial_002/context_pack_workspace_code_writing.md",
                         "retrieval_manifest_file": "experiments/demo/trial_002/retrieval_manifest_workspace_code_writing.json",
                     },
+                    "data_card_summary": {
+                        "task_type": "tabular_classification",
+                        "target_column": "Survived",
+                        "id_column": "PassengerId",
+                        "include_features_first": ["Pclass", "Sex", "Age"],
+                        "defer_features_first": ["Name", "Ticket"],
+                        "avoid_first_trial": ["gaussian_naive_bayes_for_mixed_numeric_and_categorical_data"],
+                    },
+                    "edit_policy": edit_policy or {"mode": "full_file_allowed", "allow_full_file_updates": True},
                     "allowed_write_paths": ["src/", "tests/", "train.py"],
                     "forbidden_paths": ["data/", "outputs/metrics.json", "outputs/submission.csv"],
                     "validation_commands": ["{python} -m pytest tests -q"],

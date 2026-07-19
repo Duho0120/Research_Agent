@@ -9,6 +9,7 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from . import paths, simple_yaml
+from .code_snapshot import load_trial_code_snapshot
 from .paths import competition_dir, trial_dir
 from .store import read_text, write_text
 from .trial_user_view import render_browse_paths as render_compact_browse_paths
@@ -28,6 +29,8 @@ INTERNAL_FILE_NAMES = {
     "demo_cycle_record.json",
     "demo_experiment_plan.json",
     "demo_one_cycle.json",
+    "decision_card.json",
+    "trial_memory_card.json",
     "metrics_collection.json",
     "workspace_coding_handoff.json",
     "workspace_coding_result.json",
@@ -82,20 +85,23 @@ def build_trial_summary(competition: str, trial_id: str) -> dict[str, Any]:
     demo_cycle = read_trial_json(out_dir, "demo_one_cycle.json")
     after_coding = read_trial_json(out_dir, "workspace_after_coding_cycle.json")
     demo_record = read_trial_json(out_dir, "demo_cycle_record.json")
+    workspace_result_cycle = read_trial_json(out_dir, "workspace_result_cycle.json")
     workspace_run = read_trial_json(out_dir, "workspace_run.json")
     code_result = read_trial_json(out_dir, "workspace_coding_result.json")
     metrics_collection = read_trial_json(out_dir, "metrics_collection.json")
     submit_manifest = _read_json(out_dir / "submit_manifest.json")
     submission_run = _read_json(out_dir / "submission_run.json")
     submission_result = _latest_submission_result(competition, trial_id)
+    decision_card = read_trial_json(out_dir, "decision_card.json")
     profile = _load_execution_profile(competition)
 
-    status = (
-        demo_cycle.get("status")
-        or after_coding.get("status")
-        or demo_record.get("status")
-        or metrics_collection.get("status")
-        or "unknown"
+    status = _summary_status(
+        workspace_result_cycle,
+        demo_cycle,
+        after_coding,
+        demo_record,
+        metrics_collection,
+        workspace_run,
     )
     score = metrics.get("cv_score")
     metric = metrics.get("metric") or metrics_collection.get("metric")
@@ -128,7 +134,35 @@ def build_trial_summary(competition: str, trial_id: str) -> dict[str, Any]:
         "submitted_rank": submission_result.get("submitted_rank"),
         "is_best_submission": submission_result.get("is_best"),
         "requires_user_approval": submit_manifest.get("requires_user_approval"),
+        "decision_card": decision_card,
+        "trial_decision": decision_card.get("decision"),
+        "recommended_base_trial": decision_card.get("recommended_base_trial"),
+        "rejected_axes": decision_card.get("rejected_axes", []),
     }
+
+
+def _summary_status(
+    workspace_result_cycle: dict[str, Any],
+    demo_cycle: dict[str, Any],
+    after_coding: dict[str, Any],
+    demo_record: dict[str, Any],
+    metrics_collection: dict[str, Any],
+    workspace_run: dict[str, Any],
+) -> str:
+    result_status = workspace_result_cycle.get("status")
+    if result_status == "already_processed":
+        return "completed"
+    if result_status:
+        return str(result_status)
+    if metrics_collection.get("status") == "collected" and workspace_run.get("status") == "completed":
+        return "completed"
+    return (
+        demo_cycle.get("status")
+        or after_coding.get("status")
+        or demo_record.get("status")
+        or metrics_collection.get("status")
+        or "unknown"
+    )
 
 
 def _latest_submission_result(competition: str, trial_id: str) -> dict[str, Any]:
@@ -367,6 +401,12 @@ def _stage(
 
 
 def _project_code_files(summary: dict[str, Any]) -> list[tuple[str, str]]:
+    snapshot = _code_files_from_saved_snapshot(summary)
+    if snapshot:
+        return snapshot
+    snapshot = _code_files_from_coding_result(summary)
+    if snapshot:
+        return snapshot
     project = summary.get("project_root")
     if not project:
         return []
@@ -387,6 +427,45 @@ def _project_code_files(summary: dict[str, Any]) -> list[tuple[str, str]]:
             continue
         result.append((relative.as_posix(), read_text(path, default="")[:12000]))
     return result
+
+
+def _code_files_from_saved_snapshot(summary: dict[str, Any]) -> list[tuple[str, str]]:
+    competition = summary.get("competition")
+    trial_id = summary.get("trial_id")
+    if not competition or not trial_id:
+        return []
+    out_dir = trial_dir(str(competition), str(trial_id))
+    return load_trial_code_snapshot(out_dir, max_chars_per_file=12000)
+
+
+def _workspace_pipeline_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    project = summary.get("project_root")
+    if not project:
+        return {}
+    data = _read_json(Path(str(project)) / "outputs" / "pipeline_summary.json")
+    return data if isinstance(data, dict) else {}
+
+
+def _code_files_from_coding_result(summary: dict[str, Any]) -> list[tuple[str, str]]:
+    competition = summary.get("competition")
+    trial_id = summary.get("trial_id")
+    if not competition or not trial_id:
+        return []
+    out_dir = trial_dir(str(competition), str(trial_id))
+    result = read_trial_json(out_dir, "workspace_coding_result.json")
+    file_updates = result.get("file_updates")
+    if not isinstance(file_updates, list):
+        return []
+    files: list[tuple[str, str]] = []
+    for update in file_updates:
+        if not isinstance(update, dict):
+            continue
+        relative = _safe_relative_file(update.get("path"))
+        content = update.get("content")
+        if relative is None or not isinstance(content, str):
+            continue
+        files.append((relative.as_posix(), content[:12000]))
+    return files
 
 
 def _code_locations_for_stage(stage_id: str, code_files: list[tuple[str, str]]) -> list[str]:
@@ -503,6 +582,11 @@ def _stage(
     descriptions = _stage_descriptions()
     described = descriptions.get(stage_id, {})
     actual = context.get("pipeline_facts", {}).get(stage_id, [])
+    if not actual and included and stage_id == "feature_representation":
+        details = context.get("pipeline_details", {}).get(stage_id, {})
+        final_features = details.get("final_feature_columns", []) if isinstance(details, dict) else []
+        if final_features:
+            actual = [f"최종 모델 입력 피처는 {', '.join(str(item) for item in final_features)}입니다."]
     if not actual and not included:
         actual = ["이번 실험에서는 해당 단계를 적용하지 않았습니다."]
     details = context.get("pipeline_details", {}).get(stage_id, {})
@@ -557,6 +641,7 @@ def _extract_pipeline_facts(
     code_text: str,
 ) -> dict[str, list[str]]:
     metrics = summary.get("metrics") if isinstance(summary.get("metrics"), dict) else {}
+    pipeline_summary = _workspace_pipeline_summary(summary)
     constants = _extract_code_constants(code_files)
     lowered = code_text.lower()
     facts: dict[str, list[str]] = {stage: [] for stage in _stage_descriptions()}
@@ -584,8 +669,16 @@ def _extract_pipeline_facts(
     if "read_csv" in lowered:
         files = ", ".join(required_files) if required_files else "train/test CSV"
         facts["data_load"].append(f"`pd.read_csv`로 {files}를 읽습니다.")
-    target = _workspace_config_value(code_files, "target_column") or "target"
-    identifier = _workspace_config_value(code_files, "id_column") or "id"
+    target = (
+        pipeline_summary.get("target_column")
+        or _workspace_config_value(code_files, "target_column")
+        or "target"
+    )
+    identifier = (
+        pipeline_summary.get("id_column")
+        or _workspace_config_value(code_files, "id_column")
+        or "id"
+    )
     facts["data_load"].append(f"학습 타깃은 `{target}`, 제출 ID는 `{identifier}`로 사용합니다.")
 
     numeric = _feature_list(metrics, constants, "numeric")
@@ -696,7 +789,12 @@ def _extract_pipeline_facts(
 
     if "submission.csv" in lowered:
         facts["test_inference_output"].append("`outputs/submission.csv`를 생성합니다.")
-    if identifier and target:
+    submission_columns = pipeline_summary.get("submission_columns")
+    if isinstance(submission_columns, list) and submission_columns:
+        facts["test_inference_output"].append(
+            "제출 파일은 " + ", ".join(f"`{column}`" for column in submission_columns) + " 컬럼을 사용합니다."
+        )
+    elif identifier and target:
         facts["test_inference_output"].append(f"제출 파일은 `{identifier}`, `{target}` 두 컬럼을 사용합니다.")
     if "astype(int)" in lowered or "np.where" in lowered:
         facts["test_inference_output"].append("예측값은 제출 전에 정수형/binary 값으로 정리합니다.")
@@ -736,6 +834,7 @@ def _extract_pipeline_facts(
     code_text: str,
 ) -> dict[str, list[str]]:
     metrics = summary.get("metrics") if isinstance(summary.get("metrics"), dict) else {}
+    pipeline_summary = _workspace_pipeline_summary(summary)
     constants = _extract_code_constants(code_files)
     lowered = code_text.lower()
     facts: dict[str, list[str]] = {stage: [] for stage in _stage_descriptions()}
@@ -761,8 +860,18 @@ def _extract_pipeline_facts(
     if "read_csv" in lowered:
         files = ", ".join(required_files) if required_files else "train/test CSV"
         facts["data_load"].append(f"`pd.read_csv`로 {files}를 읽습니다.")
-    target = _workspace_config_value(code_files, "target_column") or _constant_string_value(code_files, "TARGET_COLUMN") or "target"
-    identifier = _workspace_config_value(code_files, "id_column") or _constant_string_value(code_files, "ID_COLUMN") or "id"
+    target = (
+        pipeline_summary.get("target_column")
+        or _workspace_config_value(code_files, "target_column")
+        or _constant_string_value(code_files, "TARGET_COLUMN")
+        or "target"
+    )
+    identifier = (
+        pipeline_summary.get("id_column")
+        or _workspace_config_value(code_files, "id_column")
+        or _constant_string_value(code_files, "ID_COLUMN")
+        or "id"
+    )
     facts["data_load"].append(f"학습 타깃은 `{target}`, 제출 ID는 `{identifier}`로 사용합니다.")
 
     numeric = _feature_list(metrics, constants, "numeric")
@@ -882,7 +991,12 @@ def _extract_pipeline_facts(
 
     if "submission.csv" in lowered:
         facts["test_inference_output"].append("`outputs/submission.csv`를 생성합니다.")
-    if identifier and target:
+    submission_columns = pipeline_summary.get("submission_columns")
+    if isinstance(submission_columns, list) and submission_columns:
+        facts["test_inference_output"].append(
+            "제출 파일은 " + ", ".join(f"`{column}`" for column in submission_columns) + " 컬럼을 사용합니다."
+        )
+    elif identifier and target:
         facts["test_inference_output"].append(f"제출 파일은 `{identifier}`, `{target}` 두 컬럼을 사용합니다.")
     if "astype(int)" in lowered or "np.where" in lowered:
         facts["test_inference_output"].append("예측값은 제출 전에 정수형/binary 값으로 정리합니다.")
@@ -896,10 +1010,25 @@ def _extract_pipeline_details(
     code_text: str,
 ) -> dict[str, dict[str, Any]]:
     metrics = summary.get("metrics") if isinstance(summary.get("metrics"), dict) else {}
+    pipeline_summary = _workspace_pipeline_summary(summary)
     constants = _extract_code_constants(code_files)
     lowered = code_text.lower()
-    target = _workspace_config_value(code_files, "target_column") or _constant_string_value(code_files, "TARGET_COLUMN") or "target"
-    identifier = _workspace_config_value(code_files, "id_column") or _constant_string_value(code_files, "ID_COLUMN") or "id"
+    target = (
+        pipeline_summary.get("target_column")
+        or _workspace_config_value(code_files, "target_column")
+        or _constant_string_value(code_files, "TARGET_COLUMN")
+        or "target"
+    )
+    identifier = (
+        pipeline_summary.get("id_column")
+        or _workspace_config_value(code_files, "id_column")
+        or _constant_string_value(code_files, "ID_COLUMN")
+        or "id"
+    )
+    submission_columns = pipeline_summary.get("submission_columns")
+    prediction_column = target
+    if isinstance(submission_columns, list) and len(submission_columns) >= 2:
+        prediction_column = str(submission_columns[1])
     required_files = _workspace_config_required_files(code_files)
     numeric = _feature_list(metrics, constants, "numeric")
     categorical = _feature_list(metrics, constants, "categorical")
@@ -955,7 +1084,7 @@ def _extract_pipeline_details(
         "test_inference_output": {
             "submission_path": "outputs/submission.csv" if "submission.csv" in lowered else None,
             "id_column": identifier,
-            "prediction_column": target,
+            "prediction_column": prediction_column,
             "postprocessing": _prediction_postprocessing(lowered),
         },
     }
@@ -1054,7 +1183,14 @@ def _final_feature_list(metrics: dict[str, Any], constants: dict[str, list[Any]]
     combined = [str(item) for item in [*numeric, *categorical]]
     if combined:
         return combined
-    return [str(item) for item in constants.get("FEATURE_COLUMNS", [])]
+    constant_features = constants.get("FEATURE_COLUMNS") or constants.get("FEATURES")
+    if isinstance(constant_features, list):
+        return [str(item) for item in constant_features]
+    numeric_constants = constants.get("NUMERIC_FEATURES") or []
+    categorical_constants = constants.get("CATEGORICAL_FEATURES") or []
+    if isinstance(numeric_constants, list) or isinstance(categorical_constants, list):
+        return [str(item) for item in [*numeric_constants, *categorical_constants]]
+    return []
 
 
 def _raw_feature_columns(
@@ -1506,7 +1642,7 @@ def _write_user_view(out_dir: Path, summary: dict[str, Any]) -> list[str]:
     copied_files = _copy_user_code_files(user_dir, summary)
     files = render_user_view_files(out_dir, summary, copied_files)
     for name, content in files.items():
-        write_text(user_dir / name, content)
+        _write_user_markdown(user_dir / name, content)
     return [*files, *[f"code/{item}" for item in copied_files]]
 
 
@@ -1840,14 +1976,26 @@ def _implemented_choice_lines(out_dir: Path) -> list[str]:
 
 
 def _copy_user_code_files(user_dir: Path, summary: dict[str, Any]) -> list[str]:
+    snapshot = _code_files_from_saved_snapshot(summary) or _code_files_from_coding_result(summary)
     project_root = summary.get("project_root")
+    code_dir = user_dir / "code"
+    _reset_user_code_dir(user_dir, code_dir)
+    if snapshot:
+        copied: list[str] = []
+        for path, content in snapshot:
+            relative = _safe_relative_file(path)
+            if relative is None:
+                continue
+            destination = code_dir / Path(*relative.parts)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            write_text(destination, content)
+            copied.append(relative.as_posix())
+        return copied
     if not project_root:
         return []
     root = Path(str(project_root))
     if not root.is_dir():
         return []
-    code_dir = user_dir / "code"
-    _reset_user_code_dir(user_dir, code_dir)
     copied: list[str] = []
     for item in summary.get("changed_files", []):
         relative = _safe_relative_file(item)
@@ -1954,11 +2102,17 @@ def _write_browse_view(competition: str, trial_id: str, out_dir: Path, summary: 
             shutil.copy2(item, destination)
             copied.append(relative.as_posix())
     paths_file = browse_dir / "06_paths.ko.md"
-    write_text(paths_file, render_compact_browse_paths(competition, trial_id, out_dir, browse_dir, summary))
+    _write_user_markdown(paths_file, render_compact_browse_paths(competition, trial_id, out_dir, browse_dir, summary))
     if "06_paths.ko.md" not in copied:
         copied.append("06_paths.ko.md")
     write_compact_browse_index(competition, browse_root)
     return sorted(copied)
+
+
+def _write_user_markdown(path: Path, content: str) -> None:
+    """Write human-facing Korean markdown so Windows PowerShell detects UTF-8."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8-sig")
 
 
 def _reset_browse_dir(browse_root: Path, browse_dir: Path) -> None:
