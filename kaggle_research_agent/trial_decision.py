@@ -189,6 +189,8 @@ def load_latest_decision_context(competition: str) -> dict[str, Any]:
         "rejected_candidates_by_axis": _previous_rejected_candidates_by_axis(cards),
         "active_axis_rejected_candidates": (latest or {}).get("active_axis_rejected_candidates", []),
         "recommended_base_trial": (latest or {}).get("recommended_base_trial") or (best or {}).get("trial_id"),
+        "next_guidance": (latest or {}).get("next_guidance"),
+        "planner_constraints": (latest or {}).get("planner_constraints", []),
         "decision_card_count": len(cards),
     }
 

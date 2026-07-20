@@ -96,6 +96,7 @@ def run_demo_graph_cycle(
     run_now: bool = False,
     trial_llm_calls: int | None = None,
     strategy_calls_today: int | None = None,
+    low_cost_user_summary: bool = False,
 ) -> dict[str, Any]:
     out_dir = trial_dir(competition, trial_id)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -108,6 +109,7 @@ def run_demo_graph_cycle(
         "run_now": run_now,
         "trial_llm_calls": trial_llm_calls,
         "strategy_calls_today": strategy_calls_today,
+        "low_cost_user_summary": low_cost_user_summary,
     }
     write_text(out_dir / "demo_graph_options.json", json.dumps(options, ensure_ascii=False, indent=2) + "\n")
     initial: DemoCycleGraphState = {
@@ -121,6 +123,7 @@ def run_demo_graph_cycle(
         "run_now": run_now,
         "trial_llm_calls": trial_llm_calls,
         "strategy_calls_today": strategy_calls_today,
+        "low_cost_user_summary": low_cost_user_summary,
         "graph_options": options,
         "status": "running",
         "steps": [],
@@ -392,7 +395,13 @@ def finalize_node(state: DemoCycleGraphState) -> dict[str, Any]:
         },
     }
     result["graph_rag_manifest"] = _write_graph_rag_manifest(out_dir, result)
-    final = _finish(state["competition"], state["trial_id"], result)
+    final = _finish(
+        state["competition"],
+        state["trial_id"],
+        result,
+        low_cost_user_summary=bool(options.get("low_cost_user_summary")),
+        allow_api=bool(options.get("allow_api")),
+    )
     write_text(
         trial_dir(state["competition"], state["trial_id"]) / "demo_graph_cycle.json",
         json.dumps(final, ensure_ascii=False, indent=2) + "\n",
@@ -422,6 +431,7 @@ def _graph_options_from_state(state: DemoCycleGraphState) -> dict[str, Any]:
         "run_now": bool(state.get("run_now")),
         "trial_llm_calls": state.get("trial_llm_calls"),
         "strategy_calls_today": state.get("strategy_calls_today"),
+        "low_cost_user_summary": bool(state.get("low_cost_user_summary")),
     }
 
 
@@ -482,6 +492,9 @@ def _compact_graph_rag_context(task: str, context: dict[str, Any]) -> dict[str, 
         "task": context.get("task") or task,
         "query": context.get("query"),
         "document_count": context.get("document_count"),
+        "skipped": bool(context.get("skipped")),
+        "skip_reason": context.get("skip_reason"),
+        "policy": context.get("policy"),
         "context_pack_file": context_pack_file,
         "context_pack_md_file": context_pack_md_file,
         "retrieval_manifest_file": retrieval_manifest_file,
@@ -527,6 +540,8 @@ def _render_graph_rag_manifest(manifest: dict[str, Any]) -> str:
                 f"### {context.get('task')}",
                 "",
                 f"- documents: {context.get('document_count')}",
+                f"- skipped: {context.get('skipped')}",
+                f"- skip_reason: {context.get('skip_reason')}",
                 f"- context_pack: `{context.get('context_pack_md_file')}`",
                 f"- manifest: `{context.get('retrieval_manifest_file')}`",
                 f"- files_exist: {context.get('files_exist')}",

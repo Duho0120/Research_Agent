@@ -10,6 +10,24 @@ from kaggle_research_agent.trial_user_view import _plan_note_lines, render_user_
 
 
 class TrialArtifactsTest(unittest.TestCase):
+    class _SummaryClient:
+        def create_response(self, payload):
+            return {
+                "id": "summary-test",
+                "model": payload["model"],
+                "usage": {"input_tokens": 100, "output_tokens": 30, "total_tokens": 130},
+                "output_text": json.dumps(
+                    {
+                        "progress_message": "trial_001 실행과 결과 기록이 완료되었습니다.",
+                        "log_summary": ["테스트, 학습, 예측 명령이 완료되었습니다."],
+                        "what_changed": "첫 baseline 파이프라인을 구성했습니다.",
+                        "diff_from_previous": "이전 trial이 없어 비교 대상은 없습니다.",
+                        "human_review_message": "현재 즉시 요청할 사용자 피드백은 없습니다.",
+                    },
+                    ensure_ascii=False,
+                ),
+            }
+
     def test_plan_note_lines_preserve_pipeline_blueprint_literals(self):
         lines = _plan_note_lines(
             {
@@ -170,7 +188,13 @@ class TrialArtifactsTest(unittest.TestCase):
             (trial / "workspace_coding_api_response.json").write_text("{}", encoding="utf-8")
 
             with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                result = organize_trial_artifacts("demo", "trial_001")
+                result = organize_trial_artifacts(
+                    "demo",
+                    "trial_001",
+                    low_cost_user_summary=True,
+                    allow_api=True,
+                    low_cost_summary_client=self._SummaryClient(),
+                )
 
             self.assertEqual("demo", result["competition"])
             self.assertEqual(0.8, result["local_score"])
@@ -190,6 +214,11 @@ class TrialArtifactsTest(unittest.TestCase):
             self.assertTrue((trial / "user_view" / "03_code_pipeline.ko.md").exists())
             self.assertTrue((trial / "user_view" / "04_result.ko.md").exists())
             self.assertTrue((trial / "user_view" / "05_submission.ko.md").exists())
+            self.assertTrue((trial / "user_view" / "00_summary_card.ko.md").exists())
+            self.assertTrue((trial / "internal" / "low_cost_user_summary_card.json").exists())
+            self.assertEqual("ready", result["low_cost_user_summary"]["status"])
+            token_usage = (root / "memory" / "demo" / "token_usage.jsonl").read_text(encoding="utf-8")
+            self.assertIn('"call_type": "user_summary_card"', token_usage)
             user_readme = (trial / "user_view" / "README.ko.md").read_text(encoding="utf-8")
             self.assertIn("사용자가 바로 확인할 핵심 산출물", user_readme)
             structure = json.loads((trial / "internal" / "pipeline_structure.json").read_text(encoding="utf-8"))

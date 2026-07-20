@@ -7,7 +7,15 @@ from pathlib import Path
 from unittest.mock import patch
 
 from kaggle_research_agent.cli import main
-from kaggle_research_agent.state_db import get_best_trial, get_trial_summary, list_competitions
+from kaggle_research_agent.state_db import (
+    get_best_trial,
+    get_trial_summary,
+    initialize_state_db,
+    list_competitions,
+    upsert_competition,
+    upsert_trial,
+    upsert_trial_artifact,
+)
 from kaggle_research_agent.state_db_sync import sync_state_db
 
 
@@ -45,11 +53,67 @@ class StateDbSyncTest(unittest.TestCase):
                 token_rows = connection.execute("SELECT COUNT(*) FROM token_usage").fetchone()[0]
                 artifact_rows = connection.execute("SELECT COUNT(*) FROM trial_artifacts").fetchone()[0]
                 submission_rows = connection.execute("SELECT COUNT(*) FROM submissions").fetchone()[0]
+                user_artifact_types = [
+                    row[0]
+                    for row in connection.execute(
+                        """
+                        SELECT artifact_type
+                        FROM trial_artifacts
+                        WHERE competition_id = 'demo'
+                          AND trial_id = 'trial_001'
+                          AND is_user_facing = 1
+                        ORDER BY artifact_type
+                        """
+                    ).fetchall()
+                ]
 
             self.assertEqual(1, token_rows)
             self.assertEqual(result["artifact_count"], artifact_rows)
             self.assertEqual(1, submission_rows)
+            self.assertIn("summary_card_ko", user_artifact_types)
+            self.assertIn("decision_ko", user_artifact_types)
             self.assertEqual(second_result["artifact_count"], result["artifact_count"])
+            self.assertGreater(second_result["removed_stale_rows"], 0)
+
+    def test_sync_state_db_removes_deleted_file_based_trial_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "memory" / "research_agent.sqlite3"
+            _write_demo_competition_tree(root)
+
+            initialize_state_db(db_path)
+            upsert_competition({"competition_id": "demo", "status": "has_trials"}, db_path)
+            upsert_trial({"competition_id": "demo", "trial_id": "trial_old", "status": "completed"}, db_path)
+            upsert_trial_artifact(
+                {
+                    "competition_id": "demo",
+                    "trial_id": "trial_old",
+                    "artifact_type": "plan_ko",
+                    "path": "runs/demo/trial_old/01_plan.ko.md",
+                    "is_user_facing": True,
+                },
+                db_path,
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = sync_state_db("demo", db_path=db_path)
+
+            self.assertEqual("completed", result["status"])
+            self.assertGreaterEqual(result["removed_stale_rows"], 2)
+            self.assertIsNone(get_trial_summary("demo", "trial_old", db_path))
+            self.assertEqual("completed", get_trial_summary("demo", "trial_001", db_path)["status"])
+
+    def test_sync_state_db_prefers_final_graph_cycle_status_over_partial_result_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "memory" / "research_agent.sqlite3"
+            _write_demo_competition_tree(root)
+            _write_json(root / "experiments" / "demo" / "trial_001" / "demo_graph_cycle.json", {"status": "blocked"})
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                sync_state_db("demo", db_path=db_path)
+
+            self.assertEqual("blocked", get_trial_summary("demo", "trial_001", db_path)["status"])
 
     def test_cli_sync_state_db_command(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -149,8 +213,10 @@ def _write_demo_competition_tree(root: Path) -> None:
     )
     (trial_dir / "node_events.jsonl").write_text('{"node":"recorder"}\n', encoding="utf-8")
     (run_dir / "README.ko.md").write_text("# Demo\n", encoding="utf-8")
+    (run_dir / "00_summary_card.ko.md").write_text("# Summary\n", encoding="utf-8")
     (run_dir / "01_plan.ko.md").write_text("# Plan\n", encoding="utf-8")
     (run_dir / "02_pipeline_structure.ko.md").write_text("# Pipeline\n", encoding="utf-8")
+    (run_dir / "06_decision.ko.md").write_text("# Decision\n", encoding="utf-8")
     (run_dir / "code" / "train_step.py").write_text("print('train')\n", encoding="utf-8")
     (memory_dir / "token_usage.jsonl").write_text(
         json.dumps(

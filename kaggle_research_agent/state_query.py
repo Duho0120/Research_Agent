@@ -145,7 +145,9 @@ def get_trial_detail(competition_id: str, trial_id: str, db_path: Path | None = 
         "db_path": str(target_db),
         "summary": summary,
         "artifacts": [_decode_row(dict(row)) for row in artifacts],
-        "user_artifacts": [_decode_row(dict(row)) for row in artifacts if row["is_user_facing"]],
+        "user_artifacts": _sort_user_artifacts(
+            [_decode_row(dict(row)) for row in artifacts if row["is_user_facing"]]
+        ),
         "token_usage": usage_rows,
         "token_total": sum(int(row.get("total_tokens") or 0) for row in usage_rows),
         "submissions": [_decode_row(dict(row)) for row in submissions],
@@ -155,8 +157,6 @@ def get_trial_detail(competition_id: str, trial_id: str, db_path: Path | None = 
             if action.get("trial_id") in {None, trial_id}
         ],
     }
-
-
 def render_experiment_statuses(status: dict[str, Any]) -> str:
     lines = [
         "실험 상태 요약",
@@ -217,7 +217,7 @@ def render_trial_detail(detail: dict[str, Any]) -> str:
         f"- 기준 trial: {summary.get('recommended_base_trial') or summary.get('decision_recommended_base_trial') or '-'}",
         f"- 토큰 합계: {detail['token_total']}",
         "",
-        "사용자 확인 파일",
+        "사용자가 확인할 파일",
     ]
     for artifact in detail["user_artifacts"]:
         lines.append(f"- {artifact['artifact_type']}: {artifact['path']}")
@@ -254,8 +254,27 @@ def _compact_trial(row: dict[str, Any] | None) -> dict[str, Any] | None:
         "is_best_lb": bool(row.get("is_best_lb")),
         "primary_change_axis": row.get("primary_change_axis"),
         "change_axis": row.get("change_axis"),
+        "active_axis": row.get("active_axis"),
+        "axis_attempt_count": row.get("axis_attempt_count"),
+        "axis_attempt_limit": row.get("axis_attempt_limit"),
         "decision": row.get("decision"),
     }
+
+
+def _sort_user_artifacts(artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    order = {
+        "summary_card_ko": 0,
+        "readme_ko": 1,
+        "plan_ko": 2,
+        "pipeline_structure_ko": 3,
+        "code_pipeline_ko": 4,
+        "result_ko": 5,
+        "submission_ko": 6,
+        "decision_ko": 7,
+        "paths_ko": 8,
+        "user_code": 9,
+    }
+    return sorted(artifacts, key=lambda item: (order.get(str(item.get("artifact_type")), 99), item.get("path") or ""))
 
 
 def _decode_row(row: dict[str, Any]) -> dict[str, Any]:

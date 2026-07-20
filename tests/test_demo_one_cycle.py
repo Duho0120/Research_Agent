@@ -176,7 +176,7 @@ class DemoOneCycleTest(unittest.TestCase):
             self.assertTrue((memory / "demo_best_trial.json").exists())
             self.assertTrue((memory / "demo_graph_auto_loop.json").exists())
             self.assertTrue((memory / "document_index.jsonl").exists())
-            self.assertTrue((root / "experiments" / "demo" / "trial_002" / "context_pack_experiment_planning.json").exists())
+            self.assertFalse((root / "experiments" / "demo" / "trial_002" / "context_pack_experiment_planning.json").exists())
             trial_002_manifest = json.loads(
                 (root / "experiments" / "demo" / "trial_002" / "graph_rag_manifest.json").read_text(
                     encoding="utf-8"
@@ -185,7 +185,11 @@ class DemoOneCycleTest(unittest.TestCase):
             planning_context = next(
                 item for item in trial_002_manifest["rag_contexts"] if item["task"] == "experiment_planning"
             )
-            self.assertTrue(any(doc.get("trial_id") == "trial_001" for doc in planning_context["documents"]))
+            self.assertTrue(planning_context["skipped"])
+            self.assertEqual(
+                "continuation_uses_structured_memory_and_code_snapshot",
+                planning_context["skip_reason"],
+            )
             index_text = (memory / "document_index.jsonl").read_text(encoding="utf-8")
             self.assertIn("experiments/demo/trial_001/user_view/02_pipeline_structure.ko.md", index_text)
             state = simple_yaml.load(root / "competitions" / "demo" / "state.yaml")
@@ -379,6 +383,50 @@ class DemoOneCycleTest(unittest.TestCase):
             self.assertIn("rejected_candidates", prompt)
             self.assertIn("recommended_base_trial", prompt)
             self.assertIn("RAG is intentionally skipped", prompt)
+
+    def test_planning_rag_policy_skips_plain_continuation_without_trigger(self):
+        from kaggle_research_agent.demo_one_cycle import _build_planning_context_pack_if_needed
+
+        context = {
+            "source_trial_id": "trial_001",
+            "decision_context": {
+                "active_axis": "",
+                "rejected_axes": ["model_family"],
+            },
+        }
+
+        with patch("kaggle_research_agent.demo_one_cycle.build_context_pack") as build_pack:
+            pack = _build_planning_context_pack_if_needed("demo", "trial_002", context)
+
+        self.assertTrue(pack["skipped"])
+        self.assertEqual("continuation_uses_structured_memory_and_code_snapshot", pack["skip_reason"])
+        build_pack.assert_not_called()
+
+    def test_planning_rag_policy_uses_rag_when_user_feedback_is_present(self):
+        from kaggle_research_agent.demo_one_cycle import _build_planning_context_pack_if_needed
+
+        context = {
+            "source_trial_id": "trial_001",
+            "user_feedback": "Review previous split experiments before changing model family.",
+            "decision_context": {},
+        }
+        fake_pack = {
+            "task": "experiment_planning",
+            "query": "q",
+            "document_count": 1,
+            "budget": {"max_chars_per_document": 100},
+            "context_pack_file": "pack.json",
+            "context_pack_md_file": "pack.md",
+            "retrieval_manifest_file": "manifest.json",
+            "documents": [{"source_path": "memory/demo/user_feedback.jsonl", "source_kind": "user_feedback", "text": "x"}],
+        }
+
+        with patch("kaggle_research_agent.demo_one_cycle.build_context_pack", return_value=fake_pack) as build_pack:
+            pack = _build_planning_context_pack_if_needed("demo", "trial_002", context)
+
+        self.assertFalse(pack.get("skipped", False))
+        self.assertEqual("user_feedback_or_human_review_present", pack["policy"]["reason"])
+        build_pack.assert_called_once()
 
     def test_demo_context_keeps_active_axis_after_two_failed_candidates(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -785,6 +833,61 @@ class DemoOneCycleTest(unittest.TestCase):
             self.assertEqual(2, reprocessed["axis_attempt_count"])
             self.assertEqual("continue_axis_refinement", reprocessed["decision"])
             self.assertEqual("trial_001", reprocessed["recommended_base_trial"])
+
+    def test_latest_decision_context_exposes_guidance_and_constraints_for_axis_switch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            root.mkdir()
+
+            from kaggle_research_agent.trial_decision import load_latest_decision_context, write_trial_decision_card
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                write_trial_decision_card(
+                    "demo",
+                    "trial_001",
+                    plan={"plan_type": "initial_pipeline_plan"},
+                    metrics={"cv_score": 0.85, "objective": "maximize"},
+                )
+                write_trial_decision_card(
+                    "demo",
+                    "trial_002",
+                    plan={
+                        "plan_type": "continuation_delta_plan",
+                        "source_trial_id": "trial_001",
+                        "primary_change_axis": "feature_engineering_cabin_missing_indicator",
+                        "change_details": ["Candidate: cabin known"],
+                    },
+                    metrics={"cv_score": 0.83, "objective": "maximize"},
+                )
+                write_trial_decision_card(
+                    "demo",
+                    "trial_003",
+                    plan={
+                        "plan_type": "continuation_delta_plan",
+                        "source_trial_id": "trial_001",
+                        "primary_change_axis": "feature_engineering_cabin_missing_indicator",
+                        "change_details": ["Candidate: cabin known pclass"],
+                    },
+                    metrics={"cv_score": 0.82, "objective": "maximize"},
+                )
+                write_trial_decision_card(
+                    "demo",
+                    "trial_004",
+                    plan={
+                        "plan_type": "continuation_delta_plan",
+                        "source_trial_id": "trial_001",
+                        "primary_change_axis": "feature_engineering_cabin_missing_indicator",
+                        "change_details": ["Candidate: cabin missing pclass"],
+                    },
+                    metrics={"cv_score": 0.81, "objective": "maximize"},
+                )
+                context = load_latest_decision_context("demo")
+
+            self.assertIsNone(context["active_axis"])
+            self.assertIn("feature_engineering_cabin_missing_indicator", context["rejected_axes"])
+            self.assertIn("next_guidance", context)
+            self.assertIn("planner_constraints", context)
+            self.assertTrue(any("Do not keep stacking" in item for item in context["planner_constraints"]))
 
     def test_continuation_context_records_source_trial_for_demo_handoff(self):
         with tempfile.TemporaryDirectory() as tmp:

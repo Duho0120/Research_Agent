@@ -1,4 +1,4 @@
-import io
+﻿import io
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -65,7 +65,7 @@ class StateQueryTest(unittest.TestCase):
 
             self.assertEqual(0, exit_code)
             self.assertEqual(0, json_exit_code)
-            self.assertIn("사용자 확인 파일", text_output.getvalue())
+            self.assertIn("사용자가 확인할 파일", text_output.getvalue())
             self.assertIn('"competition_id": "demo"', json_output.getvalue())
 
 
@@ -155,3 +155,4 @@ def _write_state_db_fixture(db_path: Path) -> None:
 
 if __name__ == "__main__":
     unittest.main()
+

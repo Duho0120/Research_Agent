@@ -11,6 +11,7 @@ from .state_db import (
     default_db_path,
     initialize_state_db,
     record_token_usage,
+    state_db_connection,
     upsert_competition,
     upsert_submission,
     upsert_trial,
@@ -21,12 +22,14 @@ from .state_db import (
 
 
 USER_ARTIFACTS = {
+    "00_summary_card.ko.md": "summary_card_ko",
     "README.ko.md": "readme_ko",
     "01_plan.ko.md": "plan_ko",
     "02_pipeline_structure.ko.md": "pipeline_structure_ko",
     "03_code_pipeline.ko.md": "code_pipeline_ko",
     "04_result.ko.md": "result_ko",
     "05_submission.ko.md": "submission_ko",
+    "06_decision.ko.md": "decision_ko",
     "06_paths.ko.md": "paths_ko",
 }
 
@@ -58,6 +61,7 @@ def sync_state_db(
         "artifact_count": 0,
         "token_usage_count": 0,
         "submission_count": 0,
+        "removed_stale_rows": 0,
     }
     for competition_id in competitions:
         summary = sync_competition_state_db(competition_id, db_path=target_db)
@@ -66,6 +70,7 @@ def sync_state_db(
         result["artifact_count"] += summary["artifact_count"]
         result["token_usage_count"] += summary["token_usage_count"]
         result["submission_count"] += summary["submission_count"]
+        result["removed_stale_rows"] += summary["removed_stale_rows"]
     result["competition_count"] = len(result["competitions"])
     return result
 
@@ -74,6 +79,7 @@ def sync_competition_state_db(competition: str, *, db_path: Path | None = None) 
     target_db = db_path or default_db_path()
     competition_record = _competition_record(competition)
     upsert_competition(competition_record, target_db)
+    removed_stale_rows = _clear_competition_synced_rows(competition, target_db)
 
     summary = {
         "competition": competition,
@@ -81,9 +87,12 @@ def sync_competition_state_db(competition: str, *, db_path: Path | None = None) 
         "artifact_count": 0,
         "token_usage_count": 0,
         "submission_count": 0,
+        "removed_stale_rows": removed_stale_rows,
     }
 
-    for trial_path in _trial_dirs(competition):
+    trial_paths = _trial_dirs(competition)
+    valid_trial_ids = {path.name for path in trial_paths}
+    for trial_path in trial_paths:
         trial_id = trial_path.name
         trial_summary = _sync_trial(competition, trial_id, trial_path, target_db, competition_record)
         summary["trial_count"] += 1
@@ -91,9 +100,32 @@ def sync_competition_state_db(competition: str, *, db_path: Path | None = None) 
         summary["submission_count"] += trial_summary["submission_count"]
 
     summary["token_usage_count"] = _sync_token_usage(competition, target_db)
-    _sync_submission_log(competition, target_db)
+    _sync_submission_log(competition, target_db, valid_trial_ids)
     summary["submission_count"] = _count_competition_rows(target_db, "submissions", competition)
     return summary
+
+
+def _clear_competition_synced_rows(competition: str, db_path: Path) -> int:
+    """Remove cache rows that are rebuilt from the file system during sync.
+
+    The file system remains the source of truth. Pending actions are preserved
+    because they represent live user/approval work, not derived trial metadata.
+    """
+
+    total = 0
+    tables = [
+        "token_usage",
+        "submissions",
+        "trial_artifacts",
+        "trial_decisions",
+        "trial_scores",
+        "trials",
+    ]
+    with state_db_connection(db_path) as connection:
+        for table in tables:
+            cursor = connection.execute(f"DELETE FROM {table} WHERE competition_id = ?", [competition])
+            total += max(cursor.rowcount or 0, 0)
+    return total
 
 
 def _sync_trial(
@@ -109,14 +141,17 @@ def _sync_trial(
     result_cycle = _read_trial_json(trial_path, "workspace_result_cycle.json")
     demo_cycle = _read_trial_json(trial_path, "demo_one_cycle.json")
     graph_cycle = _read_trial_json(trial_path, "demo_graph_cycle.json")
+    workspace_run = _read_json(trial_path / "workspace_run.json")
     submission = _read_json(trial_path / "submission_run.json")
     submit_manifest = _read_json(trial_path / "submit_manifest.json")
 
-    status = (
-        result_cycle.get("status")
-        or graph_cycle.get("status")
-        or demo_cycle.get("status")
-        or ("completed" if metrics else "discovered")
+    status = _trial_status(
+        plan=plan,
+        result_cycle=result_cycle,
+        demo_cycle=demo_cycle,
+        graph_cycle=graph_cycle,
+        workspace_run=workspace_run,
+        metrics=metrics,
     )
     source_trial_id = plan.get("source_trial_id") or decision.get("source_trial_id")
     primary_axis = plan.get("primary_change_axis") or decision.get("change_axis")
@@ -287,12 +322,14 @@ def _sync_token_usage(competition: str, db_path: Path) -> int:
     return count
 
 
-def _sync_submission_log(competition: str, db_path: Path) -> int:
+def _sync_submission_log(competition: str, db_path: Path, valid_trial_ids: set[str]) -> int:
     path = paths.competition_submissions_dir(competition) / "submission_log.jsonl"
     count = 0
     for _, row in _read_jsonl(path):
         trial_id = row.get("trial_id")
         if not trial_id:
+            continue
+        if valid_trial_ids and trial_id not in valid_trial_ids:
             continue
         upsert_submission(
             {
@@ -310,6 +347,24 @@ def _sync_submission_log(competition: str, db_path: Path) -> int:
         )
         count += 1
     return count
+
+
+def _trial_status(
+    *,
+    plan: dict[str, Any],
+    result_cycle: dict[str, Any],
+    demo_cycle: dict[str, Any],
+    graph_cycle: dict[str, Any],
+    workspace_run: dict[str, Any],
+    metrics: dict[str, Any],
+) -> str:
+    for source in [graph_cycle, demo_cycle, result_cycle, workspace_run, plan]:
+        status = str(source.get("status") or "").strip() if isinstance(source, dict) else ""
+        if status:
+            return status
+    if metrics:
+        return "completed"
+    return "discovered"
 
 
 def _competition_record(competition: str) -> dict[str, Any]:

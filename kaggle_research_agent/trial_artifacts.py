@@ -14,6 +14,7 @@ from .paths import competition_dir, trial_dir
 from .store import read_text, write_text
 from .trial_user_view import render_browse_paths as render_compact_browse_paths
 from .trial_user_view import render_user_view_files, write_browse_index as write_compact_browse_index
+from .user_summary_card import generate_low_cost_user_summary_card, write_low_cost_user_summary_artifacts
 
 
 DEBUG_FILE_NAMES = {
@@ -54,7 +55,14 @@ def read_trial_json(out_dir: Path, name: str) -> dict[str, Any]:
     return _read_json(trial_artifact_path(out_dir, name))
 
 
-def organize_trial_artifacts(competition: str, trial_id: str) -> dict[str, Any]:
+def organize_trial_artifacts(
+    competition: str,
+    trial_id: str,
+    *,
+    low_cost_user_summary: bool = False,
+    allow_api: bool = False,
+    low_cost_summary_client: Any | None = None,
+) -> dict[str, Any]:
     """Write a compact human-facing README and tuck obvious debug artifacts away."""
     out_dir = trial_dir(competition, trial_id)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -71,7 +79,23 @@ def organize_trial_artifacts(competition: str, trial_id: str) -> dict[str, Any]:
         internal_dir / "pipeline_structure.json",
         json.dumps(pipeline_structure, ensure_ascii=False, indent=2) + "\n",
     )
+    low_cost_result: dict[str, Any] | None = None
+    if low_cost_user_summary:
+        low_cost_result = generate_low_cost_user_summary_card(
+            competition,
+            trial_id,
+            out_dir,
+            summary,
+            allow_api=allow_api,
+            client=low_cost_summary_client,
+        )
+        summary["low_cost_user_summary"] = low_cost_result
     summary["user_view_files"] = _write_user_view(out_dir, summary)
+    if low_cost_result is not None:
+        low_cost_files = write_low_cost_user_summary_artifacts(out_dir, low_cost_result)
+        summary["low_cost_user_summary_files"] = list(low_cost_files)
+        if "user_view/00_summary_card.ko.md" in low_cost_files:
+            summary["user_view_files"] = ["00_summary_card.ko.md", *summary["user_view_files"]]
     summary["browse_view_files"] = _write_browse_view(competition, trial_id, out_dir, summary)
 
     write_text(out_dir / "README.md", render_trial_readme(summary))

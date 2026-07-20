@@ -150,6 +150,7 @@ DEFAULT_POLICIES: dict[str, dict[str, Any]] = {
                 "log_summary",
                 "short_note_rewrite",
                 "simple_context_summary",
+                "user_summary_card",
             ],
         },
         "fallback": {

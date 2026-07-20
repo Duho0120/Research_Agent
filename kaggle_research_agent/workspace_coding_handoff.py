@@ -9,6 +9,7 @@ from .code_snapshot import load_trial_code_snapshot
 from .execution_profile import load_execution_profile, validate_execution_profile
 from .paths import competition_dir, trial_dir
 from .policies import load_policy
+from .rag_policy import evaluate_rag_policy
 from .retrieval.context_pack import build_context_pack
 from .store import read_text, write_text
 
@@ -99,7 +100,8 @@ def _build_handoff(
     retrieval_context: dict[str, Any] = {}
     if status == "ready" and profile:
         context_files.extend(_write_workspace_context_snapshot(competition, trial_id, profile, continuation))
-        if _should_use_workspace_coding_rag(continuation):
+        rag_policy = _workspace_coding_rag_policy(continuation)
+        if rag_policy["use_rag"]:
             retrieval_context = build_context_pack(
                 competition,
                 trial_id,
@@ -110,6 +112,7 @@ def _build_handoff(
                     "decision card rejected axes recommended base workspace context snapshot validation allowed write files"
                 ),
             )
+            retrieval_context["policy"] = rag_policy
             context_files.extend(
                 [
                     retrieval_context["context_pack_md_file"],
@@ -122,7 +125,8 @@ def _build_handoff(
                 "document_count": 0,
                 "documents": [],
                 "skipped": True,
-                "skip_reason": "active_axis_refinement_uses_next_experiment_and_code_snapshot",
+                "skip_reason": rag_policy["reason"],
+                "policy": rag_policy,
             }
     return {
         "schema_version": "1.0",
@@ -210,7 +214,15 @@ def _coding_instruction_text(out_dir: Path, continuation: dict[str, Any], fallba
 
 
 def _should_use_workspace_coding_rag(continuation: dict[str, Any]) -> bool:
-    return not _is_active_axis_refinement(continuation)
+    return bool(_workspace_coding_rag_policy(continuation)["use_rag"])
+
+
+def _workspace_coding_rag_policy(continuation: dict[str, Any]) -> dict[str, Any]:
+    return evaluate_rag_policy(
+        continuation,
+        task="workspace_code_writing",
+        is_first_trial=not bool(continuation.get("source_trial_id")),
+    )
 
 
 def _is_active_axis_refinement(continuation: dict[str, Any]) -> bool:
@@ -259,6 +271,8 @@ def render_workspace_coding_request(handoff: dict[str, Any], next_experiment: st
                 "",
                 f"- task: {retrieval_context.get('task')}",
                 f"- documents: {retrieval_context.get('document_count')}",
+                f"- skipped: {retrieval_context.get('skipped')}",
+                f"- skip_reason: {retrieval_context.get('skip_reason')}",
                 f"- context_pack: `{retrieval_context.get('context_pack_md_file')}`",
                 f"- manifest: `{retrieval_context.get('retrieval_manifest_file')}`",
             ]
@@ -384,21 +398,29 @@ def _write_workspace_context_snapshot(
 ) -> list[str]:
     out_dir = trial_dir(competition, trial_id)
     source_trial_id = continuation.get("source_trial_id")
-    snapshot_limits = (
-        {"max_files": 5, "max_chars_per_file": 900, "max_total_chars": 2600}
-        if not source_trial_id
-        else {"max_files": 3, "max_chars_per_file": 13000, "max_total_chars": 15500}
-    )
+    is_delta_refinement = _is_active_axis_refinement(continuation) and (out_dir / "delta_plan.json").exists()
+    delta_plan = _load_json_object(out_dir / "delta_plan.json") if is_delta_refinement else {}
+    snapshot_limits = _workspace_snapshot_limits(bool(source_trial_id), is_delta_refinement)
     content = render_workspace_context_snapshot(
         competition,
         trial_id,
         profile=profile,
         source_trial_id=str(source_trial_id) if source_trial_id else None,
+        delta_plan=delta_plan if isinstance(delta_plan, dict) else {},
+        compact_for_delta=is_delta_refinement,
         **snapshot_limits,
     )
     path = out_dir / "workspace_context_snapshot.md"
     write_text(path, content)
     return [f"experiments/{competition}/{trial_id}/workspace_context_snapshot.md"]
+
+
+def _workspace_snapshot_limits(has_source_trial: bool, is_delta_refinement: bool) -> dict[str, int]:
+    if not has_source_trial:
+        return {"max_files": 5, "max_chars_per_file": 900, "max_total_chars": 2600}
+    if is_delta_refinement:
+        return {"max_files": 2, "max_chars_per_file": 8500, "max_total_chars": 9500}
+    return {"max_files": 3, "max_chars_per_file": 13000, "max_total_chars": 15500}
 
 
 def render_workspace_context_snapshot(
@@ -407,6 +429,8 @@ def render_workspace_context_snapshot(
     *,
     profile: dict[str, Any],
     source_trial_id: str | None,
+    delta_plan: dict[str, Any] | None = None,
+    compact_for_delta: bool = False,
     max_files: int = 16,
     max_chars_per_file: int = 3000,
     max_total_chars: int = 12000,
@@ -432,6 +456,7 @@ def render_workspace_context_snapshot(
         source_sections = _source_trial_code_sections(
             competition,
             source_trial_id,
+            delta_plan=delta_plan if isinstance(delta_plan, dict) else {},
             max_files=max_files,
             max_chars_per_file=max_chars_per_file,
             max_total_chars=max_total_chars,
@@ -448,8 +473,18 @@ def render_workspace_context_snapshot(
             max_total_chars=max_total_chars,
         )
         lines.extend(code_sections or ["- No readable code files were found in the allowed write scope."])
-    lines.extend(["", "## Previous Trial Evidence", ""])
-    lines.extend(_previous_trial_evidence(competition, source_trial_id))
+    if compact_for_delta:
+        lines.extend(
+            [
+                "",
+                "## Previous Trial Evidence",
+                "",
+                "- Omitted for compact delta patch mode. Use delta_plan and decision card outputs for trial strategy.",
+            ]
+        )
+    else:
+        lines.extend(["", "## Previous Trial Evidence", ""])
+        lines.extend(_previous_trial_evidence(competition, source_trial_id))
     lines.append("")
     return "\n".join(lines)
 
@@ -479,6 +514,7 @@ def _source_trial_code_sections(
     competition: str,
     source_trial_id: str | None,
     *,
+    delta_plan: dict[str, Any] | None = None,
     max_files: int,
     max_chars_per_file: int,
     max_total_chars: int,
@@ -488,7 +524,7 @@ def _source_trial_code_sections(
     total = 0
     for relative, text in files[:max_files]:
         per_file_limit = _context_file_limit(relative, max_chars_per_file)
-        snippet = _source_code_snippet(relative, text, per_file_limit)
+        snippet = _source_code_snippet(relative, text, per_file_limit, delta_plan=delta_plan)
         if total + len(snippet) > max_total_chars:
             remaining = max_total_chars - total
             if remaining <= 0:
@@ -587,15 +623,53 @@ def _context_file_limit(relative_path: str, default_limit: int) -> int:
     return default_limit
 
 
-def _source_code_snippet(relative_path: str, text: str, max_chars: int) -> str:
+def _source_code_snippet(
+    relative_path: str,
+    text: str,
+    max_chars: int,
+    *,
+    delta_plan: dict[str, Any] | None = None,
+) -> str:
     normalized = relative_path.replace("\\", "/")
     if normalized.endswith("src/baseline.py") and len(text) > max_chars:
-        return _compact_baseline_code_for_patch(text, max_chars)
+        return _compact_baseline_code_for_patch(text, max_chars, delta_plan=delta_plan)
     return text[:max_chars]
 
 
-def _compact_baseline_code_for_patch(text: str, max_chars: int) -> str:
-    wanted = {
+def _compact_baseline_code_for_patch(text: str, max_chars: int, *, delta_plan: dict[str, Any] | None = None) -> str:
+    wanted = _wanted_baseline_blocks_for_patch(delta_plan)
+    lines = text.splitlines()
+    blocks: list[tuple[str, int, int]] = []
+    starts: list[tuple[str, int]] = []
+    for index, line in enumerate(lines):
+        if line.startswith("def "):
+            name = line[4:].split("(", 1)[0].strip()
+            starts.append((name, index))
+        elif line.startswith("class "):
+            name = line[6:].split("(", 1)[0].split(":", 1)[0].strip()
+            starts.append((name, index))
+    for pos, (name, start) in enumerate(starts):
+        end = starts[pos + 1][1] if pos + 1 < len(starts) else len(lines)
+        blocks.append((name, start, end))
+
+    first_def = starts[0][1] if starts else min(len(lines), 80)
+    selected_lines = [
+        "# Compacted baseline.py for continuation patching.",
+        "# Contains imports/constants and only the code blocks needed for safe delta find/replace patches.",
+        "",
+        *lines[:first_def],
+    ]
+    for name, start, end in blocks:
+        if name in wanted:
+            selected_lines.extend(["", f"# --- {name} ---", *lines[start:end]])
+    compact = "\n".join(selected_lines).strip() + "\n"
+    if len(compact) <= max_chars:
+        return compact
+    return compact[:max_chars] + "\n# ... compacted baseline.py truncated at prompt budget ...\n"
+
+
+def _wanted_baseline_blocks_for_patch(delta_plan: dict[str, Any] | None = None) -> set[str]:
+    default = {
         "extract_title",
         "FeatureBuilder",
         "AgeMedianLookup",
@@ -614,34 +688,21 @@ def _compact_baseline_code_for_patch(text: str, max_chars: int) -> str:
         "_build_pipeline",
         "_single_holdout_split",
     }
-    lines = text.splitlines()
-    blocks: list[tuple[str, int, int]] = []
-    starts: list[tuple[str, int]] = []
-    for index, line in enumerate(lines):
-        if line.startswith("def "):
-            name = line[4:].split("(", 1)[0].strip()
-            starts.append((name, index))
-        elif line.startswith("class "):
-            name = line[6:].split("(", 1)[0].split(":", 1)[0].strip()
-            starts.append((name, index))
-    for pos, (name, start) in enumerate(starts):
-        end = starts[pos + 1][1] if pos + 1 < len(starts) else len(lines)
-        blocks.append((name, start, end))
-
-    first_def = starts[0][1] if starts else min(len(lines), 80)
-    selected_lines = [
-        "# Compacted baseline.py for continuation patching.",
-        "# Contains imports/constants and the main functions most likely needed for safe find/replace patches.",
-        "",
-        *lines[:first_def],
-    ]
-    for name, start, end in blocks:
-        if name in wanted:
-            selected_lines.extend(["", f"# --- {name} ---", *lines[start:end]])
-    compact = "\n".join(selected_lines).strip() + "\n"
-    if len(compact) <= max_chars:
-        return compact
-    return compact[:max_chars] + "\n# ... compacted baseline.py truncated at prompt budget ...\n"
+    if not isinstance(delta_plan, dict) or not delta_plan:
+        return default
+    text = json.dumps(delta_plan, ensure_ascii=False).lower()
+    wanted = {"extract_title", "build_pipeline", "pipeline_summary", "_build_pipeline"}
+    if any(keyword in text for keyword in ["feature", "title", "cabin", "family", "numeric", "categorical"]):
+        wanted.update({"FeatureBuilder", "_make_features", "GroupedAgeImputer", "AgeMedianLookup"})
+    if any(keyword in text for keyword in ["age", "imput", "missing", "preprocess", "scaler", "encoder"]):
+        wanted.update({"FeatureBuilder", "GroupedAgeImputer", "AgeMedianLookup"})
+    if any(keyword in text for keyword in ["model", "logistic", "randomforest", "classifier", "regularization", "solver"]):
+        wanted.update({"build_pipeline", "_build_pipeline", "pipeline_summary"})
+    if any(keyword in text for keyword in ["split", "validation", "cv", "holdout", "metric", "score"]):
+        wanted.update({"run_experiment", "_single_holdout_split", "load_data", "pipeline_summary"})
+    if any(keyword in text for keyword in ["submission", "predict", "output", "inference"]):
+        wanted.update({"run_prediction", "make_submission_frame", "load_data", "pipeline_summary"})
+    return wanted
 
 
 def _allowed_readable_files(project_root: Path, allowed_paths: list[str], *, max_files: int) -> list[Path]:
@@ -758,6 +819,7 @@ def _compact_retrieval_context(context: dict[str, Any]) -> dict[str, Any]:
         "document_count": context.get("document_count"),
         "skipped": bool(context.get("skipped")),
         "skip_reason": context.get("skip_reason"),
+        "policy": context.get("policy"),
         "context_pack_file": context.get("context_pack_file"),
         "context_pack_md_file": context.get("context_pack_md_file"),
         "retrieval_manifest_file": context.get("retrieval_manifest_file"),

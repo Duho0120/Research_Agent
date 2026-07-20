@@ -23,6 +23,7 @@ def run_demo_graph_auto_loop(
     run_now: bool = False,
     trial_llm_calls: int | None = None,
     strategy_calls_today: int | None = None,
+    low_cost_user_summary: bool = False,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "schema_version": "1.0",
@@ -51,6 +52,7 @@ def run_demo_graph_auto_loop(
             run_now=run_now,
             trial_llm_calls=trial_llm_calls,
             strategy_calls_today=strategy_calls_today,
+            low_cost_user_summary=low_cost_user_summary,
         )
         best_update = _update_demo_best_trial(competition, cycle)
         build_document_index(competition)

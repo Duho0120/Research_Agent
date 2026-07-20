@@ -327,6 +327,8 @@ def _context_file_prompt_limit(path: str, *, handoff: dict[str, Any] | None = No
     if name == "next_experiment.md":
         return 3000
     if name == "workspace_context_snapshot.md":
+        if _is_delta_patch_handoff(handoff):
+            return 9500
         if _is_patch_only_context(handoff):
             return 16500
         return 5200

@@ -15,6 +15,7 @@ from .agents.submission import prepare_submission
 from .execution_profile import load_execution_profile, validate_execution_profile
 from .paths import competition_dir, competition_memory_dir, trial_dir
 from .policies import load_policy, select_model_for_call
+from .rag_policy import evaluate_rag_policy
 from .retrieval.context_pack import build_context_pack, context_pack_prompt_summary
 from .state_db_auto import sync_trial_state_after_finish
 from .store import load_recent_trials, load_state, now_iso, read_text, write_text
@@ -40,6 +41,7 @@ def run_demo_one_cycle(
     trial_llm_calls: int | None = None,
     strategy_calls_today: int | None = None,
     show_progress: bool = False,
+    low_cost_user_summary: bool = False,
 ) -> dict[str, Any]:
     out_dir = trial_dir(competition, trial_id)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -75,6 +77,8 @@ def run_demo_one_cycle(
                 "next_action": "fix-execution-profile",
             },
             reporter=reporter,
+            low_cost_user_summary=low_cost_user_summary,
+            allow_api=allow_api,
         )
     reporter.complete(
         "F-01",
@@ -291,6 +295,8 @@ def run_demo_one_cycle(
             "next_action": next_action,
         },
         reporter=reporter,
+        low_cost_user_summary=low_cost_user_summary,
+        allow_api=allow_api,
     )
 
 
@@ -927,15 +933,17 @@ def load_demo_context(competition: str, trial_id: str) -> dict[str, Any]:
 
 
 def _build_planning_context_pack_if_needed(competition: str, trial_id: str, context: dict[str, Any]) -> dict[str, Any]:
-    if not _should_use_planning_rag(context):
+    policy = _planning_rag_policy(context)
+    if not policy["use_rag"]:
         return {
             "task": "experiment_planning",
             "document_count": 0,
             "documents": [],
             "skipped": True,
-            "skip_reason": "active_axis_refinement_uses_structured_decision_context",
+            "skip_reason": policy["reason"],
+            "policy": policy,
         }
-    return _compact_context_pack(
+    context_pack = _compact_context_pack(
         build_context_pack(
             competition,
             trial_id,
@@ -947,22 +955,20 @@ def _build_planning_context_pack_if_needed(competition: str, trial_id: str, cont
             ),
         )
     )
+    context_pack["policy"] = policy
+    return context_pack
 
 
 def _should_use_planning_rag(context: dict[str, Any]) -> bool:
-    if not context.get("source_trial_id"):
-        return True
-    decision_context = context.get("decision_context") if isinstance(context.get("decision_context"), dict) else {}
-    active_axis = str(decision_context.get("active_axis") or "").strip()
-    try:
-        attempt_count = int(decision_context.get("axis_attempt_count") or 0)
-    except (TypeError, ValueError):
-        attempt_count = 0
-    try:
-        attempt_limit = int(decision_context.get("axis_attempt_limit") or 3)
-    except (TypeError, ValueError):
-        attempt_limit = 3
-    return not (active_axis and attempt_count < attempt_limit)
+    return bool(_planning_rag_policy(context)["use_rag"])
+
+
+def _planning_rag_policy(context: dict[str, Any]) -> dict[str, Any]:
+    return evaluate_rag_policy(
+        context,
+        task="experiment_planning",
+        is_first_trial=not bool(context.get("source_trial_id")),
+    )
 
 
 def create_demo_experiment_plan(
@@ -1071,8 +1077,8 @@ def build_demo_plan_payload(context: dict[str, Any], *, model: str) -> dict[str,
     rag_skipped = bool(isinstance(context_pack, dict) and context_pack.get("skipped"))
     evidence_instruction = (
         [
-            "RAG is intentionally skipped for this active-axis refinement. Use decision_context, the source/base trial summary, rejected candidates, and the compact structured context instead.",
-            "Do not request broad historical evidence unless the active axis is exhausted or the current base pipeline is invalid.",
+            "RAG is intentionally skipped for this continuation step. Use decision_context, the source/base trial summary, rejected candidates, and the compact structured context instead.",
+            "Do not request broad historical evidence unless user feedback, human review, external sources, axis exhaustion, or unexplained failures require it.",
         ]
         if rag_skipped
         else [
@@ -1656,13 +1662,20 @@ def _finish(
     result: dict[str, Any],
     *,
     reporter: DemoStatusReporter | None = None,
+    low_cost_user_summary: bool = False,
+    allow_api: bool = False,
 ) -> dict[str, Any]:
     out_dir = trial_dir(competition, trial_id)
     write_text(out_dir / "demo_one_cycle.json", json.dumps(result, ensure_ascii=False, indent=2) + "\n")
     write_text(out_dir / "demo_one_cycle.md", render_demo_cycle(result))
     artifact_summary = None
     if result.get("status") == "completed":
-        artifact_summary = organize_trial_artifacts(competition, trial_id)
+        artifact_summary = organize_trial_artifacts(
+            competition,
+            trial_id,
+            low_cost_user_summary=low_cost_user_summary,
+            allow_api=allow_api,
+        )
     if reporter is not None:
         reporter.finish(result["status"], f"Demo one-cycle finished with status={result['status']}.", next_action=result["next_action"])
     log_decision(

@@ -46,6 +46,7 @@ from .state_query import (
     to_pretty_json,
 )
 from .state_db_sync import sync_state_db
+from .operations import build_operations_status, can_run_next_trial, render_operations_status
 from .paths import competition_configs_dir, configs_dir, trial_dir
 from .store import init_project
 from .workspace_preparer import prepare_workspace
@@ -175,6 +176,8 @@ def main(argv: list[str] | None = None) -> int:
     p_organize_trial_artifacts = sub.add_parser("organize-trial-artifacts")
     p_organize_trial_artifacts.add_argument("--competition", required=True)
     p_organize_trial_artifacts.add_argument("--trial", required=True)
+    p_organize_trial_artifacts.add_argument("--low-cost-user-summary", action="store_true")
+    p_organize_trial_artifacts.add_argument("--allow-api", action="store_true")
 
     p_demo_one_cycle = sub.add_parser("demo-one-cycle")
     p_demo_one_cycle.add_argument("--competition", required=True)
@@ -188,6 +191,7 @@ def main(argv: list[str] | None = None) -> int:
     p_demo_one_cycle.add_argument("--trial-llm-calls", type=int, default=None)
     p_demo_one_cycle.add_argument("--strategy-calls-today", type=int, default=None)
     p_demo_one_cycle.add_argument("--show-progress", action="store_true")
+    p_demo_one_cycle.add_argument("--low-cost-user-summary", action="store_true")
 
     p_demo_graph_cycle = sub.add_parser("demo-graph-cycle")
     p_demo_graph_cycle.add_argument("--competition", required=True)
@@ -200,6 +204,7 @@ def main(argv: list[str] | None = None) -> int:
     p_demo_graph_cycle.add_argument("--run-now", action="store_true")
     p_demo_graph_cycle.add_argument("--trial-llm-calls", type=int, default=None)
     p_demo_graph_cycle.add_argument("--strategy-calls-today", type=int, default=None)
+    p_demo_graph_cycle.add_argument("--low-cost-user-summary", action="store_true")
 
     p_demo_graph_auto_loop = sub.add_parser("demo-graph-auto-loop")
     p_demo_graph_auto_loop.add_argument("--competition", required=True)
@@ -214,6 +219,7 @@ def main(argv: list[str] | None = None) -> int:
     p_demo_graph_auto_loop.add_argument("--run-now", action="store_true")
     p_demo_graph_auto_loop.add_argument("--trial-llm-calls", type=int, default=None)
     p_demo_graph_auto_loop.add_argument("--strategy-calls-today", type=int, default=None)
+    p_demo_graph_auto_loop.add_argument("--low-cost-user-summary", action="store_true")
 
     p_watch_demo_cycle = sub.add_parser("watch-demo-cycle")
     p_watch_demo_cycle.add_argument("--competition", required=True)
@@ -284,6 +290,28 @@ def main(argv: list[str] | None = None) -> int:
     p_show_trial.add_argument("--db-path", default=None)
     p_show_trial.add_argument("--sync", action="store_true")
     p_show_trial.add_argument("--json", action="store_true")
+
+    p_status = sub.add_parser("status")
+    p_status.add_argument("--competition", default=None)
+    p_status.add_argument("--db-path", default=None)
+    p_status.add_argument("--sync", action="store_true")
+    p_status.add_argument("--no-sync", action="store_true")
+    p_status.add_argument("--json", action="store_true")
+
+    p_run_next_trial = sub.add_parser("run-next-trial")
+    p_run_next_trial.add_argument("--competition", required=True)
+    p_run_next_trial.add_argument("--trial", default=None)
+    p_run_next_trial.add_argument("--model", default="gpt-5.5")
+    p_run_next_trial.add_argument("--provider", choices=["openai", "anthropic"], default="openai")
+    p_run_next_trial.add_argument("--allow-api", action="store_true")
+    p_run_next_trial.add_argument("--run-now", action="store_true")
+    p_run_next_trial.add_argument("--trial-llm-calls", type=int, default=None)
+    p_run_next_trial.add_argument("--strategy-calls-today", type=int, default=None)
+    p_run_next_trial.add_argument("--low-cost-user-summary", action="store_true")
+    p_run_next_trial.add_argument("--dry-run", action="store_true")
+    p_run_next_trial.add_argument("--force", action="store_true")
+    p_run_next_trial.add_argument("--no-sync", action="store_true")
+    p_run_next_trial.add_argument("--db-path", default=None)
 
     p_auto = sub.add_parser("run-auto-loop")
     p_auto.add_argument("--competition", required=True)
@@ -586,7 +614,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if result["status"] in {"ready_to_run", "completed"} else 1
 
     if args.command == "organize-trial-artifacts":
-        result = organize_trial_artifacts(args.competition, args.trial)
+        result = organize_trial_artifacts(
+            args.competition,
+            args.trial,
+            low_cost_user_summary=args.low_cost_user_summary,
+            allow_api=args.allow_api,
+        )
         print(
             "Trial artifacts organized: "
             f"{result['competition']} {result['trial_id']} status={result['status']} "
@@ -607,6 +640,7 @@ def main(argv: list[str] | None = None) -> int:
             trial_llm_calls=args.trial_llm_calls,
             strategy_calls_today=args.strategy_calls_today,
             show_progress=args.show_progress,
+            low_cost_user_summary=args.low_cost_user_summary,
         )
         print(render_demo_cycle_cli_summary(result))
         return 0 if result["status"] in {"planned", "completed"} else 1
@@ -632,6 +666,7 @@ def main(argv: list[str] | None = None) -> int:
             run_now=args.run_now,
             trial_llm_calls=args.trial_llm_calls,
             strategy_calls_today=args.strategy_calls_today,
+            low_cost_user_summary=args.low_cost_user_summary,
         )
         print(render_demo_cycle_cli_summary(result))
         return 0 if result["status"] in {"planned", "completed"} else 1
@@ -650,6 +685,7 @@ def main(argv: list[str] | None = None) -> int:
             run_now=args.run_now,
             trial_llm_calls=args.trial_llm_calls,
             strategy_calls_today=args.strategy_calls_today,
+            low_cost_user_summary=args.low_cost_user_summary,
         )
         print(
             f"Demo graph auto loop: {result['competition']} "
@@ -732,7 +768,8 @@ def main(argv: list[str] | None = None) -> int:
             f"trials={result['trial_count']} "
             f"artifacts={result['artifact_count']} "
             f"token_usage={result['token_usage_count']} "
-            f"submissions={result['submission_count']}"
+            f"submissions={result['submission_count']} "
+            f"rebuilt_rows={result.get('removed_stale_rows', 0)}"
         )
         print(result["db_path"])
         return 0 if result["status"] == "completed" else 1
@@ -760,6 +797,57 @@ def main(argv: list[str] | None = None) -> int:
         result = get_trial_detail(args.competition, args.trial, db_path)
         print(to_pretty_json(result) if args.json else render_trial_detail(result))
         return 0 if result.get("summary") else 1
+
+    if args.command == "status":
+        db_path = Path(args.db_path) if args.db_path else None
+        if args.sync or not args.no_sync:
+            sync_state_db(args.competition, db_path=db_path)
+        result = build_operations_status(competition=args.competition, db_path=db_path)
+        print(to_pretty_json(result) if args.json else render_operations_status(result))
+        if args.competition and not result.get("experiment", {}).get("competition"):
+            return 1
+        return 0
+
+    if args.command == "run-next-trial":
+        db_path = Path(args.db_path) if args.db_path else None
+        if not args.no_sync:
+            sync_state_db(args.competition, db_path=db_path)
+        status = build_operations_status(competition=args.competition, db_path=db_path)
+        experiment = status.get("experiment") or {}
+        operation = experiment.get("operation") or {}
+        trial_id = args.trial or operation.get("next_trial_id") or "trial_001"
+        if not experiment.get("competition"):
+            print(render_operations_status(status))
+            return 1
+        if not can_run_next_trial(operation) and not args.force:
+            print(render_operations_status(status))
+            print("")
+            print("중단: 현재 상태에서는 다음 trial을 바로 실행하지 않습니다. 필요하면 --force를 사용하세요.")
+            return 1
+        if args.dry_run:
+            print(render_operations_status(status))
+            print("")
+            print(f"Dry run: 다음 실행 대상은 {args.competition} / {trial_id} 입니다.")
+            return 0
+        result = run_demo_graph_cycle(
+            args.competition,
+            trial_id,
+            model=args.model,
+            provider=args.provider,
+            allow_api=args.allow_api,
+            run_now=args.run_now,
+            trial_llm_calls=args.trial_llm_calls,
+            strategy_calls_today=args.strategy_calls_today,
+            low_cost_user_summary=args.low_cost_user_summary,
+        )
+        if not args.no_sync:
+            sync_state_db(args.competition, db_path=db_path)
+        print(
+            "Trial cycle: "
+            f"{result.get('competition', args.competition)} {result.get('trial_id', trial_id)} "
+            f"status={result.get('status')}"
+        )
+        return 0 if result.get("status") == "completed" else 1
 
     if args.command == "run-auto-loop":
         result = run_auto_research_loop(

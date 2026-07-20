@@ -174,9 +174,10 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             self.assertEqual("ready", result["status"])
             self.assertTrue(result["retrieval_context"]["skipped"])
             self.assertEqual(
-                "active_axis_refinement_uses_next_experiment_and_code_snapshot",
+                "continuation_uses_structured_memory_and_code_snapshot",
                 result["retrieval_context"]["skip_reason"],
             )
+            self.assertFalse(result["retrieval_context"]["policy"]["use_rag"])
             self.assertIn("experiments/demo/trial_002/workspace_context_snapshot.md", result["context_files"])
             self.assertIn("experiments/demo/trial_002/delta_plan.json", result["context_files"])
             self.assertIn("experiments/demo/trial_002/delta_plan.md", result["context_files"])
@@ -185,6 +186,96 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             self.assertNotIn("experiments/demo/trial_002/context_pack_workspace_code_writing.md", result["context_files"])
             self.assertFalse((trial / "context_pack_workspace_code_writing.json").exists())
             self.assertFalse((trial / "retrieval_manifest_workspace_code_writing.json").exists())
+
+    def test_continuation_handoff_skips_code_writing_rag_without_trigger(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_execution_profile(root, project)
+            self._write_next_trial(root, continuation_mode="can_continue")
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = prepare_workspace_coding_handoff("demo", "trial_002")
+
+            trial = root / "experiments" / "demo" / "trial_002"
+            self.assertEqual("ready", result["status"])
+            self.assertTrue(result["retrieval_context"]["skipped"])
+            self.assertEqual(
+                "continuation_uses_structured_memory_and_code_snapshot",
+                result["retrieval_context"]["skip_reason"],
+            )
+            self.assertNotIn("experiments/demo/trial_002/context_pack_workspace_code_writing.md", result["context_files"])
+            self.assertFalse((trial / "context_pack_workspace_code_writing.json").exists())
+
+    def test_continuation_handoff_uses_rag_when_user_feedback_is_present(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_execution_profile(root, project)
+            self._write_next_trial(
+                root,
+                continuation_mode="can_continue",
+                extra_context={"user_feedback": "Review prior feature experiments before changing model family."},
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = prepare_workspace_coding_handoff("demo", "trial_002")
+
+            self.assertEqual("ready", result["status"])
+            self.assertFalse(result["retrieval_context"]["skipped"])
+            self.assertTrue(result["retrieval_context"]["policy"]["use_rag"])
+            self.assertEqual("user_feedback_or_human_review_present", result["retrieval_context"]["policy"]["reason"])
+            self.assertIn("experiments/demo/trial_002/context_pack_workspace_code_writing.md", result["context_files"])
+
+    def test_delta_patch_handoff_uses_targeted_code_snapshot_for_prompt_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_execution_profile(root, project)
+            self._write_next_trial(
+                root,
+                continuation_mode="can_continue",
+                decision_context={
+                    "active_axis": "feature_engineering_cabin_missing_indicator",
+                    "axis_attempt_count": 1,
+                    "axis_attempt_limit": 3,
+                    "recommended_base_trial": "trial_001",
+                },
+            )
+            source_code = root / "experiments" / "demo" / "trial_001" / "user_view" / "code" / "src" / "baseline.py"
+            source_code.write_text(_class_based_baseline_code(), encoding="utf-8")
+            trial = root / "experiments" / "demo" / "trial_002"
+            (trial / "delta_plan.json").write_text(
+                json.dumps(
+                    {
+                        "plan_type": "delta_patch",
+                        "source_trial_id": "trial_001",
+                        "primary_change_axis": "feature_engineering_cabin_missing_indicator",
+                        "candidate": {"name": "CabinMissing_Pclass3"},
+                        "code_change_targets": ["feature construction block", "numeric feature list"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (trial / "delta_plan.md").write_text("# Delta Patch Plan\n\n- candidate: CabinMissing_Pclass3\n", encoding="utf-8")
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = prepare_workspace_coding_handoff("demo", "trial_002")
+                snapshot_text = (trial / "workspace_context_snapshot.md").read_text(encoding="utf-8")
+                handoff = json.loads((trial / "workspace_coding_handoff.json").read_text(encoding="utf-8"))
+                payload = build_workspace_code_writer_payload(handoff, model="gpt-5.5")
+
+            prompt = payload["input"][1]["content"]
+
+            self.assertEqual("ready", result["status"])
+            self.assertLess(len(snapshot_text), 10000)
+            self.assertLess(len(prompt), 13000)
+            self.assertIn("class FeatureBuilder", prompt)
+            self.assertIn("def build_pipeline", prompt)
+            self.assertIn("def pipeline_summary", prompt)
+            self.assertIn("CabinMissing_Pclass3", prompt)
+            self.assertNotIn("def run_prediction", prompt)
+            self.assertIn("Omitted for compact delta patch mode", prompt)
 
     def test_prepare_workspace_coding_handoff_blocks_must_wait_context(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -310,6 +401,7 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
         *,
         continuation_mode: str,
         decision_context: dict | None = None,
+        extra_context: dict | None = None,
     ) -> None:
         source = root / "experiments" / "demo" / "trial_001"
         (source / "internal").mkdir(parents=True, exist_ok=True)
@@ -342,20 +434,21 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             "# trial_002 Next Experiment\n\nTry a controlled feature cleanup.\n",
             encoding="utf-8",
         )
+        context = {
+            "competition": "demo",
+            "source_trial_id": "trial_001",
+            "next_trial_id": "trial_002",
+            "continuation_mode": continuation_mode,
+            "pending_human_review": continuation_mode == "continue_with_caution",
+            "review_source_trial": "trial_001" if continuation_mode == "continue_with_caution" else None,
+            "allowed_topics": ["controlled_refinement"],
+            "blocked_topics": [],
+            "decision_context": decision_context or {},
+        }
+        if extra_context:
+            context.update(extra_context)
         (trial / "continuation_context.json").write_text(
-            json.dumps(
-                {
-                    "competition": "demo",
-                    "source_trial_id": "trial_001",
-                    "next_trial_id": "trial_002",
-                    "continuation_mode": continuation_mode,
-                    "pending_human_review": continuation_mode == "continue_with_caution",
-                    "review_source_trial": "trial_001" if continuation_mode == "continue_with_caution" else None,
-                    "allowed_topics": ["controlled_refinement"],
-                    "blocked_topics": [],
-                    "decision_context": decision_context or {},
-                }
-            ),
+            json.dumps(context),
             encoding="utf-8",
         )
 
