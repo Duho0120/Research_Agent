@@ -94,9 +94,16 @@ def _render_plan_detail_sections(
 ) -> list[str]:
     if not isinstance(plan, dict) or not plan:
         return ["", "## 목적", "", "- 계획서에서 목적과 실험축을 추출하지 못했습니다."]
-    if plan.get("plan_type") == "continuation_delta_plan":
+    if _is_continuation_plan(plan):
         return _render_continuation_plan_sections(plan, objective=objective, rationale=rationale, summary=summary)
     return _render_initial_plan_sections(plan, objective=objective, rationale=rationale, summary=summary)
+
+
+def _is_continuation_plan(plan: dict[str, Any]) -> bool:
+    plan_type = str(plan.get("plan_type") or "").strip()
+    if plan_type in {"continuation_delta_plan", "delta_patch"}:
+        return True
+    return bool(plan.get("source_trial_id") and plan.get("primary_change_axis"))
 
 
 def _render_initial_plan_sections(
@@ -169,6 +176,30 @@ def _render_continuation_plan_sections(
     promoted = _implementation_note_buckets(plan.get("implementation_notes"))
     raw_change_details = _normalize_plan_items(plan.get("change_details")) or promoted["change_details"]
     raw_keep_unchanged = _normalize_plan_items(plan.get("keep_unchanged")) or promoted["keep_unchanged"]
+    candidate = plan.get("candidate") if isinstance(plan.get("candidate"), dict) else {}
+    candidate_name = str(candidate.get("name") or "").strip()
+    candidate_description = str(candidate.get("description") or "").strip()
+    candidate_hint = str(candidate.get("implementation_hint") or "").strip()
+    candidate_lines: list[str] = []
+    if candidate_name:
+        candidate_text = f"Candidate `{candidate_name}`"
+        if candidate_description:
+            candidate_text += f": {candidate_description}"
+        candidate_lines.append(candidate_text)
+    if candidate_hint:
+        candidate_lines.append(f"Implementation hint: {candidate_hint}")
+    if candidate_lines:
+        raw_change_details = [*candidate_lines, *raw_change_details]
+    if str(plan.get("plan_type") or "").strip() == "delta_patch" and candidate_name:
+        purpose = (
+            f"기준 trial `{source or summary.get('recommended_base_trial') or 'unknown'}`에서 "
+            f"`{axis or 'single_change_axis'}` 축의 후보 `{candidate_name}`만 추가해 점수 변화를 검증합니다."
+        )
+        if candidate_description:
+            rationale = (
+                f"`{candidate_name}` 후보가 기존 best 대비 도움이 되는지 확인합니다. "
+                f"후보 설명: {candidate_description}"
+            )
     change_details = [_koreanize_continuation_item(item) for item in raw_change_details[:8]]
     keep_unchanged = [_koreanize_continuation_item(item) for item in raw_keep_unchanged[:8]]
     success = _success_criteria_lines(plan.get("success_criteria"))
@@ -960,10 +991,17 @@ def _plan_note_lines(plan: dict[str, Any]) -> list[str]:
         return []
     plan_type = plan.get("plan_type")
     lines: list[str] = []
-    if plan_type == "continuation_delta_plan":
+    if _is_continuation_plan(plan):
         axis = str(plan.get("primary_change_axis") or "").strip()
         if axis:
             lines.append(f"Primary change axis: {axis}")
+        candidate = plan.get("candidate") if isinstance(plan.get("candidate"), dict) else {}
+        candidate_name = str(candidate.get("name") or "").strip()
+        candidate_description = str(candidate.get("description") or "").strip()
+        if candidate_name:
+            lines.append(f"Candidate: {candidate_name}")
+        if candidate_description:
+            lines.append(f"Candidate description: {candidate_description}")
         lines.extend(f"Keep unchanged: {item}" for item in _normalize_plan_items_raw(plan.get("keep_unchanged"))[:6])
         lines.extend(f"Change detail: {item}" for item in _normalize_plan_items_raw(plan.get("change_details"))[:6])
         lines.extend(f"Code target: {item}" for item in _normalize_plan_items_raw(plan.get("code_change_targets"))[:4])

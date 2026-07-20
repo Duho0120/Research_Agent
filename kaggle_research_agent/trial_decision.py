@@ -404,10 +404,12 @@ def _recommended_base_trial(
     if decision in {"accept", "provisional_accept", "baseline_established"}:
         return current_trial_id
     if decision == "continue_axis_refinement":
-        if source_trial_id:
-            return source_trial_id
+        if best_card and best_card.get("trial_id"):
+            return str(best_card["trial_id"])
         if previous_card and previous_card.get("recommended_base_trial"):
             return str(previous_card["recommended_base_trial"])
+        if source_trial_id:
+            return source_trial_id
     if best_card and best_card.get("trial_id"):
         return str(best_card["trial_id"])
     if source_trial_id:
@@ -454,8 +456,8 @@ def _next_guidance(decision: str, *, current_axis: str, recommended_base_trial: 
         return "Use this trial provisionally because local validation improved, but confirm with submission before stacking more changes."
     if decision == "continue_axis_refinement":
         return (
-            f"`{current_axis}` has not improved yet, but the axis is not rejected. Start from `{recommended_base_trial}` "
-            "and try another candidate or parameter variant within the same axis."
+            f"`{current_axis}` has not improved yet, but the axis is not rejected. Start from best/base trial "
+            f"`{recommended_base_trial}` and apply another candidate or parameter variant within the same axis."
         )
     if decision == "reject_or_hold_cv_lb_mismatch":
         return (
@@ -478,6 +480,9 @@ def _planner_constraints(decision: str, *, current_axis: str, recommended_base_t
         constraints.append("If the rejected axis was implemented in the last trial, roll back to the recommended base before applying a new change.")
     if decision == "continue_axis_refinement" and current_axis:
         constraints.append(f"Keep the primary improvement axis as `{current_axis}` for the next trial.")
+        constraints.append(
+            f"Use `{recommended_base_trial}` as the code/pipeline base even if the active axis was attempted on another trial."
+        )
         constraints.append("Try a different candidate or parameter variant inside the same axis; do not switch to a new axis yet.")
         constraints.append("Do not preserve the failed candidate unless the new variant explicitly requires it.")
     if decision == "reject_or_hold_cv_lb_mismatch":

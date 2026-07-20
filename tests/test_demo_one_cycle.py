@@ -12,6 +12,7 @@ from kaggle_research_agent.cli import main
 from kaggle_research_agent.demo_one_cycle import build_demo_plan_payload, run_demo_one_cycle
 from kaggle_research_agent.graph.demo_auto_loop import run_demo_graph_auto_loop
 from kaggle_research_agent.graph.demo_cycle_graph import run_demo_graph_cycle
+from kaggle_research_agent.state_db import get_trial_summary
 from kaggle_research_agent.trial_artifacts import trial_artifact_exists
 
 
@@ -83,6 +84,12 @@ class DemoOneCycleTest(unittest.TestCase):
             self.assertIn("Artifact Policy", (trial / "demo_context.md").read_text(encoding="utf-8"))
             self.assertTrue((trial / "context_pack_experiment_planning.json").exists())
             self.assertTrue((trial / "retrieval_manifest_experiment_planning.json").exists())
+            self.assertEqual("synced", result["state_db_sync"]["status"])
+            db_path = root / "memory" / "research_agent.sqlite3"
+            self.assertTrue(db_path.exists())
+            summary = get_trial_summary("demo", "trial_001", db_path)
+            self.assertEqual("completed", summary["status"])
+            self.assertEqual(0.88, summary["local_score"])
 
     def test_demo_graph_cycle_runs_same_one_cycle_with_graph_state(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -328,7 +335,11 @@ class DemoOneCycleTest(unittest.TestCase):
             self._write_state(root)
             self._write_profile(root, project)
 
-            from kaggle_research_agent.demo_one_cycle import build_demo_plan_payload, load_demo_context
+            from kaggle_research_agent.demo_one_cycle import (
+                _build_planning_context_pack_if_needed,
+                build_demo_plan_payload,
+                load_demo_context,
+            )
             from kaggle_research_agent.trial_decision import write_trial_decision_card
 
             with patch("kaggle_research_agent.paths.project_root", return_value=root):
@@ -351,9 +362,11 @@ class DemoOneCycleTest(unittest.TestCase):
                     submission={"submitted_lb_score": 0.75},
                 )
                 context = load_demo_context("demo", "trial_003")
+                context["planning_context_pack"] = _build_planning_context_pack_if_needed("demo", "trial_003", context)
 
             self.assertEqual("continuation_delta_plan", context["plan_type"])
             self.assertEqual("trial_001", context["source_trial_id"])
+            self.assertTrue(context["planning_context_pack"]["skipped"])
             self.assertEqual("trial_001", context["decision_context"]["recommended_base_trial"])
             self.assertEqual("feature_engineering_family_size", context["decision_context"]["active_axis"])
             self.assertEqual(1, context["decision_context"]["axis_attempt_count"])
@@ -365,6 +378,7 @@ class DemoOneCycleTest(unittest.TestCase):
             self.assertIn("rejected_axes", prompt)
             self.assertIn("rejected_candidates", prompt)
             self.assertIn("recommended_base_trial", prompt)
+            self.assertIn("RAG is intentionally skipped", prompt)
 
     def test_demo_context_keeps_active_axis_after_two_failed_candidates(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -410,6 +424,103 @@ class DemoOneCycleTest(unittest.TestCase):
             self.assertIn("choose a different candidate or parameter variant within the axis", prompt)
             self.assertIn("Do not repeat any rejected_candidate", prompt)
             self.assertIn("Do not switch away from active_axis", prompt)
+
+    def test_active_axis_refinement_uses_best_base_even_when_axis_was_attempted_elsewhere(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            project = Path(tmp) / "project"
+            root.mkdir()
+            project.mkdir()
+            self._write_state(root)
+            self._write_profile(root, project)
+
+            from kaggle_research_agent.demo_one_cycle import load_demo_context
+            from kaggle_research_agent.trial_decision import write_trial_decision_card
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                write_trial_decision_card(
+                    "demo",
+                    "trial_001",
+                    plan={"plan_type": "initial_pipeline_plan"},
+                    metrics={"cv_score": 0.80, "objective": "maximize"},
+                )
+                write_trial_decision_card(
+                    "demo",
+                    "trial_002",
+                    plan={
+                        "plan_type": "continuation_delta_plan",
+                        "source_trial_id": "trial_001",
+                        "primary_change_axis": "model_family",
+                        "change_details": ["Candidate: GradientBoosting"],
+                    },
+                    metrics={"cv_score": 0.85, "objective": "maximize"},
+                )
+                failed_axis = write_trial_decision_card(
+                    "demo",
+                    "trial_003",
+                    plan={
+                        "plan_type": "continuation_delta_plan",
+                        "source_trial_id": "trial_001",
+                        "primary_change_axis": "feature_engineering_title",
+                        "change_details": ["Candidate: Title from Name"],
+                    },
+                    metrics={"cv_score": 0.79, "objective": "maximize"},
+                )
+                context = load_demo_context("demo", "trial_004")
+
+            self.assertEqual("continue_axis_refinement", failed_axis["decision"])
+            self.assertEqual("feature_engineering_title", failed_axis["active_axis"])
+            self.assertEqual(1, failed_axis["axis_attempt_count"])
+            self.assertEqual("trial_002", failed_axis["recommended_base_trial"])
+            self.assertEqual("trial_002", context["source_trial_id"])
+            self.assertEqual("feature_engineering_title", context["decision_context"]["active_axis"])
+            self.assertEqual("trial_002", context["decision_context"]["recommended_base_trial"])
+
+    def test_delta_patch_plan_result_writes_compact_delta_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            root.mkdir()
+
+            from kaggle_research_agent.demo_one_cycle import _write_plan_result
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                plan = _write_plan_result(
+                    "demo",
+                    "trial_002",
+                    {
+                        "competition": "demo",
+                        "trial_id": "trial_002",
+                        "status": "ready",
+                        "plan_type": "delta_patch",
+                        "source_trial_id": "trial_001",
+                        "plan_title": "Try compact feature candidate",
+                        "objective": "Patch one feature.",
+                        "rationale": "Short.",
+                        "primary_change_axis": "feature_engineering",
+                        "candidate": {
+                            "name": "CandidateA",
+                            "description": "Add one binary feature.",
+                            "implementation_hint": "Patch src/baseline.py.",
+                        },
+                        "do_not_repeat": ["Candidate0"],
+                        "keep_unchanged": ["model"],
+                        "change_details": ["Add CandidateA"],
+                        "code_change_targets": ["src/baseline.py"],
+                        "success_criteria": ["score improves"],
+                        "failure_decision": ["reject CandidateA"],
+                        "expected_outputs": ["metrics.json"],
+                        "issues": [],
+                        "next_action": "prepare-workspace-handoff",
+                    },
+                )
+
+            trial = root / "experiments" / "demo" / "trial_002"
+            delta = json.loads((trial / "delta_plan.json").read_text(encoding="utf-8"))
+            self.assertEqual("delta_patch", plan["plan_type"])
+            self.assertEqual("delta_patch", delta["plan_type"])
+            self.assertEqual("CandidateA", delta["candidate"]["name"])
+            self.assertEqual(["Candidate0"], delta["do_not_repeat"])
+            self.assertTrue((trial / "delta_plan.md").exists())
 
     def test_decision_card_rejects_axis_after_three_failed_candidates(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -4,6 +4,7 @@ import argparse
 import ctypes
 import os
 import sys
+from pathlib import Path
 from . import simple_yaml
 from .baseline_generator import generate_baseline_pipeline
 from .competition_inspector import inspect_competition
@@ -35,6 +36,16 @@ from .graph.demo_cycle_graph import run_demo_graph_cycle
 from .graph.demo_auto_loop import run_demo_graph_auto_loop
 from .retrieval.index_builder import build_document_index
 from .retrieval.retriever import retrieve_documents
+from .state_query import (
+    get_experiment_status,
+    get_trial_detail,
+    list_experiment_statuses,
+    render_experiment_status,
+    render_experiment_statuses,
+    render_trial_detail,
+    to_pretty_json,
+)
+from .state_db_sync import sync_state_db
 from .paths import competition_configs_dir, configs_dir, trial_dir
 from .store import init_project
 from .workspace_preparer import prepare_workspace
@@ -251,6 +262,28 @@ def main(argv: list[str] | None = None) -> int:
     p_retrieve_documents.add_argument("--competition", required=True)
     p_retrieve_documents.add_argument("--query", required=True)
     p_retrieve_documents.add_argument("--limit", type=int, default=5)
+
+    p_sync_state_db = sub.add_parser("sync-state-db")
+    p_sync_state_db.add_argument("--competition", default=None)
+    p_sync_state_db.add_argument("--db-path", default=None)
+
+    p_list_experiments = sub.add_parser("list-experiments")
+    p_list_experiments.add_argument("--db-path", default=None)
+    p_list_experiments.add_argument("--sync", action="store_true")
+    p_list_experiments.add_argument("--json", action="store_true")
+
+    p_show_experiment = sub.add_parser("show-experiment")
+    p_show_experiment.add_argument("--competition", required=True)
+    p_show_experiment.add_argument("--db-path", default=None)
+    p_show_experiment.add_argument("--sync", action="store_true")
+    p_show_experiment.add_argument("--json", action="store_true")
+
+    p_show_trial = sub.add_parser("show-trial")
+    p_show_trial.add_argument("--competition", required=True)
+    p_show_trial.add_argument("--trial", required=True)
+    p_show_trial.add_argument("--db-path", default=None)
+    p_show_trial.add_argument("--sync", action="store_true")
+    p_show_trial.add_argument("--json", action="store_true")
 
     p_auto = sub.add_parser("run-auto-loop")
     p_auto.add_argument("--competition", required=True)
@@ -688,6 +721,45 @@ def main(argv: list[str] | None = None) -> int:
         for item in result["results"]:
             print(f"- score={item['score']} kind={item['source_kind']} path={item['source_path']}")
         return 0
+
+    if args.command == "sync-state-db":
+        db_path = Path(args.db_path) if args.db_path else None
+        result = sync_state_db(args.competition, db_path=db_path)
+        print(
+            "State DB sync: "
+            f"status={result['status']} "
+            f"competitions={result['competition_count']} "
+            f"trials={result['trial_count']} "
+            f"artifacts={result['artifact_count']} "
+            f"token_usage={result['token_usage_count']} "
+            f"submissions={result['submission_count']}"
+        )
+        print(result["db_path"])
+        return 0 if result["status"] == "completed" else 1
+
+    if args.command == "list-experiments":
+        db_path = Path(args.db_path) if args.db_path else None
+        if args.sync:
+            sync_state_db(db_path=db_path)
+        result = list_experiment_statuses(db_path)
+        print(to_pretty_json(result) if args.json else render_experiment_statuses(result))
+        return 0
+
+    if args.command == "show-experiment":
+        db_path = Path(args.db_path) if args.db_path else None
+        if args.sync:
+            sync_state_db(args.competition, db_path=db_path)
+        result = get_experiment_status(args.competition, db_path)
+        print(to_pretty_json(result) if args.json else render_experiment_status(result))
+        return 0 if result.get("competition") else 1
+
+    if args.command == "show-trial":
+        db_path = Path(args.db_path) if args.db_path else None
+        if args.sync:
+            sync_state_db(args.competition, db_path=db_path)
+        result = get_trial_detail(args.competition, args.trial, db_path)
+        print(to_pretty_json(result) if args.json else render_trial_detail(result))
+        return 0 if result.get("summary") else 1
 
     if args.command == "run-auto-loop":
         result = run_auto_research_loop(

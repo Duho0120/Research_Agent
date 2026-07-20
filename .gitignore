@@ -63,6 +63,7 @@ submissions/
 competitions/*/
 configs/*/
 memory/*/
+memory/*.sqlite3
 experiments/*/
 !configs/policies/
 !configs/policies/**

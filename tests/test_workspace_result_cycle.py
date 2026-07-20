@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from kaggle_research_agent import simple_yaml
 from kaggle_research_agent.cli import main
+from kaggle_research_agent.state_db import get_trial_summary
 from kaggle_research_agent.workspace_result_cycle import process_workspace_result
 
 
@@ -127,6 +128,12 @@ class WorkspaceResultCycleTest(unittest.TestCase):
             self.assertEqual("no_review", result["human_review"]["timing"])
             self.assertEqual("plan-next-experiment", result["next_action"])
             self.assertTrue(result["memory"]["is_best"])
+            self.assertEqual("synced", result["state_db_sync"]["status"])
+            db_path = root / "memory" / "research_agent.sqlite3"
+            self.assertTrue(db_path.exists())
+            summary = get_trial_summary("demo", "trial_001", db_path)
+            self.assertEqual("completed", summary["status"])
+            self.assertEqual(0.70, summary["local_score"])
 
     def test_collection_must_be_collected_before_processing(self):
         with tempfile.TemporaryDirectory() as tmp:

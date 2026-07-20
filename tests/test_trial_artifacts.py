@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from kaggle_research_agent import simple_yaml
 from kaggle_research_agent.trial_artifacts import organize_trial_artifacts, trial_artifact_exists
-from kaggle_research_agent.trial_user_view import _plan_note_lines
+from kaggle_research_agent.trial_user_view import _plan_note_lines, render_user_plan
 
 
 class TrialArtifactsTest(unittest.TestCase):
@@ -29,6 +29,45 @@ class TrialArtifactsTest(unittest.TestCase):
         self.assertIn("Pipeline blueprint: Submission Columns: PassengerId", joined)
         self.assertNotIn("test_step.py", joined)
         self.assertNotIn("predict_step.py", joined)
+
+    def test_delta_patch_user_plan_uses_continuation_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            (out_dir / "demo_experiment_plan.json").write_text(
+                json.dumps(
+                    {
+                        "plan_type": "delta_patch",
+                        "source_trial_id": "trial_007",
+                        "primary_change_axis": "feature_engineering_cabin_missing_indicator",
+                        "candidate": {
+                            "name": "CabinMissing_Pclass3",
+                            "description": "Add one binary feature for missing Cabin and Pclass 3.",
+                            "implementation_hint": "Create CabinMissing_Pclass3 before preprocessing.",
+                        },
+                        "keep_unchanged": ["train/validation split", "model"],
+                        "change_details": ["Add only CabinMissing_Pclass3."],
+                        "success_criteria": ["local accuracy > 0.8547"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            text = render_user_plan(
+                out_dir,
+                {
+                    "competition": "demo",
+                    "trial_id": "trial_013",
+                    "metric": "accuracy",
+                    "objective": "maximize",
+                    "plan_title": "Add CabinMissing_Pclass3",
+                },
+            )
+
+            self.assertIn("trial_007", text)
+            self.assertIn("feature_engineering_cabin_missing_indicator", text)
+            self.assertIn("CabinMissing_Pclass3", text)
+            self.assertNotIn("첫 회차", text)
+            self.assertNotIn("first trial", text.lower())
 
     def test_organize_trial_artifacts_writes_readme_and_moves_debug_files(self):
         with tempfile.TemporaryDirectory() as tmp:

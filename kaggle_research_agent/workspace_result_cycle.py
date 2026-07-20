@@ -9,6 +9,7 @@ from .agents.policy_gate import decide_human_review
 from .agents.result_analyst import diagnose_trial, evaluate_trial
 from .agents.review_pack import prepare_review_pack
 from .paths import competition_memory_dir, experiment_dir, trial_dir
+from .state_db_auto import sync_trial_state_after_finish
 from .store import load_trial_index, write_text
 from .trial_artifacts import organize_trial_artifacts, read_trial_json
 from .trial_decision import write_trial_decision_card
@@ -157,6 +158,8 @@ def _finish(out_dir: Path, result: dict[str, Any]) -> dict[str, Any]:
         },
         next_action=result["next_action"],
     )
+    result["state_db_sync"] = sync_trial_state_after_finish(result["competition"], result["trial_id"])
+    _write_result(out_dir, result)
     return result
 
 

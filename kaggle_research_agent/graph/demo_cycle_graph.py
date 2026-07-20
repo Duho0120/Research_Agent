@@ -7,7 +7,7 @@ from typing import Any, Literal, TypedDict
 from .. import paths
 from ..agents.code_writer_adapter import FileResponseClient
 from ..demo_one_cycle import (
-    _compact_context_pack,
+    _build_planning_context_pack_if_needed,
     _finish,
     _load_accepted_workspace_code_writer,
     _load_ready_demo_plan,
@@ -20,7 +20,6 @@ from ..demo_one_cycle import (
     resolve_demo_model_policy,
 )
 from ..paths import trial_dir
-from ..retrieval.context_pack import build_context_pack
 from ..store import now_iso, write_text
 from ..workspace_code_writer import run_workspace_code_writer
 from ..workspace_coding_handoff import prepare_workspace_coding_handoff
@@ -140,18 +139,7 @@ def load_context_node(state: DemoCycleGraphState) -> dict[str, Any]:
     model_policy = resolve_demo_model_policy(model_override=options.get("model"), provider_override=options.get("provider"))
     context = load_demo_context(competition, trial_id)
     context["model_policy"] = model_policy
-    context["planning_context_pack"] = _compact_context_pack(
-        build_context_pack(
-            competition,
-            trial_id,
-            task="experiment_planning",
-            query=(
-                "competition overview metric data notes source materials execution profile "
-                "competition data card data profile target id columns feature recommendations "
-                "previous trial plan metrics pipeline structure result"
-            ),
-        )
-    )
+    context["planning_context_pack"] = _build_planning_context_pack_if_needed(competition, trial_id, context)
     write_text(out_dir / "demo_context.json", json.dumps(context, ensure_ascii=False, indent=2) + "\n")
     write_text(out_dir / "demo_context.md", render_demo_context(context))
     if context["status"] != "ready":

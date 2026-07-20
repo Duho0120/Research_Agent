@@ -186,6 +186,8 @@ def render_workspace_coding_result_validation(result: dict[str, Any]) -> str:
 
 
 def _build_prompt(handoff: dict[str, Any]) -> str:
+    if _is_delta_patch_handoff(handoff):
+        return _build_delta_patch_prompt(handoff)
     return "\n".join(
         [
             "Implement the next workspace experiment within the declared project write scope.",
@@ -241,7 +243,7 @@ def _build_prompt(handoff: dict[str, Any]) -> str:
             json.dumps(handoff.get("edit_policy", {}), ensure_ascii=False, indent=2),
             f"Validation commands: {handoff.get('validation_commands', [])}",
             "Artifact policy:",
-            json.dumps(handoff.get("artifact_policy", {}), ensure_ascii=False, indent=2),
+            json.dumps(_compact_artifact_policy_for_prompt(handoff.get("artifact_policy", {})), ensure_ascii=False, indent=2),
             "Do not persist trained model/checkpoint artifacts by default. If you persist one, record the allowed policy reason.",
             "",
             "Retrieval context metadata:",
@@ -251,12 +253,50 @@ def _build_prompt(handoff: dict[str, Any]) -> str:
             json.dumps(handoff.get("data_card_summary", {}), ensure_ascii=False, indent=2),
             "",
             "Context files:",
-            _read_context(handoff.get("context_files", [])),
+            _read_context(handoff.get("context_files", []), handoff=handoff),
         ]
     )
 
 
-def _read_context(files: list[str]) -> str:
+def _build_delta_patch_prompt(handoff: dict[str, Any]) -> str:
+    return "\n".join(
+        [
+            "Implement one small delta patch for the next ML trial.",
+            "Return one JSON object only.",
+            "",
+            "Required JSON fields:",
+            "- status: completed | blocked | failed",
+            "- summary",
+            "- changed_files",
+            "- patch_updates: list of {path, find, replace, reason}",
+            "- file_updates: []",
+            "- validation_results: []",
+            "- blocking_issues",
+            "",
+            "Patch rules:",
+            "- Use patch_updates only; do not return whole-file updates.",
+            "- Copy exact find text from the authoritative code snapshot.",
+            "- Change only the delta_plan candidate.",
+            "- Do not repeat rejected candidates listed in delta_plan.",
+            "- Keep model, split, preprocessing, and unrelated features unchanged unless delta_plan explicitly targets them.",
+            "- Return at most 2 patch_updates.",
+            "- If exact target code is not visible, return blocked with a precise blocking issue.",
+            "",
+            f"Competition: {handoff.get('competition')}",
+            f"Trial: {handoff.get('trial_id')}",
+            f"Base/source trial: {handoff.get('code_base_trial_id') or handoff.get('source_trial_id')}",
+            f"Allowed write paths: {handoff.get('allowed_write_paths', [])}",
+            f"Forbidden paths: {handoff.get('forbidden_paths', [])}",
+            "Edit policy:",
+            json.dumps(handoff.get("edit_policy", {}), ensure_ascii=False, indent=2),
+            "",
+            "Context files:",
+            _read_context(handoff.get("context_files", []), handoff=handoff),
+        ]
+    )
+
+
+def _read_context(files: list[str], *, handoff: dict[str, Any] | None = None) -> str:
     root = paths.project_root()
     chunks = []
     for item in files:
@@ -265,7 +305,7 @@ def _read_context(files: list[str]) -> str:
             if _skip_context_file_body(item):
                 chunks.append(f"## {item}\nBody omitted from prompt; use the metadata above and saved file path if needed.")
                 continue
-            limit = _context_file_prompt_limit(item)
+            limit = _context_file_prompt_limit(item, handoff=handoff)
             text = read_text(path)
             if PurePosixPath(item.replace("\\", "/")).name == "next_experiment.md":
                 text = _compact_next_experiment_markdown(text)
@@ -278,15 +318,50 @@ def _skip_context_file_body(path: str) -> bool:
     return name.startswith("context_pack_") or name.startswith("retrieval_manifest_")
 
 
-def _context_file_prompt_limit(path: str) -> int:
+def _context_file_prompt_limit(path: str, *, handoff: dict[str, Any] | None = None) -> int:
     name = PurePosixPath(path.replace("\\", "/")).name
+    if name == "delta_plan.json":
+        return 2500
+    if name == "delta_plan.md":
+        return 1800
     if name == "next_experiment.md":
-        return 4200
+        return 3000
     if name == "workspace_context_snapshot.md":
-        return 9500
+        if _is_patch_only_context(handoff):
+            return 16500
+        return 5200
     if name.startswith("continuation_context"):
         return 1200
     return 2500
+
+
+def _is_patch_only_context(handoff: dict[str, Any] | None) -> bool:
+    if not isinstance(handoff, dict):
+        return False
+    policy = handoff.get("edit_policy") if isinstance(handoff.get("edit_policy"), dict) else {}
+    return policy.get("mode") == "patch_only" and bool(policy.get("base_code_source"))
+
+
+def _is_delta_patch_handoff(handoff: dict[str, Any] | None) -> bool:
+    if not isinstance(handoff, dict):
+        return False
+    return any(PurePosixPath(str(item).replace("\\", "/")).name == "delta_plan.json" for item in handoff.get("context_files", []))
+
+
+def _compact_artifact_policy_for_prompt(policy: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(policy, dict):
+        return {}
+    save_model = policy.get("save_model") if isinstance(policy.get("save_model"), dict) else {}
+    return {
+        "save_submission": bool(policy.get("save_submission", True)),
+        "save_metrics": bool(policy.get("save_metrics", True)),
+        "save_code_snapshot": bool(policy.get("save_code_snapshot", True)),
+        "save_pipeline_summary": bool(policy.get("save_pipeline_summary", True)),
+        "save_model": {
+            "default": bool(save_model.get("default", False)),
+            "allowed_when": list(save_model.get("allowed_when", []))[:5],
+        },
+    }
 
 
 def _compact_next_experiment_markdown(text: str) -> str:

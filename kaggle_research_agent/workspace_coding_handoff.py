@@ -28,6 +28,7 @@ def prepare_workspace_coding_handoff(competition: str, trial_id: str) -> dict[st
         continuation = {}
     if continuation.get("continuation_mode") == "must_wait":
         blocking_issues.append("continuation_requires_user_feedback")
+    coding_instruction = _coding_instruction_text(out_dir, continuation, next_experiment)
 
     validation = validate_execution_profile(competition)
     profile: dict[str, Any] = {}
@@ -48,7 +49,7 @@ def prepare_workspace_coding_handoff(competition: str, trial_id: str) -> dict[st
     )
     write_text(out_dir / "workspace_coding_handoff.json", json.dumps(handoff, ensure_ascii=False, indent=2) + "\n")
     if status == "ready":
-        write_text(out_dir / "workspace_coding_agent_request.md", render_workspace_coding_request(handoff, next_experiment))
+        write_text(out_dir / "workspace_coding_agent_request.md", render_workspace_coding_request(handoff, coding_instruction))
     log_decision(
         competition,
         trial_id,
@@ -98,22 +99,31 @@ def _build_handoff(
     retrieval_context: dict[str, Any] = {}
     if status == "ready" and profile:
         context_files.extend(_write_workspace_context_snapshot(competition, trial_id, profile, continuation))
-        retrieval_context = build_context_pack(
-            competition,
-            trial_id,
-            task="workspace_code_writing",
-            query=(
-                "next experiment current project code competition data card data profile target columns feature recommendations "
-                "previous trial metrics result pipeline structure "
-                "decision card rejected axes recommended base workspace context snapshot validation allowed write files"
-            ),
-        )
-        context_files.extend(
-            [
-                retrieval_context["context_pack_md_file"],
-                retrieval_context["retrieval_manifest_file"],
-            ]
-        )
+        if _should_use_workspace_coding_rag(continuation):
+            retrieval_context = build_context_pack(
+                competition,
+                trial_id,
+                task="workspace_code_writing",
+                query=(
+                    "next experiment current project code competition data card data profile target columns feature recommendations "
+                    "previous trial metrics result pipeline structure "
+                    "decision card rejected axes recommended base workspace context snapshot validation allowed write files"
+                ),
+            )
+            context_files.extend(
+                [
+                    retrieval_context["context_pack_md_file"],
+                    retrieval_context["retrieval_manifest_file"],
+                ]
+            )
+        else:
+            retrieval_context = {
+                "task": "workspace_code_writing",
+                "document_count": 0,
+                "documents": [],
+                "skipped": True,
+                "skip_reason": "active_axis_refinement_uses_next_experiment_and_code_snapshot",
+            }
     return {
         "schema_version": "1.0",
         "request_id": f"{competition}:{trial_id}:workspace-coding",
@@ -186,6 +196,35 @@ def _build_handoff(
 
 def _edit_mode_for_continuation(continuation: dict[str, Any]) -> str:
     return "patch_only" if continuation.get("source_trial_id") else "full_file_allowed"
+
+
+def _coding_instruction_text(out_dir: Path, continuation: dict[str, Any], fallback: str) -> str:
+    if _is_active_axis_refinement(continuation):
+        delta_md = read_text(out_dir / "delta_plan.md", default="").strip()
+        if delta_md:
+            return delta_md
+        delta_json = read_text(out_dir / "delta_plan.json", default="").strip()
+        if delta_json:
+            return "# Delta Patch Plan\n\n```json\n" + delta_json + "\n```"
+    return fallback
+
+
+def _should_use_workspace_coding_rag(continuation: dict[str, Any]) -> bool:
+    return not _is_active_axis_refinement(continuation)
+
+
+def _is_active_axis_refinement(continuation: dict[str, Any]) -> bool:
+    decision_context = continuation.get("decision_context") if isinstance(continuation.get("decision_context"), dict) else {}
+    active_axis = str(decision_context.get("active_axis") or "").strip()
+    try:
+        attempt_count = int(decision_context.get("axis_attempt_count") or 0)
+    except (TypeError, ValueError):
+        attempt_count = 0
+    try:
+        attempt_limit = int(decision_context.get("axis_attempt_limit") or 3)
+    except (TypeError, ValueError):
+        attempt_limit = 3
+    return bool(active_axis and attempt_count < attempt_limit)
 
 
 def render_workspace_coding_request(handoff: dict[str, Any], next_experiment: str) -> str:
@@ -322,6 +361,13 @@ def render_workspace_coding_request(handoff: dict[str, Any], next_experiment: st
 
 def _context_files(competition: str, trial_id: str) -> list[str]:
     out_dir = trial_dir(competition, trial_id)
+    continuation = _load_json_object(out_dir / "continuation_context.json") or {}
+    if _is_active_axis_refinement(continuation) and (out_dir / "delta_plan.json").exists():
+        candidates = [
+            "delta_plan.json",
+            "delta_plan.md",
+        ]
+        return [f"experiments/{competition}/{trial_id}/{name}" for name in candidates if (out_dir / name).exists()]
     candidates = [
         "next_experiment.md",
         "continuation_context.json",
@@ -339,9 +385,9 @@ def _write_workspace_context_snapshot(
     out_dir = trial_dir(competition, trial_id)
     source_trial_id = continuation.get("source_trial_id")
     snapshot_limits = (
-        {"max_files": 8, "max_chars_per_file": 1200, "max_total_chars": 3500}
+        {"max_files": 5, "max_chars_per_file": 900, "max_total_chars": 2600}
         if not source_trial_id
-        else {"max_files": 5, "max_chars_per_file": 2400, "max_total_chars": 11000}
+        else {"max_files": 3, "max_chars_per_file": 13000, "max_total_chars": 15500}
     )
     content = render_workspace_context_snapshot(
         competition,
@@ -391,24 +437,17 @@ def render_workspace_context_snapshot(
             max_total_chars=max_total_chars,
         )
         lines.extend(source_sections or ["- No saved source trial code snapshot was found."])
-        lines.extend(
-            [
-                "",
-                "## Current Workspace Code",
-                "",
-                "- This may contain rejected changes from later failed trials. Use it only to understand current filesystem drift.",
-                "",
-            ]
-        )
+        lines.extend(["", "## Current Workspace Code Inventory", ""])
+        lines.extend(_current_code_inventory(profile))
     else:
         lines.extend(["## Current Project Code", ""])
-    code_sections = _current_code_sections(
-        profile,
-        max_files=max_files,
-        max_chars_per_file=max_chars_per_file,
-        max_total_chars=max_total_chars,
-    )
-    lines.extend(code_sections or ["- No readable code files were found in the allowed write scope."])
+        code_sections = _current_code_sections(
+            profile,
+            max_files=max_files,
+            max_chars_per_file=max_chars_per_file,
+            max_total_chars=max_total_chars,
+        )
+        lines.extend(code_sections or ["- No readable code files were found in the allowed write scope."])
     lines.extend(["", "## Previous Trial Evidence", ""])
     lines.extend(_previous_trial_evidence(competition, source_trial_id))
     lines.append("")
@@ -449,7 +488,7 @@ def _source_trial_code_sections(
     total = 0
     for relative, text in files[:max_files]:
         per_file_limit = _context_file_limit(relative, max_chars_per_file)
-        snippet = text[:per_file_limit]
+        snippet = _source_code_snippet(relative, text, per_file_limit)
         if total + len(snippet) > max_total_chars:
             remaining = max_total_chars - total
             if remaining <= 0:
@@ -526,11 +565,83 @@ def _current_code_sections(
     return sections
 
 
+def _current_code_inventory(profile: dict[str, Any]) -> list[str]:
+    project_root = Path(str(profile.get("project_root", "")))
+    if not project_root.is_dir():
+        return ["- Current workspace root is not readable."]
+    files = _allowed_readable_files(project_root, profile.get("write_scope", {}).get("allowed", []), max_files=20)
+    if not files:
+        return ["- No readable code files were found in the allowed write scope."]
+    lines = [
+        "- Current workspace may contain rejected later-trial changes.",
+        "- The recommended base trial snapshot above is authoritative for patch find/replace text.",
+    ]
+    lines.extend(f"- {path.relative_to(project_root).as_posix()}" for path in files)
+    return lines
+
+
 def _context_file_limit(relative_path: str, default_limit: int) -> int:
     normalized = relative_path.replace("\\", "/")
     if normalized.endswith("src/baseline.py"):
-        return 9500
+        return max(default_limit, 13000)
     return default_limit
+
+
+def _source_code_snippet(relative_path: str, text: str, max_chars: int) -> str:
+    normalized = relative_path.replace("\\", "/")
+    if normalized.endswith("src/baseline.py") and len(text) > max_chars:
+        return _compact_baseline_code_for_patch(text, max_chars)
+    return text[:max_chars]
+
+
+def _compact_baseline_code_for_patch(text: str, max_chars: int) -> str:
+    wanted = {
+        "extract_title",
+        "FeatureBuilder",
+        "AgeMedianLookup",
+        "GroupedAgeImputer",
+        "build_pipeline",
+        "load_data",
+        "make_submission_frame",
+        "pipeline_summary",
+        "run_experiment",
+        "run_prediction",
+        "load_config",
+        "check_required_data",
+        "train",
+        "predict",
+        "_make_features",
+        "_build_pipeline",
+        "_single_holdout_split",
+    }
+    lines = text.splitlines()
+    blocks: list[tuple[str, int, int]] = []
+    starts: list[tuple[str, int]] = []
+    for index, line in enumerate(lines):
+        if line.startswith("def "):
+            name = line[4:].split("(", 1)[0].strip()
+            starts.append((name, index))
+        elif line.startswith("class "):
+            name = line[6:].split("(", 1)[0].split(":", 1)[0].strip()
+            starts.append((name, index))
+    for pos, (name, start) in enumerate(starts):
+        end = starts[pos + 1][1] if pos + 1 < len(starts) else len(lines)
+        blocks.append((name, start, end))
+
+    first_def = starts[0][1] if starts else min(len(lines), 80)
+    selected_lines = [
+        "# Compacted baseline.py for continuation patching.",
+        "# Contains imports/constants and the main functions most likely needed for safe find/replace patches.",
+        "",
+        *lines[:first_def],
+    ]
+    for name, start, end in blocks:
+        if name in wanted:
+            selected_lines.extend(["", f"# --- {name} ---", *lines[start:end]])
+    compact = "\n".join(selected_lines).strip() + "\n"
+    if len(compact) <= max_chars:
+        return compact
+    return compact[:max_chars] + "\n# ... compacted baseline.py truncated at prompt budget ...\n"
 
 
 def _allowed_readable_files(project_root: Path, allowed_paths: list[str], *, max_files: int) -> list[Path]:
@@ -645,6 +756,8 @@ def _compact_retrieval_context(context: dict[str, Any]) -> dict[str, Any]:
         "task": context.get("task"),
         "query": context.get("query"),
         "document_count": context.get("document_count"),
+        "skipped": bool(context.get("skipped")),
+        "skip_reason": context.get("skip_reason"),
         "context_pack_file": context.get("context_pack_file"),
         "context_pack_md_file": context.get("context_pack_md_file"),
         "retrieval_manifest_file": context.get("retrieval_manifest_file"),

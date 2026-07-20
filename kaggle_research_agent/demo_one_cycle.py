@@ -16,6 +16,7 @@ from .execution_profile import load_execution_profile, validate_execution_profil
 from .paths import competition_dir, competition_memory_dir, trial_dir
 from .policies import load_policy, select_model_for_call
 from .retrieval.context_pack import build_context_pack, context_pack_prompt_summary
+from .state_db_auto import sync_trial_state_after_finish
 from .store import load_recent_trials, load_state, now_iso, read_text, write_text
 from .trial_artifacts import organize_trial_artifacts, trial_artifact_path
 from .trial_decision import load_latest_decision_context, write_trial_decision_card
@@ -48,18 +49,7 @@ def run_demo_one_cycle(
     reporter.start("F-01", "Loading problem context", 1, "Reading Execution Profile, state, inventory, and recent file memory.")
     context = load_demo_context(competition, trial_id)
     context["model_policy"] = model_policy
-    context["planning_context_pack"] = _compact_context_pack(
-        build_context_pack(
-            competition,
-            trial_id,
-            task="experiment_planning",
-            query=(
-                "competition overview metric data notes source materials execution profile "
-                "competition data card data profile target id columns feature recommendations "
-                "previous trial plan metrics pipeline structure result"
-            ),
-        )
-    )
+    context["planning_context_pack"] = _build_planning_context_pack_if_needed(competition, trial_id, context)
     write_text(out_dir / "demo_context.json", json.dumps(context, ensure_ascii=False, indent=2) + "\n")
     write_text(out_dir / "demo_context.md", render_demo_context(context))
     if context["status"] != "ready":
@@ -936,6 +926,45 @@ def load_demo_context(competition: str, trial_id: str) -> dict[str, Any]:
     return context
 
 
+def _build_planning_context_pack_if_needed(competition: str, trial_id: str, context: dict[str, Any]) -> dict[str, Any]:
+    if not _should_use_planning_rag(context):
+        return {
+            "task": "experiment_planning",
+            "document_count": 0,
+            "documents": [],
+            "skipped": True,
+            "skip_reason": "active_axis_refinement_uses_structured_decision_context",
+        }
+    return _compact_context_pack(
+        build_context_pack(
+            competition,
+            trial_id,
+            task="experiment_planning",
+            query=(
+                "competition overview metric data notes source materials execution profile "
+                "competition data card data profile target id columns feature recommendations "
+                "previous trial plan metrics pipeline structure result"
+            ),
+        )
+    )
+
+
+def _should_use_planning_rag(context: dict[str, Any]) -> bool:
+    if not context.get("source_trial_id"):
+        return True
+    decision_context = context.get("decision_context") if isinstance(context.get("decision_context"), dict) else {}
+    active_axis = str(decision_context.get("active_axis") or "").strip()
+    try:
+        attempt_count = int(decision_context.get("axis_attempt_count") or 0)
+    except (TypeError, ValueError):
+        attempt_count = 0
+    try:
+        attempt_limit = int(decision_context.get("axis_attempt_limit") or 3)
+    except (TypeError, ValueError):
+        attempt_limit = 3
+    return not (active_axis and attempt_count < attempt_limit)
+
+
 def create_demo_experiment_plan(
     competition: str,
     trial_id: str,
@@ -1031,11 +1060,25 @@ def create_demo_experiment_plan(
 
 
 def build_demo_plan_payload(context: dict[str, Any], *, model: str) -> dict[str, Any]:
+    if _is_delta_patch_context(context):
+        return build_delta_plan_payload(context, model=model)
+
     context_pack = context.get("planning_context_pack", {})
     prompt_data_profile = _compact_data_profile_for_prompt(context.get("data_profile", {}))
     prompt_context = _compact_demo_context_for_prompt(context)
     recent_trials = context.get("recent_trials", [])
     source_trial_id = context.get("source_trial_id")
+    rag_skipped = bool(isinstance(context_pack, dict) and context_pack.get("skipped"))
+    evidence_instruction = (
+        [
+            "RAG is intentionally skipped for this active-axis refinement. Use decision_context, the source/base trial summary, rejected candidates, and the compact structured context instead.",
+            "Do not request broad historical evidence unless the active axis is exhausted or the current base pipeline is invalid.",
+        ]
+        if rag_skipped
+        else [
+            "Use the RAG context pack as evidence. Prefer concrete details from retrieved documents over generic ML advice.",
+        ]
+    )
     cycle_instruction = (
         "Create exactly one continuation delta plan for this ML workspace."
         if source_trial_id
@@ -1043,8 +1086,10 @@ def build_demo_plan_payload(context: dict[str, Any], *, model: str) -> dict[str,
     )
     continuation_instruction = (
         [
-            "This is not the first trial. Use previous trial evidence from the RAG context and structured context.",
+            "This is not the first trial. Use previous trial evidence from structured context and the RAG context only when it is provided.",
             f"The source trial is `{source_trial_id}`. Treat its pipeline as the base pipeline.",
+            "The source trial may be the best/base trial while decision_context.active_axis comes from a different failed trial.",
+            "When active_axis is present and axis_attempt_count is below axis_attempt_limit, apply a new candidate from that same axis on top of the source/base trial.",
             "Use decision_context before long notes: latest_decision_card, active_axis, recommended_base_trial, rejected_axes, rejected_candidates, and planner_constraints are the highest-priority evidence.",
             "If decision_context.active_axis is present, keep that same primary axis and choose a different candidate or parameter variant within the axis.",
             "Do not switch away from active_axis until the decision context explicitly marks that axis as rejected.",
@@ -1089,7 +1134,7 @@ def build_demo_plan_payload(context: dict[str, Any], *, model: str) -> dict[str,
                         "Return JSON with plan_type, plan_title, objective, rationale, implementation_notes, expected_outputs.",
                         "Keep the JSON concise but concrete: do not restate full evidence, avoid generic performance wording, and prefer short bullets with actual columns, split values, preprocessing, model, and output files.",
                         "For pipeline_blueprint/change_details, include only the planned pipeline facts needed by the coder and the next trial memory; avoid essay-style explanations.",
-                        "Use the RAG context pack as evidence. Prefer concrete details from retrieved documents over generic ML advice.",
+                        *evidence_instruction,
                         "Treat the compact data_profile and baseline_guardrails below as higher priority than broad RAG summaries for first-trial baseline design.",
                         "Mention the applied data, split, preprocessing, model, and output assumptions when they are available in evidence.",
                         *continuation_instruction,
@@ -1114,6 +1159,111 @@ def build_demo_plan_payload(context: dict[str, Any], *, model: str) -> dict[str,
             },
         ],
     }
+
+
+def build_delta_plan_payload(context: dict[str, Any], *, model: str) -> dict[str, Any]:
+    decision_context = context.get("decision_context") if isinstance(context.get("decision_context"), dict) else {}
+    compact_context = _compact_delta_context_for_prompt(context)
+    return {
+        "model": model,
+        "input": [
+            {
+                "role": "developer",
+                "content": "You choose one small ML pipeline patch. Return only compact JSON.",
+            },
+            {
+                "role": "user",
+                "content": "\n".join(
+                    [
+                        "Create exactly one delta_patch plan for the next trial.",
+                        "RAG is intentionally skipped for this active-axis refinement.",
+                        "This is not a new experiment design. Do not rewrite the baseline, full pipeline, or long rationale.",
+                        "Use the source/base trial as the code base.",
+                        "Keep the active_axis because its attempt_count is below attempt_limit.",
+                        "Do not switch away from active_axis before the attempt limit is reached.",
+                        "keep that same primary axis; do not switch away from active_axis before the attempt limit is reached.",
+                        "Choose one new candidate or parameter variant inside active_axis; choose a different candidate or parameter variant within the axis.",
+                        "Do not repeat rejected candidates.",
+                        "Do not repeat any rejected_candidate listed in the context.",
+                        "Change exactly one primary axis and keep split/model/preprocessing unchanged unless the active axis explicitly targets them.",
+                        "Return JSON with exactly these top-level fields:",
+                        "plan_type, plan_title, source_trial_id, primary_change_axis, candidate, do_not_repeat, keep_unchanged, change_details, code_change_targets, success_criteria, failure_decision, expected_outputs.",
+                        "Keep every list short. candidate must include name, description, and implementation_hint.",
+                        "",
+                        "## Delta Context",
+                        "",
+                        json.dumps(compact_context, ensure_ascii=False, indent=2),
+                        "",
+                        "## Active Axis State",
+                        "",
+                        json.dumps(
+                            {
+                                "active_axis": decision_context.get("active_axis"),
+                                "axis_attempt_count": decision_context.get("axis_attempt_count"),
+                                "axis_attempt_limit": decision_context.get("axis_attempt_limit"),
+                                "recommended_base_trial": decision_context.get("recommended_base_trial"),
+                                "active_axis_rejected_candidates": decision_context.get("active_axis_rejected_candidates", []),
+                            },
+                            ensure_ascii=False,
+                            indent=2,
+                        ),
+                    ]
+                ),
+            },
+        ],
+    }
+
+
+def _compact_delta_context_for_prompt(context: dict[str, Any]) -> dict[str, Any]:
+    decision_context = context.get("decision_context") if isinstance(context.get("decision_context"), dict) else {}
+    latest = decision_context.get("latest_decision_card") if isinstance(decision_context.get("latest_decision_card"), dict) else {}
+    best = decision_context.get("best_decision_card") if isinstance(decision_context.get("best_decision_card"), dict) else {}
+    data_profile = context.get("data_profile") if isinstance(context.get("data_profile"), dict) else {}
+    return {
+        "competition": context.get("competition"),
+        "trial_id": context.get("trial_id"),
+        "plan_type": "delta_patch",
+        "source_trial_id": context.get("source_trial_id"),
+        "metric": context.get("metric"),
+        "objective": context.get("objective"),
+        "target_column": data_profile.get("target_column"),
+        "id_column": data_profile.get("id_column"),
+        "base_trial": {
+            "trial_id": context.get("source_trial_id"),
+            "local_score": best.get("local_score"),
+            "change_axis": best.get("change_axis"),
+        },
+        "latest_trial": {
+            "trial_id": latest.get("trial_id"),
+            "decision": latest.get("decision"),
+            "local_score": latest.get("local_score"),
+            "change_axis": latest.get("change_axis"),
+            "candidate_label": latest.get("candidate_label"),
+        },
+        "active_axis": decision_context.get("active_axis"),
+        "axis_attempt_count": decision_context.get("axis_attempt_count"),
+        "axis_attempt_limit": decision_context.get("axis_attempt_limit"),
+        "rejected_axes": decision_context.get("rejected_axes", []),
+        "rejected_candidates_by_axis": decision_context.get("rejected_candidates_by_axis", {}),
+        "active_axis_rejected_candidates": decision_context.get("active_axis_rejected_candidates", []),
+        "planner_constraints": decision_context.get("planner_constraints", []),
+    }
+
+
+def _is_delta_patch_context(context: dict[str, Any]) -> bool:
+    if not context.get("source_trial_id"):
+        return False
+    decision_context = context.get("decision_context") if isinstance(context.get("decision_context"), dict) else {}
+    active_axis = str(decision_context.get("active_axis") or "").strip()
+    try:
+        attempt_count = int(decision_context.get("axis_attempt_count") or 0)
+    except (TypeError, ValueError):
+        attempt_count = 0
+    try:
+        attempt_limit = int(decision_context.get("axis_attempt_limit") or 3)
+    except (TypeError, ValueError):
+        attempt_limit = 3
+    return bool(active_axis and attempt_count < attempt_limit)
 
 
 def record_demo_cycle_result(
@@ -1328,7 +1478,7 @@ def render_demo_plan(plan: dict[str, Any]) -> str:
         plan.get("rationale", ""),
         "",
     ]
-    if plan_type == "continuation_delta_plan":
+    if plan_type in {"continuation_delta_plan", "delta_patch"}:
         lines.extend(
             [
                 "## Primary Change Axis",
@@ -1363,7 +1513,7 @@ def render_demo_plan(plan: dict[str, Any]) -> str:
     lines.extend(f"- {item}" for item in _normalize_plan_items(plan.get("implementation_notes")) or ["None"])
     lines.extend(["", "## Success Criteria", ""])
     lines.extend(f"- {item}" for item in _normalize_plan_items(plan.get("success_criteria")) or ["None"])
-    if plan_type == "continuation_delta_plan":
+    if plan_type in {"continuation_delta_plan", "delta_patch"}:
         lines.extend(["", "## Failure Decision", ""])
         lines.extend(f"- {item}" for item in _normalize_plan_items(plan.get("failure_decision")) or ["None"])
     lines.extend(["", "## Expected Outputs", ""])
@@ -1429,6 +1579,9 @@ def _write_plan_result(competition: str, trial_id: str, plan: dict[str, Any]) ->
     write_text(out_dir / "demo_experiment_plan.md", render_demo_plan(plan))
     if plan.get("status") == "ready":
         write_text(out_dir / "next_experiment.md", render_demo_plan(plan))
+        if plan.get("plan_type") == "delta_patch":
+            write_text(out_dir / "delta_plan.json", json.dumps(_delta_plan_contract(plan), ensure_ascii=False, indent=2) + "\n")
+            write_text(out_dir / "delta_plan.md", render_delta_plan_contract(plan))
     log_decision(
         competition,
         trial_id,
@@ -1444,6 +1597,57 @@ def _write_plan_result(competition: str, trial_id: str, plan: dict[str, Any]) ->
         next_action=plan["next_action"],
     )
     return plan
+
+
+def _delta_plan_contract(plan: dict[str, Any]) -> dict[str, Any]:
+    candidate = plan.get("candidate") if isinstance(plan.get("candidate"), dict) else {}
+    return {
+        "schema_version": "1.0",
+        "plan_type": "delta_patch",
+        "trial_id": plan.get("trial_id"),
+        "source_trial_id": plan.get("source_trial_id"),
+        "primary_change_axis": plan.get("primary_change_axis"),
+        "candidate": {
+            "name": candidate.get("name") or plan.get("plan_title"),
+            "description": candidate.get("description") or "",
+            "implementation_hint": candidate.get("implementation_hint") or "",
+        },
+        "do_not_repeat": _normalize_plan_items(plan.get("do_not_repeat")),
+        "keep_unchanged": _normalize_plan_items(plan.get("keep_unchanged")),
+        "change_details": _normalize_plan_items(plan.get("change_details")),
+        "code_change_targets": _normalize_plan_items(plan.get("code_change_targets")),
+        "success_criteria": _normalize_plan_items(plan.get("success_criteria")),
+        "failure_decision": _normalize_plan_items(plan.get("failure_decision")),
+        "expected_outputs": _normalize_plan_items(plan.get("expected_outputs")),
+    }
+
+
+def render_delta_plan_contract(plan: dict[str, Any]) -> str:
+    contract = _delta_plan_contract(plan)
+    candidate = contract["candidate"]
+    lines = [
+        f"# {contract.get('trial_id')} Delta Patch Plan",
+        "",
+        f"- base/source trial: {contract.get('source_trial_id')}",
+        f"- active axis: {contract.get('primary_change_axis')}",
+        f"- candidate: {candidate.get('name')}",
+        f"- description: {candidate.get('description')}",
+        f"- implementation_hint: {candidate.get('implementation_hint')}",
+        "",
+        "## Do Not Repeat",
+        "",
+    ]
+    lines.extend(f"- {item}" for item in contract.get("do_not_repeat", []) or ["None"])
+    lines.extend(["", "## Change Details", ""])
+    lines.extend(f"- {item}" for item in contract.get("change_details", []) or ["None"])
+    lines.extend(["", "## Keep Unchanged", ""])
+    lines.extend(f"- {item}" for item in contract.get("keep_unchanged", []) or ["None"])
+    lines.extend(["", "## Code Change Targets", ""])
+    lines.extend(f"- {item}" for item in contract.get("code_change_targets", []) or ["None"])
+    lines.extend(["", "## Success Criteria", ""])
+    lines.extend(f"- {item}" for item in contract.get("success_criteria", []) or ["None"])
+    lines.append("")
+    return "\n".join(lines)
 
 
 def _finish(
@@ -1472,6 +1676,9 @@ def _finish(
     )
     if artifact_summary is not None:
         result["artifact_summary"] = artifact_summary
+    result["state_db_sync"] = sync_trial_state_after_finish(competition, trial_id)
+    write_text(out_dir / "demo_one_cycle.json", json.dumps(result, ensure_ascii=False, indent=2) + "\n")
+    write_text(out_dir / "demo_one_cycle.md", render_demo_cycle(result))
     return result
 
 
@@ -1899,6 +2106,8 @@ def _normalize_plan(plan: dict[str, Any], context: dict[str, Any]) -> dict[str, 
     normalized.setdefault("failure_decision", [])
     normalized.setdefault("implementation_notes", [])
     normalized.setdefault("expected_outputs", ["metrics.json", "submission.csv"])
+    normalized.setdefault("candidate", {})
+    normalized.setdefault("do_not_repeat", [])
     normalized.setdefault("issues", [])
     normalized["plan_title"] = _normalize_plan_text(normalized.get("plan_title"))
     normalized["objective"] = _normalize_plan_text(normalized.get("objective"))
@@ -1912,6 +2121,15 @@ def _normalize_plan(plan: dict[str, Any], context: dict[str, Any]) -> dict[str, 
     normalized["failure_decision"] = _normalize_plan_items(normalized.get("failure_decision"))
     normalized["implementation_notes"] = _normalize_plan_items(normalized.get("implementation_notes"))
     normalized["expected_outputs"] = _normalize_plan_items(normalized.get("expected_outputs"))
+    normalized["do_not_repeat"] = _normalize_plan_items(normalized.get("do_not_repeat"))
+    if not isinstance(normalized.get("candidate"), dict):
+        normalized["candidate"] = {"name": _normalize_plan_text(normalized.get("candidate"))}
+    else:
+        normalized["candidate"] = {
+            "name": _normalize_plan_text(normalized["candidate"].get("name")),
+            "description": _normalize_plan_text(normalized["candidate"].get("description")),
+            "implementation_hint": _normalize_plan_text(normalized["candidate"].get("implementation_hint")),
+        }
     if plan_type == "continuation_delta_plan":
         _promote_implementation_notes(normalized)
     if not isinstance(normalized["issues"], list):

@@ -187,9 +187,9 @@ DEFAULT_POLICIES: dict[str, dict[str, Any]] = {
                 ],
             },
             "workspace_code_writing": {
-                "max_documents": 4,
-                "max_chars_per_document": 1000,
-                "prompt_chars_per_document": 700,
+                "max_documents": 3,
+                "max_chars_per_document": 750,
+                "prompt_chars_per_document": 450,
                 "preferred_source_kinds": [
                     "competition_data_card",
                     "data_profile",

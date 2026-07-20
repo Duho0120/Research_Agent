@@ -38,6 +38,7 @@ Completed:
 - Graph-backed demo runs also write `graph_rag_manifest.json/md`, tying the executed LangGraph nodes to the planning/coding RAG context packs and their retrieval manifests for easier audit and debugging.
 - File-based RAG groundwork is available through `build-retrieval-index` and `retrieve-documents`: competition docs, memory logs, trial metrics, pipeline structures, and user-facing trial summaries can be indexed into `memory/<competition>/document_index.jsonl`.
 - Planner/coder LLM calls now have a RAG context-pack path: demo planning writes `context_pack_experiment_planning.*`, while workspace coding handoff writes `context_pack_workspace_code_writing.*` and `retrieval_manifest_workspace_code_writing.json` so later prompts can cite retrieved evidence instead of relying on raw file dumps.
+- Sequential trials now separate the best/base trial from the active improvement axis: if an active axis has fewer than three failed attempts, the next plan starts from the best/base code but keeps refining that same axis, and planning RAG is skipped in favor of compact decision context.
 - Policy files under `configs/policies/` control token use, execution decisions, and human-review decisions.
 - Research Operating Protocol now provides a small domain-neutral flow: current state, evidence, issues, candidate actions, constraints, user questions, and execution plan are written before code-oriented follow-up. Competition-specific checks are opt-in.
 - Execution Profile provides a competition-neutral contract for an external project root, Python runtime, test/train/predict commands, expected artifacts, and allowed/forbidden write scope. Validation does not execute the project.
@@ -60,6 +61,7 @@ Completed:
 - `demo-guide` provides a demo-only interactive CMD flow that lists registered experiments, guides new workspace creation, asks the user to place manual data files, and then starts the LangGraph/RAG-backed one-cycle demo path when OpenAI API execution is explicitly confirmed.
 - Demo guide execution uses the OpenAI Responses API with `OPENAI_API_KEY` and overrides the one-cycle provider/model to `openai` / `gpt-5.5`; low-cost policy calls remain on OpenAI `gpt-5.6-luna`.
 - Demo guide can start from a competition URL. It attempts a lightweight page read and infers simple defaults such as Kaggle slug/platform; when the page is unreadable or dynamic, it now asks for only one optional `source_summary` instead of several separate problem/data/submission/evaluation/rule prompts. That summary is saved to `source_materials.md/json`, `overview.md`, `data_notes.md`, and `metric.md`, then included in the one-cycle planning context.
+- DB/UI/message integration is planned as an additive state and retrieval layer; the design is tracked in `docs/DB_UI_MESSAGE_ARCHITECTURE.ko.md`.
 - The policy gate records local/Colab/wait/ask_user execution decisions and LLM call/skip decisions in `decision_log.jsonl`.
 - Human Review now has a closed feedback loop: `request-review` creates a review pack, `record-feedback` updates that pack, and `plan-next` can use recent user feedback.
 - Failed local runs now write `local_failure.json/md`, and the execution policy gate uses that structured artifact before falling back to raw log pattern matching.
@@ -152,7 +154,10 @@ Still pending:
 - Automatic submission policy beyond `never` / `prepare_only`.
 - Real-world validation of the code-writer API path with a live key and a deliberately small approved patch.
 - Full LangGraph auto-loop replacement; the current graph command covers the one-trial cycle first.
-- SQLite remains postponed; current demo/state artifacts are intentionally file-based (`json`, `jsonl`, `md`) so they are easy to inspect and can be migrated later if needed.
+- Full SQLite integration remains staged; the minimal `state_db` storage layer is available, while current demo/state artifacts remain file-based (`json`, `jsonl`, `md`) so they are easy to inspect and can be synchronized into SQLite incrementally.
+- `sync-state-db` can rebuild `memory/research_agent.sqlite3` from existing file-based competition, trial, artifact, token, and submission records.
+- `list-experiments`, `show-experiment`, and `show-trial` provide UI-ready state summaries from SQLite, with optional `--json` output for later dashboard or messenger integration.
+- Demo and workspace result completion now run best-effort SQLite sync automatically; manual `--sync` remains useful for rebuilding or backfilling older file-based records.
 
 Latest verified baseline:
 
