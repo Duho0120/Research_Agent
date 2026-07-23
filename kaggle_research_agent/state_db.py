@@ -12,7 +12,7 @@ from . import paths
 from .store import now_iso
 
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 
 
 def default_db_path() -> Path:
@@ -45,6 +45,7 @@ def initialize_state_db(db_path: Path | None = None) -> Path:
     path = db_path or default_db_path()
     with state_db_connection(path) as connection:
         connection.executescript(_schema_sql())
+        _ensure_schema_columns(connection)
         connection.execute(
             """
             INSERT INTO schema_meta (key, value, updated_at)
@@ -118,6 +119,7 @@ def upsert_trial(record: dict[str, Any], db_path: Path | None = None) -> dict[st
             "source_trial_id": record.get("source_trial_id"),
             "recommended_base_trial": record.get("recommended_base_trial"),
             "plan_type": record.get("plan_type"),
+            "plan_summary": record.get("plan_summary"),
             "primary_change_axis": record.get("primary_change_axis"),
             "created_at": created_at,
             "updated_at": record.get("updated_at") or timestamp,
@@ -126,17 +128,18 @@ def upsert_trial(record: dict[str, Any], db_path: Path | None = None) -> dict[st
             """
             INSERT INTO trials (
                 competition_id, trial_id, status, source_trial_id, recommended_base_trial,
-                plan_type, primary_change_axis, created_at, updated_at
+                plan_type, plan_summary, primary_change_axis, created_at, updated_at
             )
             VALUES (
                 :competition_id, :trial_id, :status, :source_trial_id, :recommended_base_trial,
-                :plan_type, :primary_change_axis, :created_at, :updated_at
+                :plan_type, :plan_summary, :primary_change_axis, :created_at, :updated_at
             )
             ON CONFLICT(competition_id, trial_id) DO UPDATE SET
                 status = excluded.status,
                 source_trial_id = excluded.source_trial_id,
                 recommended_base_trial = excluded.recommended_base_trial,
                 plan_type = excluded.plan_type,
+                plan_summary = excluded.plan_summary,
                 primary_change_axis = excluded.primary_change_axis,
                 updated_at = excluded.updated_at
             """,
@@ -491,11 +494,17 @@ def get_best_trial(competition_id: str, db_path: Path | None = None, *, prefer_l
     decoded = [_decode_row(dict(row)) for row in rows]
     if not decoded:
         return None
-    flagged = [row for row in decoded if row.get(best_column)]
-    pool = flagged or decoded
-    objective = str((pool[0].get("objective") or "maximize")).lower()
+    objective = str((decoded[0].get("objective") or "maximize")).lower()
     reverse = objective != "minimize"
-    return sorted(pool, key=lambda row: row.get(score_column), reverse=reverse)[0]
+    return sorted(
+        decoded,
+        key=lambda row: (
+            row.get(score_column),
+            bool(row.get(best_column)),
+            str(row.get("trial_id") or ""),
+        ),
+        reverse=reverse,
+    )[0]
 
 
 def list_pending_actions(
@@ -542,6 +551,7 @@ def _schema_sql() -> str:
         source_trial_id TEXT,
         recommended_base_trial TEXT,
         plan_type TEXT,
+        plan_summary TEXT,
         primary_change_axis TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
@@ -652,14 +662,26 @@ def _schema_sql() -> str:
 
 def _ensure_schema(connection: sqlite3.Connection) -> None:
     connection.executescript(_schema_sql())
+    _ensure_schema_columns(connection)
     connection.execute(
         """
         INSERT INTO schema_meta (key, value, updated_at)
         VALUES ('schema_version', ?, ?)
-        ON CONFLICT(key) DO NOTHING
+        ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value,
+            updated_at = excluded.updated_at
         """,
         (SCHEMA_VERSION, now_iso()),
     )
+
+
+def _ensure_schema_columns(connection: sqlite3.Connection) -> None:
+    trial_columns = {
+        str(row["name"])
+        for row in connection.execute("PRAGMA table_info(trials)").fetchall()
+    }
+    if "plan_summary" not in trial_columns:
+        connection.execute("ALTER TABLE trials ADD COLUMN plan_summary TEXT")
 
 
 def _ensure_competition(connection: sqlite3.Connection, competition_id: str) -> None:

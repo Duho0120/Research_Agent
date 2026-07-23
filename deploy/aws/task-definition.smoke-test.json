@@ -1,0 +1,42 @@
+{
+  "family": "research-agent-smoke-test",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048",
+  "executionRoleArn": "arn:aws:iam::961341521085:role/research-agent-ecs-execution-role",
+  "containerDefinitions": [
+    {
+      "name": "research-agent",
+      "image": "961341521085.dkr.ecr.ap-northeast-2.amazonaws.com/research-agent:latest",
+      "essential": true,
+      "workingDirectory": "/app",
+      "command": [
+        "python",
+        "-B",
+        "-m",
+        "kaggle_research_agent.cli_app",
+        "--no-sync",
+        "--status"
+      ],
+      "environment": [
+        {
+          "name": "RESEARCH_AGENT_STORAGE_DIR",
+          "value": "/tmp/research-agent"
+        },
+        {
+          "name": "RESEARCH_AGENT_RUNTIME_DIR",
+          "value": "/tmp/research-agent/runtime"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/research-agent",
+          "awslogs-region": "ap-northeast-2",
+          "awslogs-stream-prefix": "smoke"
+        }
+      }
+    }
+  ]
+}

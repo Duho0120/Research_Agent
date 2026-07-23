@@ -4,6 +4,7 @@ import json
 import re
 from typing import Any
 
+from .execution_facts import load_executed_trial_facts, resolve_trial_plan
 from .paths import competition_memory_dir, trial_dir
 from .store import now_iso, write_text
 
@@ -21,7 +22,8 @@ def write_trial_memory_card(
     decision_card: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     out_dir = trial_dir(competition, trial_id)
-    plan = plan or _load_trial_json(out_dir, "demo_experiment_plan.json")
+    facts = load_executed_trial_facts(competition, trial_id)
+    plan = plan or resolve_trial_plan(competition, trial_id)
     metrics = metrics or _load_trial_json(out_dir, "metrics.json")
     decision_card = decision_card or _load_trial_json(out_dir, "decision_card.json")
     card = {
@@ -30,9 +32,9 @@ def write_trial_memory_card(
         "trial_id": trial_id,
         "created_at": now_iso(),
         "plan_type": plan.get("plan_type"),
-        "source_trial_id": plan.get("source_trial_id") or decision_card.get("source_trial_id"),
+        "source_trial_id": plan.get("source_trial_id") or facts.get("source_trial_id") or decision_card.get("source_trial_id"),
         "plan_title": plan.get("plan_title"),
-        "change_axis": plan.get("primary_change_axis") or decision_card.get("change_axis"),
+        "change_axis": plan.get("primary_change_axis") or facts.get("primary_change_axis") or decision_card.get("change_axis"),
         "candidate_label": decision_card.get("candidate_label"),
         "change_details": _first_items(plan.get("change_details"), limit=4),
         "kept_unchanged": _first_items(plan.get("keep_unchanged"), limit=5),
@@ -54,8 +56,10 @@ def write_trial_memory_card(
         "feature_columns": _first_items(metrics.get("feature_columns", []), limit=30),
         "numeric_features": _first_items((metrics.get("preprocessing") or {}).get("numeric_features", []), limit=20),
         "categorical_features": _first_items((metrics.get("preprocessing") or {}).get("categorical_features", []), limit=20),
-        "model_type": metrics.get("model_type"),
-        "split": metrics.get("split", {}),
+        "model_type": (facts.get("model") or {}).get("estimator") or metrics.get("model_type") or metrics.get("model"),
+        "model": facts.get("model") or {},
+        "split": facts.get("validation") or metrics.get("split", {}),
+        "consistency_issues": facts.get("consistency_issues") or [],
         "next_guidance": decision_card.get("next_guidance"),
     }
     _write_files(competition, trial_id, card)
@@ -81,6 +85,7 @@ def render_trial_memory_card(card: dict[str, Any]) -> str:
         f"- axis_attempt_count: {card.get('axis_attempt_count')}/{card.get('axis_attempt_limit')}",
         f"- recommended_base_trial: {card.get('recommended_base_trial')}",
         f"- model_type: {card.get('model_type')}",
+        f"- model: {card.get('model')}",
         f"- split: {card.get('split')}",
         "",
         "## Change Details",

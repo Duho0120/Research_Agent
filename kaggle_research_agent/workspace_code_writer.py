@@ -12,6 +12,7 @@ from .code_snapshot import load_trial_code_snapshot, save_trial_code_snapshot
 from .paths import trial_dir
 from .store import read_text, write_text
 from .trial_artifacts import trial_artifact_path
+from .user_insight_policy import validate_user_insight_code_result
 
 
 def run_workspace_code_writer(
@@ -102,6 +103,7 @@ def validate_workspace_coding_result(competition: str, trial_id: str) -> dict[st
     issues.extend(_validate_changed_files(coding_result, handoff))
     issues.extend(_validate_file_updates(coding_result, handoff))
     issues.extend(_validate_patch_updates(coding_result, handoff))
+    issues.extend(validate_user_insight_code_result(competition, trial_id, coding_result))
     result = {
         "competition": competition,
         "trial_id": trial_id,
@@ -214,12 +216,12 @@ def _build_prompt(handoff: dict[str, Any]) -> str:
             "Block only when the provided context is insufficient to produce a safe allowed-path update.",
             "",
             "Output budget for continuation/patch-only coding:",
-            "- Return at most 2 patch_updates. Prefer 1 patch_update when the change is local.",
+            f"- Return at most {_patch_budget(handoff)} patch_updates. Prefer 1 patch_update when the change is local.",
             "- Each patch_update.reason must be one short sentence.",
             "- summary must be at most 2 short sentences and must name only the actual code change.",
             "- validation_results must be [] because the local agent runs validation after applying your response.",
             "- Do not include unchanged code, long explanations, markdown, duplicate fallback file_updates, or analysis prose.",
-            "- If the requested change needs more than 2 localized patches, return status=blocked with blocking_issues ['too_many_patch_updates_for_budget'].",
+            f"- If the requested change needs more than {_patch_budget(handoff)} localized patches, return status=blocked with blocking_issues ['too_many_patch_updates_for_budget'].",
             "",
             "Use the RAG context pack and retrieval manifest when present. Prefer concrete retrieved evidence over generic changes.",
             "Your summary should state the actual pipeline changes you implemented, not only a generic performance goal.",
@@ -231,6 +233,8 @@ def _build_prompt(handoff: dict[str, Any]) -> str:
             "If concrete target/id/feature recommendations are present, implement those concrete columns instead of broad automatic feature inclusion.",
             "If the next experiment is a continuation_delta_plan, modify the existing pipeline incrementally.",
             "For continuation trials, implement the declared primary_change_axis and keep the keep_unchanged items fixed unless the plan explicitly says otherwise.",
+            "When delta_plan.expected_metadata_changes names model, features, split, trial_id, or source_trial_id, update the runtime-produced metadata in the same patch set or derive it from the executed estimator instead of leaving stale literals.",
+            "Do not hard-code an old trial_id or source_trial_id into newly changed experiment metadata.",
             "If continuation_context.decision_context lists rejected_axes or planner_constraints, do not preserve rejected changes from the latest trial; start from the recommended base evidence and apply only the new primary axis.",
             "When edit_policy.restore_base_before_patch is true, the local agent will restore the saved base trial code before applying your patch.",
             "Do not rewrite unrelated pipeline stages just to make a fresh baseline.",
@@ -279,7 +283,8 @@ def _build_delta_patch_prompt(handoff: dict[str, Any]) -> str:
             "- Change only the delta_plan candidate.",
             "- Do not repeat rejected candidates listed in delta_plan.",
             "- Keep model, split, preprocessing, and unrelated features unchanged unless delta_plan explicitly targets them.",
-            "- Return at most 2 patch_updates.",
+            "- Keep runtime metadata synchronized with the changed estimator, features, split, and current trial context listed in expected_metadata_changes.",
+            f"- Return at most {_patch_budget(handoff)} patch_updates.",
             "- If exact target code is not visible, return blocked with a precise blocking issue.",
             "",
             f"Competition: {handoff.get('competition')}",
@@ -327,6 +332,8 @@ def _context_file_prompt_limit(path: str, *, handoff: dict[str, Any] | None = No
     if name == "next_experiment.md":
         return 3000
     if name == "workspace_context_snapshot.md":
+        if _is_expanded_retry_handoff(handoff):
+            return 52000
         if _is_delta_patch_handoff(handoff):
             return 9500
         if _is_patch_only_context(handoff):
@@ -342,6 +349,12 @@ def _is_patch_only_context(handoff: dict[str, Any] | None) -> bool:
         return False
     policy = handoff.get("edit_policy") if isinstance(handoff.get("edit_policy"), dict) else {}
     return policy.get("mode") == "patch_only" and bool(policy.get("base_code_source"))
+
+
+def _is_expanded_retry_handoff(handoff: dict[str, Any] | None) -> bool:
+    if not isinstance(handoff, dict):
+        return False
+    return handoff.get("snapshot_mode") == "expanded_after_code_writer_blocked"
 
 
 def _is_delta_patch_handoff(handoff: dict[str, Any] | None) -> bool:
@@ -495,7 +508,7 @@ def _apply_patch_updates(coding_result: dict[str, Any], handoff: dict[str, Any])
         return []
     if not isinstance(updates, list):
         return ["invalid_type:patch_updates"]
-    if _is_patch_only(handoff) and len(updates) > 2:
+    if _is_patch_only(handoff) and len(updates) > _patch_budget(handoff):
         return [f"too_many_patch_updates_for_budget:{len(updates)}"]
     issues: list[str] = []
     project_root = Path(str(handoff.get("project_root", "")))
@@ -709,7 +722,7 @@ def _validate_patch_updates(coding_result: dict[str, Any], handoff: dict[str, An
     if not isinstance(updates, list):
         return ["invalid_type:patch_updates"]
     issues: list[str] = []
-    if _is_patch_only(handoff) and len(updates) > 2:
+    if _is_patch_only(handoff) and len(updates) > _patch_budget(handoff):
         issues.append(f"too_many_patch_updates_for_budget:{len(updates)}")
     for update in updates:
         path = update.get("path") if isinstance(update, dict) else None
@@ -730,6 +743,15 @@ def _allow_full_file_updates(handoff: dict[str, Any]) -> bool:
 def _is_patch_only(handoff: dict[str, Any]) -> bool:
     policy = handoff.get("edit_policy") if isinstance(handoff.get("edit_policy"), dict) else {}
     return policy.get("mode") == "patch_only"
+
+
+def _patch_budget(handoff: dict[str, Any]) -> int:
+    policy = handoff.get("edit_policy") if isinstance(handoff.get("edit_policy"), dict) else {}
+    try:
+        budget = int(policy.get("patch_budget") or 2)
+    except (TypeError, ValueError):
+        budget = 2
+    return min(max(budget, 1), 6)
 
 
 def _path_scope_issues(path: str, handoff: dict[str, Any], *, update_label: str) -> list[str]:

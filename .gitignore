@@ -23,6 +23,8 @@ Thumbs.db
 
 # Packaged submission archives
 *.zip
+_archive/
+_release_staging/
 
 # Runtime logs
 *.log

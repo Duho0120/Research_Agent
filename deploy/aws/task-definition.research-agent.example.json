@@ -1,0 +1,70 @@
+{
+  "family": "research-agent-worker",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "2048",
+  "memory": "4096",
+  "executionRoleArn": "arn:aws:iam::<account-id>:role/research-agent-ecs-execution-role",
+  "taskRoleArn": "arn:aws:iam::<account-id>:role/research-agent-task-role",
+  "containerDefinitions": [
+    {
+      "name": "research-agent",
+      "image": "<account-id>.dkr.ecr.<region>.amazonaws.com/research-agent:latest",
+      "essential": true,
+      "workingDirectory": "/app",
+      "environment": [
+        {
+          "name": "RESEARCH_AGENT_STORAGE_DIR",
+          "value": "/mnt/research-agent/users/<user-id>/<competition>"
+        },
+        {
+          "name": "RESEARCH_AGENT_RUNTIME_DIR",
+          "value": "/mnt/research-agent/users/<user-id>/<competition>/runtime"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "OPENAI_API_KEY",
+          "valueFrom": "arn:aws:secretsmanager:<region>:<account-id>:secret:research-agent/<user-id>/openai"
+        },
+        {
+          "name": "KAGGLE_USERNAME",
+          "valueFrom": "arn:aws:secretsmanager:<region>:<account-id>:secret:research-agent/<user-id>/kaggle-username"
+        },
+        {
+          "name": "KAGGLE_KEY",
+          "valueFrom": "arn:aws:secretsmanager:<region>:<account-id>:secret:research-agent/<user-id>/kaggle-key"
+        }
+      ],
+      "mountPoints": [
+        {
+          "sourceVolume": "researchAgentEfs",
+          "containerPath": "/mnt/research-agent",
+          "readOnly": false
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/research-agent",
+          "awslogs-region": "<region>",
+          "awslogs-stream-prefix": "worker"
+        }
+      }
+    }
+  ],
+  "volumes": [
+    {
+      "name": "researchAgentEfs",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "fs-xxxxxxxxxxxxxxxxx",
+        "rootDirectory": "/",
+        "transitEncryption": "ENABLED",
+        "authorizationConfig": {
+          "accessPointId": "fsap-xxxxxxxxxxxxxxxxx",
+          "iam": "ENABLED"
+        }
+      }
+    }
+  ]
+}

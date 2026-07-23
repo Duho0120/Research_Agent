@@ -8,8 +8,10 @@ from .. import paths
 from ..integrations import kaggle_cli
 from ..paths import competition_memory_dir, competition_submissions_dir, experiments_dir, trial_dir
 from ..store import load_state, now_iso, save_state, write_text
+from ..trial_artifacts import prepare_trial_execution_facts
 from ..trial_decision import write_trial_decision_card
 from ..trial_memory_card import write_trial_memory_card
+from ..user_insight_policy import evaluate_user_insight_submission
 
 
 def record_submission_result(
@@ -54,6 +56,13 @@ def record_submission_result(
     }
     _append_submission_log(competition, row)
     _write_trial_files(competition, trial_id, row)
+    prepare_trial_execution_facts(competition, trial_id)
+    evaluate_user_insight_submission(
+        competition,
+        trial_id,
+        submitted_lb_score,
+        objective=objective,
+    )
     decision_card = write_trial_decision_card(
         competition,
         trial_id,

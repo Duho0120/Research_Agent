@@ -208,19 +208,17 @@ class TrialArtifactsTest(unittest.TestCase):
             self.assertTrue((trial / "internal" / "workspace_run.json").exists())
             self.assertTrue((trial / "internal" / "pipeline_structure.json").exists())
             self.assertTrue(trial_artifact_exists(trial, "workspace_run.json"))
-            self.assertTrue((trial / "user_view" / "README.ko.md").exists())
             self.assertTrue((trial / "user_view" / "01_plan.ko.md").exists())
             self.assertTrue((trial / "user_view" / "02_pipeline_structure.ko.md").exists())
-            self.assertTrue((trial / "user_view" / "03_code_pipeline.ko.md").exists())
-            self.assertTrue((trial / "user_view" / "04_result.ko.md").exists())
-            self.assertTrue((trial / "user_view" / "05_submission.ko.md").exists())
-            self.assertTrue((trial / "user_view" / "00_summary_card.ko.md").exists())
+            self.assertTrue((trial / "user_view" / "03_scores.ko.md").exists())
+            self.assertEqual(
+                {"01_plan.ko.md", "02_pipeline_structure.ko.md", "03_scores.ko.md"},
+                {path.name for path in (trial / "user_view").iterdir()},
+            )
             self.assertTrue((trial / "internal" / "low_cost_user_summary_card.json").exists())
             self.assertEqual("ready", result["low_cost_user_summary"]["status"])
             token_usage = (root / "memory" / "demo" / "token_usage.jsonl").read_text(encoding="utf-8")
             self.assertIn('"call_type": "user_summary_card"', token_usage)
-            user_readme = (trial / "user_view" / "README.ko.md").read_text(encoding="utf-8")
-            self.assertIn("사용자가 바로 확인할 핵심 산출물", user_readme)
             structure = json.loads((trial / "internal" / "pipeline_structure.json").read_text(encoding="utf-8"))
             self.assertEqual("1.0", structure["schema_version"])
             self.assertTrue(any(stage["id"] == "data_split_cv" for stage in structure["stages"]))
@@ -247,35 +245,32 @@ class TrialArtifactsTest(unittest.TestCase):
             )
             self.assertFalse(augmentation["included"])
             browse = root / "runs" / "demo" / "trial_001"
-            self.assertTrue((browse / "README.ko.md").exists())
             self.assertTrue((browse / "01_plan.ko.md").exists())
             self.assertTrue((browse / "02_pipeline_structure.ko.md").exists())
-            self.assertTrue((browse / "03_code_pipeline.ko.md").exists())
-            self.assertTrue((browse / "04_result.ko.md").exists())
-            self.assertTrue((browse / "05_submission.ko.md").exists())
-            self.assertTrue((browse / "06_paths.ko.md").exists())
+            self.assertTrue((browse / "03_scores.ko.md").exists())
+            self.assertEqual(
+                {"01_plan.ko.md", "02_pipeline_structure.ko.md", "03_scores.ko.md"},
+                {path.name for path in browse.iterdir()},
+            )
             self.assertTrue((root / "runs" / "demo" / "README.ko.md").exists())
             user_plan = (browse / "01_plan.ko.md").read_text(encoding="utf-8")
             user_structure = (browse / "02_pipeline_structure.ko.md").read_text(encoding="utf-8")
             self.assertIn("## 목적", user_plan)
             self.assertNotIn("평가: `cv_score`", user_plan)
-            self.assertIn("재현 가능한 첫 baseline 파이프라인을 만들고", user_plan)
-            self.assertIn("다음 항목은 이번 회차에서 사용하지 않습니다", user_plan)
-            self.assertIn("원문 `Name`/`Ticket`/`Cabin` 컬럼의 직접 one-hot 인코딩", user_plan)
+            self.assertIn("재현 가능한 baseline을 만들고 제출 파일 형식을 검증합니다", user_plan)
+            self.assertIn("## 왜 하는가", user_plan)
             self.assertIn("검증 정확도가 `accuracy` 계열 키로 기록됩니다.", user_plan)
-            self.assertIn("파이프라인 요약: 데이터 가정, split, 전처리, 모델, 출력 형식을 기록합니다.", user_plan)
+            self.assertIn("`outputs/pipeline_summary.json`", user_plan)
             self.assertNotIn("Do not use", user_plan)
             self.assertNotIn("Validation accuracy is recorded", user_plan)
-            self.assertIn("재현 파이프라인 구조도", user_structure)
-            self.assertIn("## 실행 명령 순서", user_structure)
-            self.assertIn("## 노트북형 실행 흐름", user_structure)
-            self.assertIn("StratifiedKFold", user_structure)
-            self.assertIn("StandardScaler", user_structure)
+            self.assertIn("파이프라인 구조", user_structure)
+            self.assertIn("## 단계별 실행 구조", user_structure)
+            self.assertIn("전처리", user_structure)
+            self.assertIn("검증 분리 / CV", user_structure)
             self.assertIn("LogisticRegression", user_structure)
-            self.assertIn("파생변수", user_structure)
+            self.assertIn("테스트 추론과 제출 파일 생성", user_structure)
+            self.assertIn("관련 코드", user_structure)
             self.assertNotIn("다음 개선축", user_structure)
-            browse_paths = (browse / "06_paths.ko.md").read_text(encoding="utf-8")
-            self.assertIn("원본 trial 기록", browse_paths)
 
     def test_pipeline_structure_extracts_random_forest_features_and_config(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -569,13 +564,9 @@ class TrialArtifactsTest(unittest.TestCase):
             with patch("kaggle_research_agent.paths.project_root", return_value=root):
                 organize_trial_artifacts("demo", "trial_001")
 
-            user_code = (root / "runs" / "demo" / "trial_001" / "code" / "src" / "baseline.py").read_text(
-                encoding="utf-8"
-            )
+            self.assertFalse((root / "runs" / "demo" / "trial_001" / "code").exists())
             structure = json.loads((trial / "internal" / "pipeline_structure.json").read_text(encoding="utf-8"))
             structure_text = json.dumps(structure)
-            self.assertIn("RandomForestClassifier", user_code)
-            self.assertNotIn("LogisticRegression", user_code)
             self.assertIn("RandomForestClassifier", structure_text)
             self.assertNotIn("LogisticRegression", structure_text)
 

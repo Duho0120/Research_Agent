@@ -11,9 +11,10 @@ from .agents.review_pack import prepare_review_pack
 from .paths import competition_memory_dir, experiment_dir, trial_dir
 from .state_db_auto import sync_trial_state_after_finish
 from .store import load_trial_index, write_text
-from .trial_artifacts import organize_trial_artifacts, read_trial_json
+from .trial_artifacts import organize_trial_artifacts, prepare_trial_execution_facts, read_trial_json
 from .trial_decision import write_trial_decision_card
 from .trial_memory_card import write_trial_memory_card
+from .user_insight_policy import mark_user_insight_applied
 
 
 def process_workspace_result(competition: str, trial_id: str) -> dict[str, Any]:
@@ -55,6 +56,9 @@ def process_workspace_result(competition: str, trial_id: str) -> dict[str, Any]:
                 "next_action": "collect-workspace-metrics",
             },
         )
+
+    execution_facts = prepare_trial_execution_facts(competition, trial_id)
+    mark_user_insight_applied(competition, trial_id, execution_facts)
 
     existing = next(
         (

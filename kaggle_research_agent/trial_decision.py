@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .agents.memory import log_decision
+from .execution_facts import load_executed_trial_facts, resolve_trial_plan
 from .paths import competition_memory_dir, competition_submissions_dir, trial_dir
 from .store import now_iso, write_text
 
@@ -28,7 +29,8 @@ def write_trial_decision_card(
     """Write a compact, rule-based F-05 decision card for the next planner."""
 
     out_dir = trial_dir(competition, trial_id)
-    plan = plan or _load_trial_json(out_dir, "demo_experiment_plan.json")
+    facts = load_executed_trial_facts(competition, trial_id)
+    plan = plan or resolve_trial_plan(competition, trial_id)
     metrics = metrics or _load_trial_json(out_dir, "metrics.json")
     submission = submission or _load_trial_json(out_dir, "submission_run.json")
 
@@ -38,8 +40,8 @@ def write_trial_decision_card(
     if objective not in {"maximize", "minimize"}:
         objective = "maximize"
     best_card = _best_card(previous_cards, objective=objective)
-    current_axis = str(plan.get("primary_change_axis") or "").strip()
-    source_trial_id = plan.get("source_trial_id") or (previous_card or {}).get("trial_id")
+    current_axis = str(plan.get("primary_change_axis") or facts.get("primary_change_axis") or "").strip()
+    source_trial_id = plan.get("source_trial_id") or facts.get("source_trial_id") or (previous_card or {}).get("trial_id")
 
     local_score = _score(metrics.get("cv_score"), metrics.get("validation_accuracy"), metrics.get("local_score"))
     lb_score = _score(

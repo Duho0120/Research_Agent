@@ -126,9 +126,16 @@ from typing import Any
 from ..paths import competition_memory_dir, competition_submissions_dir, trial_dir
 from ..store import load_state, write_text
 from .pipeline_planner import plan_pipeline_improvement
+from ..user_insight_policy import interpret_user_insight, strategy_for_axis
 
 
-def propose_next_experiment(competition: str, source_trial_id: str, next_trial_id: str) -> dict[str, Any]:
+def propose_next_experiment(
+    competition: str,
+    source_trial_id: str,
+    next_trial_id: str,
+    *,
+    user_insight_override: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Create a next-experiment recommendation from diagnosis and submission evidence."""
 
     state = load_state(competition)
@@ -141,7 +148,11 @@ def propose_next_experiment(competition: str, source_trial_id: str, next_trial_i
     strategy_hint = diagnosis.get("evidence", {}).get("strategy_recommendation")
     issues = diagnosis.get("evidence", {}).get("issues", [])
 
-    strategy = _choose_strategy(strategy_hint, failures, submission, user_feedback, pipeline_plan)
+    strategy = (
+        strategy_for_axis(str(user_insight_override.get("active_axis") or "user_insight"))
+        if user_insight_override and user_insight_override.get("status") == "active"
+        else _choose_strategy(strategy_hint, failures, submission, user_feedback, pipeline_plan)
+    )
     plan = {
         "competition": competition,
         "source_trial_id": source_trial_id,
@@ -157,12 +168,14 @@ def propose_next_experiment(competition: str, source_trial_id: str, next_trial_i
             "issues": issues,
             "latest_submission": submission,
             "latest_user_feedback": user_feedback,
+            "user_insight_override": user_insight_override,
             "pipeline_improvement": pipeline_plan,
             "research_protocol": _compact_protocol(research_protocol),
         },
     }
     out_dir = trial_dir(competition, next_trial_id)
     out_dir.mkdir(parents=True, exist_ok=True)
+    write_text(out_dir / "next_experiment.json", json.dumps({**plan, "status": "planned"}, ensure_ascii=False, indent=2) + "\n")
     write_text(out_dir / "next_experiment.md", render_next_experiment(plan))
     return plan
 
@@ -223,6 +236,8 @@ def _choose_strategy(
 ) -> str:
     if user_feedback:
         decision = user_feedback.get("decision")
+        if decision == "user_insight_for_planner":
+            return _strategy_from_user_insight(user_feedback)
         if decision == "change_validation":
             return "validation_review"
         if decision == "change_model_family":
@@ -253,6 +268,12 @@ def _choose_strategy(
 
 
 def _changes_for_strategy(strategy: str) -> list[str]:
+    if strategy == "model_ensemble":
+        return [
+            "Build a small ensemble from 2-3 diverse model families or calibrated variants.",
+            "Use the best submitted trial as the base reference and compare the ensemble against that leaderboard score.",
+            "Keep validation and submission formatting fixed so the ensemble effect is attributable.",
+        ]
     if strategy == "sota_architecture_attempt":
         return [
             "Switch model-family or architecture instead of another parameter micro-tune.",
@@ -269,6 +290,26 @@ def _changes_for_strategy(strategy: str) -> list[str]:
             "Audit validation split assumptions before another submission.",
             "Run a small comparison trial focused on CV/LB alignment.",
         ]
+    if strategy == "feature_engineering":
+        return [
+            "Implement the concrete feature change described by the user insight.",
+            "Keep model family, validation, and submission formatting fixed for attribution.",
+        ]
+    if strategy == "preprocessing":
+        return [
+            "Implement the requested preprocessing change.",
+            "Keep validation and submission formatting fixed for attribution.",
+        ]
+    if strategy == "hyperparameter_tuning":
+        return [
+            "Change only the requested model or training parameters.",
+            "Keep features, validation, and submission formatting fixed for attribution.",
+        ]
+    if strategy == "submission_strategy":
+        return [
+            "Use submitted leaderboard evidence as the primary comparison signal.",
+            "Audit CV/LB alignment before selecting the next pipeline delta.",
+        ]
     return [
         "Make one controlled improvement based on the latest diagnosis.",
         "Keep model family and validation fixed for attribution.",
@@ -283,6 +324,8 @@ def _guardrails_for_strategy(strategy: str) -> list[str]:
     ]
     if strategy == "sota_architecture_attempt":
         guardrails.append("Compare the SOTA attempt against the current best before replacing the best marker.")
+    if strategy == "model_ensemble":
+        guardrails.append("Compare the ensemble against the best submitted trial before replacing the best marker.")
     return guardrails
 
 
@@ -304,11 +347,21 @@ def _rationale(
     if user_feedback:
         parts.append(
             "User feedback: "
-            f"decision={user_feedback.get('decision')}, follow_up_action={user_feedback.get('follow_up_action')}."
+            f"decision={user_feedback.get('decision')}, follow_up_action={user_feedback.get('follow_up_action')}, "
+            f"scope={user_feedback.get('scope')}, priority={user_feedback.get('priority')}."
         )
+        if user_feedback.get("user_feedback"):
+            parts.append("Planner should interpret this free-text insight when selecting the next change axis.")
+    if strategy == "model_ensemble":
+        parts.append("The user insight explicitly points to an ensemble-style improvement axis.")
     if strategy == "sota_architecture_attempt":
         parts.append("The current method appears saturated enough to justify a model or architecture level attempt.")
     return " ".join(parts)
+
+
+def _strategy_from_user_insight(user_feedback: dict[str, Any]) -> str:
+    text = str(user_feedback.get("user_feedback") or "").lower()
+    return strategy_for_axis(str(interpret_user_insight(text).get("axis") or "user_insight"))
 
 
 def _latest_diagnosis_decision(competition: str, trial_id: str) -> dict[str, Any]:

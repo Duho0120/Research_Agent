@@ -1,0 +1,26 @@
+{
+  "containerOverrides": [
+    {
+      "name": "research-agent",
+      "command": [
+        "python",
+        "-B",
+        "scripts/titanic_auto_submit_loop.py",
+        "--start",
+        "trial_004",
+        "--end",
+        "trial_005"
+      ],
+      "environment": [
+        {
+          "name": "RESEARCH_AGENT_STORAGE_DIR",
+          "value": "/mnt/research-agent/users/<user-id>/titanic"
+        },
+        {
+          "name": "RESEARCH_AGENT_RUNTIME_DIR",
+          "value": "/mnt/research-agent/users/<user-id>/titanic/runtime"
+        }
+      ]
+    }
+  ]
+}

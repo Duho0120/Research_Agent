@@ -10,11 +10,13 @@ from typing import Any
 
 from . import paths, simple_yaml
 from .code_snapshot import load_trial_code_snapshot
+from .execution_facts import write_executed_trial_facts
+from .incremental_trial import write_effective_trial_artifacts
 from .paths import competition_dir, trial_dir
 from .store import read_text, write_text
 from .trial_user_view import render_browse_paths as render_compact_browse_paths
 from .trial_user_view import render_user_view_files, write_browse_index as write_compact_browse_index
-from .user_summary_card import generate_low_cost_user_summary_card, write_low_cost_user_summary_artifacts
+from .user_summary_card import generate_low_cost_user_summary_card
 
 
 DEBUG_FILE_NAMES = {
@@ -38,6 +40,30 @@ INTERNAL_FILE_NAMES = {
     "workspace_coding_result_validation.json",
     "workspace_run.json",
 }
+
+
+def prepare_trial_execution_facts(competition: str, trial_id: str) -> dict[str, Any]:
+    """Build code-derived pipeline facts before decision and memory records are written."""
+
+    out_dir = trial_dir(competition, trial_id)
+    summary = build_trial_summary(competition, trial_id)
+    pipeline_structure = build_pipeline_structure(out_dir, summary)
+    internal_dir = out_dir / "internal"
+    write_text(
+        internal_dir / "pipeline_structure.json",
+        json.dumps(pipeline_structure, ensure_ascii=False, indent=2) + "\n",
+    )
+    write_effective_trial_artifacts(
+        competition,
+        trial_id,
+        pipeline_structure=pipeline_structure,
+    )
+    return write_executed_trial_facts(
+        competition,
+        trial_id,
+        pipeline_structure=pipeline_structure,
+        summary=summary,
+    )
 
 
 def trial_artifact_path(out_dir: Path, name: str) -> Path:
@@ -79,6 +105,21 @@ def organize_trial_artifacts(
         internal_dir / "pipeline_structure.json",
         json.dumps(pipeline_structure, ensure_ascii=False, indent=2) + "\n",
     )
+    summary.update(
+        write_effective_trial_artifacts(
+            competition,
+            trial_id,
+            pipeline_structure=pipeline_structure,
+        )
+    )
+    facts = write_executed_trial_facts(
+        competition,
+        trial_id,
+        pipeline_structure=pipeline_structure,
+        summary=summary,
+    )
+    summary["executed_trial_facts_file"] = "internal/executed_trial_facts.json"
+    summary["executed_trial_facts"] = facts
     low_cost_result: dict[str, Any] | None = None
     if low_cost_user_summary:
         low_cost_result = generate_low_cost_user_summary_card(
@@ -92,10 +133,9 @@ def organize_trial_artifacts(
         summary["low_cost_user_summary"] = low_cost_result
     summary["user_view_files"] = _write_user_view(out_dir, summary)
     if low_cost_result is not None:
-        low_cost_files = write_low_cost_user_summary_artifacts(out_dir, low_cost_result)
-        summary["low_cost_user_summary_files"] = list(low_cost_files)
-        if "user_view/00_summary_card.ko.md" in low_cost_files:
-            summary["user_view_files"] = ["00_summary_card.ko.md", *summary["user_view_files"]]
+        low_cost_path = out_dir / "internal" / "low_cost_user_summary_card.json"
+        write_text(low_cost_path, json.dumps(low_cost_result, ensure_ascii=False, indent=2) + "\n")
+        summary["low_cost_user_summary_files"] = ["internal/low_cost_user_summary_card.json"]
     summary["browse_view_files"] = _write_browse_view(competition, trial_id, out_dir, summary)
 
     write_text(out_dir / "README.md", render_trial_readme(summary))
@@ -384,6 +424,7 @@ def build_pipeline_structure(out_dir: Path, summary: dict[str, Any]) -> dict[str
             "이 구조 명세는 노트북처럼 위에서 아래로 읽히도록 생성된 사용자/에이전트 공용 컨텍스트입니다.",
             "다음 trial에서는 stages[].included, code_locations, improvement_handles를 참고해 수정 축을 정합니다.",
         ],
+        "consistency_issues": _pipeline_consistency_issues(summary, stages),
         "stages": stages,
     }
 
@@ -1335,9 +1376,13 @@ def _validation_details(metrics: dict[str, Any], code_text: str, lowered: str) -
     if n_splits:
         details["n_splits"] = n_splits.group(1).strip()
     test_size = re.search(r"test_size\s*=\s*([^,\n\)]+)", code_text)
-    if test_size:
+    if metrics.get("validation_size") is not None:
+        details["test_size"] = metrics["validation_size"]
+    elif test_size:
         details["test_size"] = test_size.group(1).strip()
     random_state = metrics.get("random_state")
+    if random_state is None:
+        random_state = metrics.get("random_seed")
     if random_state is not None:
         details["random_state"] = random_state
     elif "random_state" in lowered:
@@ -1351,25 +1396,112 @@ def _validation_details(metrics: dict[str, Any], code_text: str, lowered: str) -
 
 
 def _model_details(metrics: dict[str, Any], code_text: str, lowered: str) -> dict[str, Any]:
-    candidates = ["RandomForestClassifier", "LogisticRegression"]
-    estimator = str(metrics.get("model") or metrics.get("model_type") or "")
+    candidates = [
+        "VotingClassifier",
+        "StackingClassifier",
+        "VotingRegressor",
+        "StackingRegressor",
+        "RandomForestClassifier",
+        "GradientBoostingClassifier",
+        "LogisticRegression",
+    ]
+    estimator = ""
     for candidate in candidates:
-        if candidate.lower() in lowered:
+        if f"{candidate.lower()}(" in lowered:
             estimator = candidate
             break
     if not estimator:
+        estimator = str(metrics.get("model") or metrics.get("model_type") or "")
+    if not estimator:
         return {}
-    params = _params_list_to_dict(_estimator_params(code_text, estimator))
+    call_details = _estimator_call_details(code_text, estimator)
+    params = call_details.get("parameters") or _params_list_to_dict(_estimator_params(code_text, estimator))
     if estimator == "RandomForestClassifier":
         for key in ["n_estimators", "max_depth", "min_samples_leaf", "random_state"]:
             if key in metrics and key not in params:
                 params[key] = metrics[key]
-    return {
+    result = {
         "estimator": estimator,
         "parameters": params,
         "pretrained": False,
         "pipeline_container": "sklearn.pipeline.Pipeline" if "pipeline(" in lowered else None,
     }
+    if call_details.get("members"):
+        result["members"] = call_details["members"]
+    return result
+
+
+def _pipeline_consistency_issues(summary: dict[str, Any], stages: list[dict[str, Any]]) -> list[str]:
+    metrics = summary.get("metrics") if isinstance(summary.get("metrics"), dict) else {}
+    recorded_model = str(metrics.get("model") or metrics.get("model_type") or "").strip()
+    model_stage = next((stage for stage in stages if stage.get("id") == "model_definition"), {})
+    details = model_stage.get("structured_details") if isinstance(model_stage.get("structured_details"), dict) else {}
+    code_model = str(details.get("estimator") or "").strip()
+    issues: list[str] = []
+    if recorded_model and code_model and code_model.lower() not in recorded_model.lower():
+        issues.append(f"model_metadata_mismatch:metrics={recorded_model};code={code_model}")
+    recorded_trial = str(metrics.get("trial_id") or "").strip()
+    expected_trial = str(summary.get("trial_id") or "").strip()
+    if recorded_trial and expected_trial and recorded_trial != expected_trial:
+        issues.append(f"trial_id_metadata_mismatch:metrics={recorded_trial};expected={expected_trial}")
+    return issues
+
+
+def _estimator_call_details(code_text: str, estimator_name: str) -> dict[str, Any]:
+    try:
+        tree = ast.parse(code_text)
+    except SyntaxError:
+        return {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or _call_name(node.func) != estimator_name:
+            continue
+        constants = _scalar_constants_from_text(code_text)
+        parameters = {
+            keyword.arg: _safe_unparse(keyword.value)
+            for keyword in node.keywords
+            if keyword.arg and keyword.arg != "estimators"
+        }
+        parameters = {key: constants.get(value, value) for key, value in parameters.items()}
+        members: list[dict[str, Any]] = []
+        for child in ast.walk(node):
+            if child is node or not isinstance(child, ast.Call):
+                continue
+            name = _call_name(child.func)
+            if not name or name == estimator_name:
+                continue
+            if not (name.endswith("Classifier") or name.endswith("Regressor") or name == "LogisticRegression"):
+                continue
+            members.append(
+                {
+                    "estimator": name,
+                    "parameters": {
+                        keyword.arg: _safe_unparse(keyword.value)
+                        for keyword in child.keywords
+                        if keyword.arg
+                    },
+                }
+            )
+            members[-1]["parameters"] = {
+                key: constants.get(value, value)
+                for key, value in members[-1]["parameters"].items()
+            }
+        return {"parameters": parameters, "members": members}
+    return {}
+
+
+def _call_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return ""
+
+
+def _safe_unparse(node: ast.AST) -> str:
+    try:
+        return ast.unparse(node)
+    except Exception:
+        return "<expression>"
 
 
 def _params_list_to_dict(items: list[str]) -> dict[str, Any]:
@@ -1427,7 +1559,13 @@ def _scalar_constants_from_text(code_text: str) -> dict[str, str]:
     try:
         tree = ast.parse(code_text)
     except SyntaxError:
-        return {}
+        return {
+            name: value.strip()
+            for name, value in re.findall(
+                r"(?m)^([A-Z][A-Z0-9_]*)\s*=\s*([^#\n]+)$",
+                code_text,
+            )
+        }
     constants: dict[str, str] = {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.Assign):
@@ -1663,11 +1801,11 @@ def _move_internal_files(out_dir: Path) -> list[str]:
 def _write_user_view(out_dir: Path, summary: dict[str, Any]) -> list[str]:
     user_dir = out_dir / "user_view"
     _reset_user_view_dir(out_dir, user_dir)
-    copied_files = _copy_user_code_files(user_dir, summary)
+    copied_files: list[str] = []
     files = render_user_view_files(out_dir, summary, copied_files)
     for name, content in files.items():
         _write_user_markdown(user_dir / name, content)
-    return [*files, *[f"code/{item}" for item in copied_files]]
+    return list(files)
 
 
 def _reset_user_view_dir(out_dir: Path, user_dir: Path) -> None:
@@ -2125,10 +2263,6 @@ def _write_browse_view(competition: str, trial_id: str, out_dir: Path, summary: 
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(item, destination)
             copied.append(relative.as_posix())
-    paths_file = browse_dir / "06_paths.ko.md"
-    _write_user_markdown(paths_file, render_compact_browse_paths(competition, trial_id, out_dir, browse_dir, summary))
-    if "06_paths.ko.md" not in copied:
-        copied.append("06_paths.ko.md")
     write_compact_browse_index(competition, browse_root)
     return sorted(copied)
 

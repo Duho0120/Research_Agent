@@ -36,7 +36,7 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             self.assertTrue(result["edit_policy"]["restore_base_before_patch"])
             self.assertEqual("trial_001", result["source_trial_id"])
             self.assertEqual("trial_001", result["code_base_trial_id"])
-            self.assertEqual("experiments/demo/trial_001/internal/code_snapshot", result["edit_policy"]["base_code_source"])
+            self.assertEqual("experiments/demo/trial_001/user_view/code", result["edit_policy"]["base_code_source"])
             self.assertEqual("outputs/metrics.json", result["metrics_output_contract"]["path"])
             self.assertEqual("cv_score", result["metrics_output_contract"]["score_key"])
             self.assertIn("cv_score", result["metrics_output_contract"]["required_keys"])
@@ -115,6 +115,38 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             self.assertIn("def _build_pipeline", prompt)
             self.assertIn("Current Workspace Code Inventory", prompt)
             self.assertNotIn("MODEL = 'baseline'", prompt)
+
+    def test_expanded_retry_handoff_includes_current_code_when_source_snapshot_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_execution_profile(root, project)
+            self._write_next_trial(root, continuation_mode="can_continue")
+            source_code = root / "experiments" / "demo" / "trial_001" / "user_view" / "code" / "src" / "model.py"
+            source_code.unlink()
+            (project / "src" / "extra.py").write_text("EXTRA = 'current'\n", encoding="utf-8")
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = prepare_workspace_coding_handoff(
+                    "demo",
+                    "trial_002",
+                    expanded_snapshot=True,
+                    retry_reason="code_writer_blocked_snapshot_context",
+                )
+                trial = root / "experiments" / "demo" / "trial_002"
+                snapshot_text = (trial / "workspace_context_snapshot.md").read_text(encoding="utf-8")
+                handoff = json.loads((trial / "workspace_coding_handoff.json").read_text(encoding="utf-8"))
+                payload = build_workspace_code_writer_payload(handoff, model="gpt-5.5")
+
+        prompt = payload["input"][1]["content"]
+
+        self.assertEqual("ready", result["status"])
+        self.assertEqual("expanded_after_code_writer_blocked", result["snapshot_mode"])
+        self.assertEqual("code_writer_blocked_snapshot_context", result["retry_reason"])
+        self.assertIn("No saved source trial code snapshot was found", snapshot_text)
+        self.assertIn("Current Workspace Code", snapshot_text)
+        self.assertIn("MODEL = 'baseline'", prompt)
+        self.assertIn("EXTRA = 'current'", prompt)
 
     def test_patch_only_handoff_keeps_class_based_pipeline_targets_visible(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -276,6 +308,44 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             self.assertIn("CabinMissing_Pclass3", prompt)
             self.assertNotIn("def run_prediction", prompt)
             self.assertIn("Omitted for compact delta patch mode", prompt)
+
+    def test_handoff_uses_recommended_base_trial_for_code_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_execution_profile(root, project)
+            self._write_next_trial(
+                root,
+                continuation_mode="can_continue",
+                decision_context={
+                    "active_axis": "user_insight_model_ensemble",
+                    "axis_attempt_count": 1,
+                    "axis_attempt_limit": 3,
+                },
+            )
+            trial = root / "experiments" / "demo" / "trial_002"
+            continuation = json.loads((trial / "continuation_context.json").read_text(encoding="utf-8"))
+            continuation["source_trial_id"] = "trial_006"
+            continuation["recommended_base_trial"] = "trial_003"
+            (trial / "continuation_context.json").write_text(json.dumps(continuation), encoding="utf-8")
+            base_code = root / "experiments" / "demo" / "trial_003" / "user_view" / "code" / "src" / "model.py"
+            base_code.parent.mkdir(parents=True, exist_ok=True)
+            base_code.write_text("MODEL = 'best-submitted-base'\n", encoding="utf-8")
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = prepare_workspace_coding_handoff("demo", "trial_002")
+                snapshot_text = (trial / "workspace_context_snapshot.md").read_text(encoding="utf-8")
+
+            self.assertEqual("ready", result["status"])
+            self.assertEqual("trial_006", result["source_trial_id"])
+            self.assertEqual("trial_003", result["code_base_trial_id"])
+            self.assertEqual("trial_003", result["recommended_base_trial"])
+            self.assertEqual(
+                "experiments/demo/trial_003/user_view/code",
+                result["edit_policy"]["base_code_source"],
+            )
+            self.assertIn("best-submitted-base", snapshot_text)
+            self.assertNotIn("MODEL = 'source'", snapshot_text)
 
     def test_prepare_workspace_coding_handoff_blocks_must_wait_context(self):
         with tempfile.TemporaryDirectory() as tmp:

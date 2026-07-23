@@ -153,6 +153,41 @@ class ResearchPlannerNextExperimentTest(unittest.TestCase):
             self.assertTrue(plan["evidence_used"]["latest_user_feedback"])
             self.assertIn("User feedback", plan["rationale"])
 
+    def test_propose_next_experiment_maps_ensemble_user_insight_to_ensemble_strategy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_dir = root / "competitions" / "demo"
+            state_dir.mkdir(parents=True)
+            (state_dir / "state.yaml").write_text(
+                "competition:\n  objective: maximize\ncurrent_state:\n  consecutive_failures: 0\n",
+                encoding="utf-8",
+            )
+            trial = root / "experiments" / "demo" / "trial_005"
+            trial.mkdir(parents=True)
+            mem = root / "memory" / "demo"
+            mem.mkdir(parents=True)
+            (mem / "user_feedback.jsonl").write_text(
+                json.dumps(
+                    {
+                        "trial_id": "trial_005",
+                        "topic": "user_insight",
+                        "scope": "next_trial",
+                        "user_feedback": "2~3개의 서로 다른 모델을 앙상블하자",
+                        "decision": "user_insight_for_planner",
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                plan = propose_next_experiment("demo", "trial_005", "trial_006")
+
+            self.assertEqual("model_ensemble", plan["strategy"])
+            self.assertIn("ensemble", " ".join(plan["changes"]).casefold())
+            self.assertIn("ensemble", plan["rationale"].casefold())
+
 
 if __name__ == "__main__":
     unittest.main()

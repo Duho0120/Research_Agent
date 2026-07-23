@@ -1,9 +1,0 @@
-{
-  "trial_id": "trial_001",
-  "cv_score": 0.0,
-  "lb_score": null,
-  "objective": "maximize",
-  "seed": 42,
-  "prediction_correlation_with_best": null,
-  "notes": "Replace this file with real metrics.json after training."
-}

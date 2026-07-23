@@ -221,6 +221,9 @@ def record_user_feedback(
     user_feedback: str,
     decision: str,
     follow_up_action: str,
+    scope: str = "next_trial",
+    priority: str = "normal",
+    insight_id: str | None = None,
 ) -> dict[str, Any]:
     row = {
         "time": now_iso(),
@@ -231,7 +234,11 @@ def record_user_feedback(
         "user_feedback": user_feedback,
         "decision": decision,
         "follow_up_action": follow_up_action,
+        "scope": scope,
+        "priority": priority,
     }
+    if insight_id:
+        row["insight_id"] = insight_id
     out_dir = competition_memory_dir(competition)
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "user_feedback.jsonl"
@@ -250,6 +257,8 @@ def record_user_feedback(
             "topic": topic,
             "question": question,
             "follow_up_action": follow_up_action,
+            "scope": scope,
+            "priority": priority,
         },
         user_input_used=True,
         next_action=follow_up_action,

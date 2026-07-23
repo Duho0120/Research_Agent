@@ -8,12 +8,21 @@ from .agents.memory import log_decision, request_user_review
 from .agents.research_planner import propose_next_experiment
 from .paths import trial_dir
 from .store import write_text
+from .trial_decision import load_latest_decision_context
+from .user_insight_policy import build_next_trial_user_insight_override
 
 
 CONTINUABLE_STATUSES = {"completed", "completed_review_deferred", "already_processed"}
 
 
-def plan_next_workspace_trial(competition: str, source_trial_id: str, next_trial_id: str) -> dict[str, Any]:
+def plan_next_workspace_trial(
+    competition: str,
+    source_trial_id: str,
+    next_trial_id: str,
+    *,
+    allow_api: bool = False,
+    insight_client: Any | None = None,
+) -> dict[str, Any]:
     source_dir = trial_dir(competition, source_trial_id)
     cycle = _load_result_cycle(source_dir)
     if not cycle:
@@ -75,6 +84,8 @@ def plan_next_workspace_trial(competition: str, source_trial_id: str, next_trial
             status="planned_with_pending_review",
             continuation_mode="continue_with_caution",
             pending_human_review=True,
+            allow_api=allow_api,
+            insight_client=insight_client,
         )
 
     if source_status in CONTINUABLE_STATUSES:
@@ -88,6 +99,8 @@ def plan_next_workspace_trial(competition: str, source_trial_id: str, next_trial
             status="planned_with_deferred_review" if pending else "planned",
             continuation_mode="continue_with_caution" if pending else "can_continue",
             pending_human_review=pending,
+            allow_api=allow_api,
+            insight_client=insight_client,
         )
 
     return _finish(
@@ -116,11 +129,41 @@ def _plan_with_context(
     status: str,
     continuation_mode: str,
     pending_human_review: bool,
+    allow_api: bool = False,
+    insight_client: Any | None = None,
 ) -> dict[str, Any]:
-    plan = propose_next_experiment(competition, source_trial_id, next_trial_id)
+    decision_context = load_latest_decision_context(competition)
+    user_insight_override = build_next_trial_user_insight_override(
+        competition,
+        source_trial_id,
+        next_trial_id,
+        allow_api=allow_api,
+        insight_client=insight_client,
+    )
+    plan = propose_next_experiment(
+        competition,
+        source_trial_id,
+        next_trial_id,
+        user_insight_override=user_insight_override,
+    )
+    if user_insight_override:
+        decision_context["user_insight_override"] = user_insight_override
+        if user_insight_override.get("status") == "active":
+            decision_context["active_axis"] = user_insight_override.get("active_axis")
+            decision_context["axis_attempt_count"] = user_insight_override.get("axis_attempt_count")
+            decision_context["axis_attempt_limit"] = user_insight_override.get("axis_attempt_limit")
+            decision_context["recommended_base_trial"] = user_insight_override.get("base_trial_id")
+            decision_context["previous_active_axis_status"] = user_insight_override.get("previous_active_axis_status")
+            decision_context["planner_constraints"] = list(decision_context.get("planner_constraints") or []) + [
+                "User insight has next_trial scope and overrides the previous active axis for this plan.",
+                "Use submitted leaderboard score/public score to choose the base trial.",
+                "Treat the previous active axis as paused/superseded_by_user_insight, not rejected.",
+            ]
+            _append_user_insight_policy_to_plan(trial_dir(competition, next_trial_id), user_insight_override)
     context = {
         "competition": competition,
         "source_trial_id": source_trial_id,
+        "recommended_base_trial": decision_context.get("recommended_base_trial"),
         "next_trial_id": next_trial_id,
         "continuation_mode": continuation_mode,
         "pending_human_review": pending_human_review,
@@ -129,6 +172,7 @@ def _plan_with_context(
         "human_review": cycle.get("human_review", {}),
         "blocked_topics": _blocked_topics(cycle) if continuation_mode == "must_wait" else [],
         "allowed_topics": _allowed_topics(continuation_mode),
+        "decision_context": decision_context,
     }
     next_dir = trial_dir(competition, next_trial_id)
     write_text(next_dir / "continuation_context.json", json.dumps(context, ensure_ascii=False, indent=2) + "\n")
@@ -148,11 +192,38 @@ def _plan_with_context(
                 "next_trial_id": plan["next_trial_id"],
                 "strategy": plan["strategy"],
                 "requires_user_review_before_submit": plan["requires_user_review_before_submit"],
+                "user_insight_override": user_insight_override,
             },
             "continuation_context": context,
             "next_action": "prepare-next-trial",
         },
     )
+
+
+def _append_user_insight_policy_to_plan(next_dir: Path, override: dict[str, Any]) -> None:
+    path = next_dir / "next_experiment.md"
+    try:
+        text = path.read_text(encoding="utf-8").rstrip()
+    except FileNotFoundError:
+        return
+    user_feedback = override.get("user_insight") or ""
+    lines = [
+        text,
+        "",
+        "## User Insight Override Policy",
+        "",
+        f"- status: {override.get('status')}",
+        f"- insight_id: {override.get('insight_id')}",
+        f"- user_insight_axis: {override.get('active_axis')}",
+        f"- base_trial_by_submission_score: {override.get('base_trial_id')}",
+        f"- axis_attempt_count: {override.get('axis_attempt_count')}/{override.get('axis_attempt_limit')}",
+        f"- previous_active_axis_status: {override.get('previous_active_axis_status') or 'none'}",
+        f"- user_insight: {user_feedback}",
+        f"- interpretation: {json.dumps(override.get('interpretation') or {}, ensure_ascii=False)}",
+        "- instruction: prioritize this user insight axis for the next trial; keep the previous axis paused, not rejected.",
+        "",
+    ]
+    write_text(path, "\n".join(lines))
 
 
 def _load_result_cycle(source_dir: Path) -> dict[str, Any] | None:

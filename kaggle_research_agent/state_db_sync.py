@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -22,15 +23,10 @@ from .state_db import (
 
 
 USER_ARTIFACTS = {
-    "00_summary_card.ko.md": "summary_card_ko",
-    "README.ko.md": "readme_ko",
     "01_plan.ko.md": "plan_ko",
     "02_pipeline_structure.ko.md": "pipeline_structure_ko",
-    "03_code_pipeline.ko.md": "code_pipeline_ko",
-    "04_result.ko.md": "result_ko",
-    "05_submission.ko.md": "submission_ko",
-    "06_decision.ko.md": "decision_ko",
-    "06_paths.ko.md": "paths_ko",
+    "03_scores.ko.md": "scores_ko",
+    "04_result.ko.md": "scores_ko",
 }
 
 INTERNAL_ARTIFACTS = {
@@ -38,6 +34,7 @@ INTERNAL_ARTIFACTS = {
     "graph_state.json": "graph_state",
     "node_events.jsonl": "node_events",
     "internal/pipeline_structure.json": "pipeline_structure_json",
+    "internal/executed_trial_facts.json": "executed_trial_facts_json",
     "internal/decision_card.json": "decision_card_json",
     "internal/trial_memory_card.json": "trial_memory_card_json",
     "internal/code_snapshot_manifest.json": "code_snapshot_manifest",
@@ -90,17 +87,24 @@ def sync_competition_state_db(competition: str, *, db_path: Path | None = None) 
         "removed_stale_rows": removed_stale_rows,
     }
 
-    trial_paths = _trial_dirs(competition)
-    valid_trial_ids = {path.name for path in trial_paths}
-    for trial_path in trial_paths:
-        trial_id = trial_path.name
-        trial_summary = _sync_trial(competition, trial_id, trial_path, target_db, competition_record)
+    trial_sources = _trial_sources(competition)
+    valid_trial_ids = set(trial_sources)
+    for trial_id, source in trial_sources.items():
+        trial_summary = _sync_trial(
+            competition,
+            trial_id,
+            source["trial_path"],
+            target_db,
+            competition_record,
+            manual_path=source.get("manual_path"),
+        )
         summary["trial_count"] += 1
         summary["artifact_count"] += trial_summary["artifact_count"]
         summary["submission_count"] += trial_summary["submission_count"]
 
     summary["token_usage_count"] = _sync_token_usage(competition, target_db)
     _sync_submission_log(competition, target_db, valid_trial_ids)
+    _refresh_best_score_flags(competition, target_db, competition_record)
     summary["submission_count"] = _count_competition_rows(target_db, "submissions", competition)
     return summary
 
@@ -134,10 +138,17 @@ def _sync_trial(
     trial_path: Path,
     db_path: Path,
     competition_record: dict[str, Any],
+    *,
+    manual_path: Path | None = None,
 ) -> dict[str, int]:
     plan = _read_trial_json(trial_path, "demo_experiment_plan.json")
+    if not plan:
+        plan = _read_trial_json(trial_path, "next_experiment.json")
+    executed_facts = _read_trial_json(trial_path, "executed_trial_facts.json")
     decision = _read_trial_json(trial_path, "decision_card.json")
     metrics = _read_json(trial_path / "metrics.json")
+    manual_metrics = _read_json((manual_path or trial_path) / "metrics.json") if manual_path else {}
+    score_metrics = {**metrics, **manual_metrics}
     result_cycle = _read_trial_json(trial_path, "workspace_result_cycle.json")
     demo_cycle = _read_trial_json(trial_path, "demo_one_cycle.json")
     graph_cycle = _read_trial_json(trial_path, "demo_graph_cycle.json")
@@ -151,10 +162,18 @@ def _sync_trial(
         demo_cycle=demo_cycle,
         graph_cycle=graph_cycle,
         workspace_run=workspace_run,
-        metrics=metrics,
+        metrics=score_metrics or metrics,
     )
-    source_trial_id = plan.get("source_trial_id") or decision.get("source_trial_id")
-    primary_axis = plan.get("primary_change_axis") or decision.get("change_axis")
+    if manual_metrics and status in {"blocked", "discovered"}:
+        status = "completed"
+    source_trial_id = executed_facts.get("source_trial_id") or plan.get("source_trial_id") or decision.get("source_trial_id")
+    primary_axis = _trial_primary_axis(
+        trial_path,
+        plan=plan,
+        decision=decision,
+        manual_metrics=manual_metrics,
+        executed_facts=executed_facts,
+    )
     recommended_base = decision.get("recommended_base_trial") or plan.get("recommended_base_trial")
     upsert_trial(
         {
@@ -163,21 +182,27 @@ def _sync_trial(
             "status": status,
             "source_trial_id": source_trial_id,
             "recommended_base_trial": recommended_base,
-            "plan_type": plan.get("plan_type") or decision.get("plan_type"),
+            "plan_type": executed_facts.get("plan_type") or plan.get("plan_type") or decision.get("plan_type"),
+            "plan_summary": _trial_plan_summary(plan),
             "primary_change_axis": primary_axis,
         },
         db_path,
     )
 
-    if metrics or decision:
+    if score_metrics or decision:
         upsert_trial_score(
             {
                 "competition_id": competition,
                 "trial_id": trial_id,
-                "metric": metrics.get("metric") or competition_record.get("metric"),
-                "objective": metrics.get("objective") or competition_record.get("objective"),
-                "local_score": metrics.get("cv_score") or metrics.get("validation_accuracy") or metrics.get("local_score"),
-                "lb_score": decision.get("lb_score") or _submission_score(submission),
+                "metric": score_metrics.get("metric") or competition_record.get("metric"),
+                "objective": score_metrics.get("objective") or competition_record.get("objective"),
+                "local_score": score_metrics.get("cv_score")
+                or score_metrics.get("validation_accuracy")
+                or score_metrics.get("local_score"),
+                "lb_score": decision.get("lb_score")
+                or _submission_score(submission)
+                or score_metrics.get("kaggle_lb_score")
+                or score_metrics.get("lb_score"),
                 "local_status": decision.get("local_status"),
                 "lb_status": decision.get("lb_status"),
                 "is_best_local": trial_id == recommended_base
@@ -198,7 +223,9 @@ def _sync_trial(
         )
 
     artifact_count = _sync_trial_artifacts(competition, trial_id, trial_path, db_path)
-    submission_count = _sync_trial_submission(competition, trial_id, submit_manifest, submission, db_path)
+    if manual_path and manual_path != trial_path:
+        artifact_count += _sync_trial_artifacts(competition, trial_id, manual_path, db_path)
+    submission_count = _sync_trial_submission(competition, trial_id, submit_manifest, submission, score_metrics, db_path)
     return {"artifact_count": artifact_count, "submission_count": submission_count}
 
 
@@ -248,19 +275,6 @@ def _sync_trial_artifacts(competition: str, trial_id: str, trial_path: Path, db_
                 db_path,
             )
             count += 1
-    user_code = run_dir / "code"
-    if user_code.is_dir():
-        upsert_trial_artifact(
-            {
-                "competition_id": competition,
-                "trial_id": trial_id,
-                "artifact_type": "user_code",
-                "path": _project_relative(user_code),
-                "is_user_facing": True,
-            },
-            db_path,
-        )
-        count += 1
     return count
 
 
@@ -276,9 +290,10 @@ def _sync_trial_submission(
     trial_id: str,
     submit_manifest: dict[str, Any],
     submission: dict[str, Any],
+    metrics: dict[str, Any],
     db_path: Path,
 ) -> int:
-    record = submit_manifest or submission
+    record = submit_manifest or submission or _manual_submission_record(metrics)
     if not record:
         return 0
     submission_file = record.get("submission_file") or submission.get("submission_file") or ""
@@ -286,17 +301,79 @@ def _sync_trial_submission(
         {
             "competition_id": competition,
             "trial_id": trial_id,
-            "platform": record.get("platform") or "unknown",
+            "platform": record.get("platform") or ("kaggle" if metrics.get("kaggle_submitted") else "unknown"),
             "submission_file": submission_file,
             "status": record.get("status") or submission.get("status"),
-            "lb_score": _submission_score(submission) or record.get("submitted_lb_score"),
-            "rank": submission.get("submitted_rank") or record.get("submitted_rank"),
+            "lb_score": _submission_score(submission) or record.get("submitted_lb_score") or metrics.get("kaggle_lb_score"),
+            "rank": submission.get("submitted_rank") or record.get("submitted_rank") or metrics.get("kaggle_rank"),
             "submitted_at": submission.get("submitted_at") or record.get("submitted_at"),
-            "requires_user_approval": record.get("requires_user_approval", True),
+            "requires_user_approval": record.get("requires_user_approval", not bool(metrics.get("kaggle_submitted"))),
         },
         db_path,
     )
     return 1
+
+
+def _manual_submission_record(metrics: dict[str, Any]) -> dict[str, Any]:
+    if not metrics:
+        return {}
+    submission_file = metrics.get("submission_file")
+    lb_score = metrics.get("kaggle_lb_score") or metrics.get("lb_score")
+    if not submission_file and lb_score is None:
+        return {}
+    return {
+        "platform": "kaggle",
+        "submission_file": submission_file,
+        "status": metrics.get("kaggle_status") or ("submitted" if metrics.get("kaggle_submitted") else "recorded"),
+        "submitted_lb_score": lb_score,
+        "submitted_rank": metrics.get("kaggle_rank"),
+        "requires_user_approval": False,
+    }
+
+
+def _trial_primary_axis(
+    trial_path: Path,
+    *,
+    plan: dict[str, Any],
+    decision: dict[str, Any],
+    manual_metrics: dict[str, Any],
+    executed_facts: dict[str, Any],
+) -> str | None:
+    pipeline_plan = _read_trial_json(trial_path, "pipeline_improvement_plan.json")
+    candidates = [
+        executed_facts.get("primary_change_axis"),
+        plan.get("primary_change_axis"),
+        plan.get("primary_axis"),
+        decision.get("active_axis"),
+        decision.get("change_axis"),
+        manual_metrics.get("change_axis"),
+        pipeline_plan.get("primary_change_axis"),
+        pipeline_plan.get("primary_axis"),
+        _next_experiment_strategy(trial_path),
+    ]
+    for candidate in candidates:
+        value = str(candidate or "").strip()
+        if value:
+            return value
+    return None
+
+
+def _trial_plan_summary(plan: dict[str, Any]) -> str | None:
+    for key in ["plan_title", "strategy", "objective", "rationale"]:
+        value = str(plan.get(key) or "").strip()
+        if value:
+            return value
+    return None
+
+
+def _next_experiment_strategy(trial_path: Path) -> str | None:
+    path = trial_path / "next_experiment.md"
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except FileNotFoundError:
+        return None
+    match = re.search(r"(?ims)^##\s+Strategy\s*$\s*([A-Za-z0-9_-]+)\s*$", text)
+    return match.group(1).strip() if match else None
 
 
 def _sync_token_usage(competition: str, db_path: Path) -> int:
@@ -349,6 +426,36 @@ def _sync_submission_log(competition: str, db_path: Path, valid_trial_ids: set[s
     return count
 
 
+def _refresh_best_score_flags(competition: str, db_path: Path, competition_record: dict[str, Any]) -> None:
+    objective = str(competition_record.get("objective") or "maximize").lower()
+    descending = objective != "minimize"
+    with state_db_connection(db_path) as connection:
+        connection.execute(
+            "UPDATE trial_scores SET is_best_local = 0, is_best_lb = 0 WHERE competition_id = ?",
+            [competition],
+        )
+        for score_column, flag_column in [("local_score", "is_best_local"), ("lb_score", "is_best_lb")]:
+            rows = connection.execute(
+                f"""
+                SELECT trial_id, {score_column} AS score
+                FROM trial_scores
+                WHERE competition_id = ? AND {score_column} IS NOT NULL
+                """,
+                [competition],
+            ).fetchall()
+            if not rows:
+                continue
+            best = sorted(
+                [dict(row) for row in rows],
+                key=lambda row: (float(row["score"]), str(row["trial_id"])),
+                reverse=descending,
+            )[0]
+            connection.execute(
+                f"UPDATE trial_scores SET {flag_column} = 1 WHERE competition_id = ? AND trial_id = ?",
+                [competition, best["trial_id"]],
+            )
+
+
 def _trial_status(
     *,
     plan: dict[str, Any],
@@ -358,12 +465,17 @@ def _trial_status(
     workspace_run: dict[str, Any],
     metrics: dict[str, Any],
 ) -> str:
-    for source in [graph_cycle, demo_cycle, result_cycle, workspace_run, plan]:
+    for source in [graph_cycle, demo_cycle, result_cycle, workspace_run]:
         status = str(source.get("status") or "").strip() if isinstance(source, dict) else ""
         if status:
             return status
     if metrics:
         return "completed"
+    plan_status = str(plan.get("status") or "").strip() if isinstance(plan, dict) else ""
+    if plan_status in {"ready", "planned"}:
+        return "planned"
+    if plan_status:
+        return plan_status
     return "discovered"
 
 
@@ -391,7 +503,7 @@ def _workspace_config(profile: dict[str, Any]) -> dict[str, Any]:
 
 
 def _competition_status(competition: str) -> str:
-    trials = _trial_dirs(competition)
+    trials = _trial_sources(competition)
     if trials:
         return "has_trials"
     if paths.competition_dir(competition).exists():
@@ -415,6 +527,28 @@ def _trial_dirs(competition: str) -> list[Path]:
         [path for path in root.iterdir() if path.is_dir() and path.name.startswith("trial_")],
         key=lambda item: item.name,
     )
+
+
+def _trial_sources(competition: str) -> dict[str, dict[str, Path]]:
+    sources: dict[str, dict[str, Path]] = {}
+    for trial_path in _trial_dirs(competition):
+        sources[trial_path.name] = {"trial_path": trial_path}
+    manual_root = _manual_trials_dir(competition)
+    if manual_root.is_dir():
+        for manual_path in sorted(manual_root.iterdir(), key=lambda item: item.name):
+            if not manual_path.is_dir() or not manual_path.name.startswith("trial_"):
+                continue
+            source = sources.setdefault(manual_path.name, {"trial_path": manual_path})
+            source["manual_path"] = manual_path
+    return dict(sorted(sources.items()))
+
+
+def _manual_trials_dir(competition: str) -> Path:
+    profile = simple_yaml.load(paths.competition_dir(competition) / "execution_profile.yaml", default={})
+    workspace_root = profile.get("project_root") if isinstance(profile, dict) else None
+    if workspace_root:
+        return Path(str(workspace_root)) / "manual_trials"
+    return paths.project_root() / "demo_workspaces" / competition / "manual_trials"
 
 
 def _read_trial_json(trial_path: Path, name: str) -> dict[str, Any]:

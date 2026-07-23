@@ -1,0 +1,24 @@
+{
+  "ServiceName": "research-agent-prototype",
+  "SourceConfiguration": {
+    "AuthenticationConfiguration": {
+      "AccessRoleArn": "arn:aws:iam::961341521085:role/research-agent-apprunner-ecr-role"
+    },
+    "AutoDeploymentsEnabled": false,
+    "ImageRepository": {
+      "ImageIdentifier": "961341521085.dkr.ecr.ap-northeast-1.amazonaws.com/research-agent:latest",
+      "ImageRepositoryType": "ECR",
+      "ImageConfiguration": {
+        "Port": "8080",
+        "RuntimeEnvironmentVariables": {
+          "RESEARCH_AGENT_STORAGE_DIR": "/tmp/research-agent",
+          "RESEARCH_AGENT_RUNTIME_DIR": "/tmp/research-agent/runtime"
+        }
+      }
+    }
+  },
+  "InstanceConfiguration": {
+    "Cpu": "1 vCPU",
+    "Memory": "2 GB"
+  }
+}

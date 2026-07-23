@@ -13,6 +13,7 @@ from .agents.memory import log_decision, log_token_usage
 from .agents.policy_gate import log_llm_decision
 from .agents.submission import prepare_submission
 from .execution_profile import load_execution_profile, validate_execution_profile
+from .incremental_trial import enrich_delta_plan, write_base_summary
 from .paths import competition_dir, competition_memory_dir, trial_dir
 from .policies import load_policy, select_model_for_call
 from .rag_policy import evaluate_rag_policy
@@ -881,6 +882,7 @@ def load_demo_context(competition: str, trial_id: str) -> dict[str, Any]:
     recent_trials = _load_demo_recent_trials(competition, current_trial_id=trial_id, limit=3)
     decision_context = load_latest_decision_context(competition)
     source_trial_id = _select_demo_source_trial_id(recent_trials, trial_id, decision_context)
+    base_summary = write_base_summary(competition, trial_id, source_trial_id)
     competition_docs = _load_demo_competition_docs(competition)
     data_profile = _build_demo_data_profile(competition, profile, state)
     context = {
@@ -888,6 +890,7 @@ def load_demo_context(competition: str, trial_id: str) -> dict[str, Any]:
         "trial_id": trial_id,
         "plan_type": "continuation_delta_plan" if source_trial_id else "initial_pipeline_plan",
         "source_trial_id": source_trial_id,
+        "base_summary": base_summary,
         "status": "ready" if validation["status"] == "ready" else "blocked",
         "issues": validation["issues"],
         "metric": state.get("competition", {}).get("metric", "unknown"),
@@ -930,6 +933,130 @@ def load_demo_context(competition: str, trial_id: str) -> dict[str, Any]:
         next_action="create-demo-experiment-plan" if context["status"] == "ready" else "fix-execution-profile",
     )
     return context
+
+
+def prepare_workspace_trial_plan(
+    competition: str,
+    trial_id: str,
+    *,
+    source_trial_id: str | None = None,
+    model: str | None = None,
+    provider: str | None = None,
+    allow_api: bool = False,
+    trial_llm_calls: int | None = None,
+    strategy_calls_today: int | None = None,
+    user_insight_override: dict[str, Any] | None = None,
+    force_replan: bool = False,
+) -> dict[str, Any]:
+    """Prepare a runnable trial plan without starting code generation."""
+
+    out_dir = trial_dir(competition, trial_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    existing = _load_ready_demo_plan(out_dir)
+    if existing is not None and not force_replan:
+        _write_continuation_context(competition, trial_id, source_trial_id=source_trial_id)
+        return {
+            "competition": competition,
+            "trial_id": trial_id,
+            "status": "planned",
+            "plan": existing,
+            "resumed_from_existing_artifact": True,
+        }
+
+    if force_replan:
+        _archive_plan_revision(out_dir)
+
+    context = load_demo_context(competition, trial_id)
+    if source_trial_id is not None:
+        context["source_trial_id"] = source_trial_id
+        context["plan_type"] = "continuation_delta_plan"
+        context["base_summary"] = write_base_summary(competition, trial_id, source_trial_id)
+    if user_insight_override:
+        decision_context = (
+            dict(context.get("decision_context") or {})
+            if isinstance(context.get("decision_context"), dict)
+            else {}
+        )
+        decision_context.update(
+            {
+                "user_insight_override": user_insight_override,
+                "active_axis": user_insight_override.get("active_axis"),
+                "axis_attempt_count": user_insight_override.get("axis_attempt_count"),
+                "axis_attempt_limit": user_insight_override.get("axis_attempt_limit"),
+                "recommended_base_trial": user_insight_override.get("base_trial_id"),
+                "planner_constraints": list(decision_context.get("planner_constraints") or [])
+                + list(user_insight_override.get("planner_constraints") or []),
+            }
+        )
+        context["decision_context"] = decision_context
+        context["user_insight_override"] = user_insight_override
+
+    model_policy = resolve_demo_model_policy(model_override=model, provider_override=provider)
+    context["model_policy"] = model_policy
+    context["planning_context_pack"] = _build_planning_context_pack_if_needed(competition, trial_id, context)
+    write_text(out_dir / "demo_context.json", json.dumps(context, ensure_ascii=False, indent=2) + "\n")
+    write_text(out_dir / "demo_context.md", render_demo_context(context))
+    if context.get("status") != "ready":
+        return {
+            "competition": competition,
+            "trial_id": trial_id,
+            "status": "blocked_context",
+            "issues": list(context.get("issues") or []),
+            "context": context,
+        }
+
+    plan = create_demo_experiment_plan(
+        competition,
+        trial_id,
+        context,
+        model_config=model_policy["experiment_planning"],
+        allow_api=allow_api,
+        mock_plan_file=None,
+        trial_llm_calls=trial_llm_calls,
+        strategy_calls_today=strategy_calls_today,
+    )
+    if plan.get("status") != "ready":
+        return {
+            "competition": competition,
+            "trial_id": trial_id,
+            "status": "blocked_planning",
+            "issues": list(plan.get("issues") or []),
+            "plan": plan,
+        }
+    if user_insight_override:
+        plan["user_insight_override"] = user_insight_override
+        plan["plan_revision"] = {
+            "reason": "user_insight_before_code",
+            "insight_id": user_insight_override.get("insight_id"),
+        }
+        _write_plan_result(competition, trial_id, plan)
+    _write_continuation_context(competition, trial_id, source_trial_id=source_trial_id)
+    return {
+        "competition": competition,
+        "trial_id": trial_id,
+        "status": "planned",
+        "plan": plan,
+        "resumed_from_existing_artifact": False,
+    }
+
+
+def _archive_plan_revision(out_dir: Path) -> None:
+    names = [
+        "demo_experiment_plan.json",
+        "demo_experiment_plan.md",
+        "next_experiment.md",
+        "delta_plan.json",
+        "delta_plan.md",
+        "demo_context.json",
+        "demo_context.md",
+    ]
+    existing = [out_dir / name for name in names if (out_dir / name).is_file()]
+    if not existing:
+        return
+    revision_dir = out_dir / "internal" / "plan_revisions" / time.strftime("%Y%m%d_%H%M%S")
+    revision_dir.mkdir(parents=True, exist_ok=True)
+    for path in existing:
+        write_text(revision_dir / path.name, path.read_text(encoding="utf-8"))
 
 
 def _build_planning_context_pack_if_needed(competition: str, trial_id: str, context: dict[str, Any]) -> dict[str, Any]:
@@ -1107,7 +1234,7 @@ def build_demo_plan_payload(context: dict[str, Any], *, model: str) -> dict[str,
             "Explicitly state the previous best/local score you used, what changed in the previous pipeline, and exactly one improvement axis for this trial.",
             "Avoid generic wording such as 'improve performance'; name the concrete split, preprocessing, feature, model, or parameter change.",
             "Do not call the plan first-cycle or baseline unless the evidence truly shows no completed prior trial.",
-            "Return continuation fields when applicable: primary_change_axis, keep_unchanged, change_details, code_change_targets, success_criteria, failure_decision.",
+            "Return continuation fields when applicable: primary_change_axis, keep_unchanged, change_details, affected_stages, required_code_symbols, expected_metadata_changes, code_change_targets, success_criteria, failure_decision.",
             "The plan should be concise. Do not repeat the full pipeline blueprint except for the parts affected by the chosen change axis.",
         ]
         if source_trial_id
@@ -1193,7 +1320,7 @@ def build_delta_plan_payload(context: dict[str, Any], *, model: str) -> dict[str
                         "Do not repeat any rejected_candidate listed in the context.",
                         "Change exactly one primary axis and keep split/model/preprocessing unchanged unless the active axis explicitly targets them.",
                         "Return JSON with exactly these top-level fields:",
-                        "plan_type, plan_title, source_trial_id, primary_change_axis, candidate, do_not_repeat, keep_unchanged, change_details, code_change_targets, success_criteria, failure_decision, expected_outputs.",
+                        "plan_type, plan_title, source_trial_id, primary_change_axis, candidate, do_not_repeat, keep_unchanged, change_details, affected_stages, required_code_symbols, expected_metadata_changes, code_change_targets, success_criteria, failure_decision, expected_outputs.",
                         "Keep every list short. candidate must include name, description, and implementation_hint.",
                         "",
                         "## Delta Context",
@@ -1234,6 +1361,7 @@ def _compact_delta_context_for_prompt(context: dict[str, Any]) -> dict[str, Any]
         "objective": context.get("objective"),
         "target_column": data_profile.get("target_column"),
         "id_column": data_profile.get("id_column"),
+        "base_summary": context.get("base_summary", {}),
         "base_trial": {
             "trial_id": context.get("source_trial_id"),
             "local_score": best.get("local_score"),
@@ -1585,7 +1713,7 @@ def _write_plan_result(competition: str, trial_id: str, plan: dict[str, Any]) ->
     write_text(out_dir / "demo_experiment_plan.md", render_demo_plan(plan))
     if plan.get("status") == "ready":
         write_text(out_dir / "next_experiment.md", render_demo_plan(plan))
-        if plan.get("plan_type") == "delta_patch":
+        if plan.get("source_trial_id"):
             write_text(out_dir / "delta_plan.json", json.dumps(_delta_plan_contract(plan), ensure_ascii=False, indent=2) + "\n")
             write_text(out_dir / "delta_plan.md", render_delta_plan_contract(plan))
     log_decision(
@@ -1606,6 +1734,7 @@ def _write_plan_result(competition: str, trial_id: str, plan: dict[str, Any]) ->
 
 
 def _delta_plan_contract(plan: dict[str, Any]) -> dict[str, Any]:
+    plan = enrich_delta_plan(plan)
     candidate = plan.get("candidate") if isinstance(plan.get("candidate"), dict) else {}
     return {
         "schema_version": "1.0",
@@ -1622,6 +1751,9 @@ def _delta_plan_contract(plan: dict[str, Any]) -> dict[str, Any]:
         "keep_unchanged": _normalize_plan_items(plan.get("keep_unchanged")),
         "change_details": _normalize_plan_items(plan.get("change_details")),
         "code_change_targets": _normalize_plan_items(plan.get("code_change_targets")),
+        "affected_stages": _normalize_plan_items(plan.get("affected_stages")),
+        "required_code_symbols": _normalize_plan_items(plan.get("required_code_symbols")),
+        "expected_metadata_changes": _normalize_plan_items(plan.get("expected_metadata_changes")),
         "success_criteria": _normalize_plan_items(plan.get("success_criteria")),
         "failure_decision": _normalize_plan_items(plan.get("failure_decision")),
         "expected_outputs": _normalize_plan_items(plan.get("expected_outputs")),
@@ -1998,6 +2130,7 @@ def _compact_demo_context_for_prompt(context: dict[str, Any]) -> dict[str, Any]:
         "trial_id": context.get("trial_id"),
         "plan_type": context.get("plan_type"),
         "source_trial_id": context.get("source_trial_id"),
+        "base_summary": context.get("base_summary", {}),
         "metric": context.get("metric"),
         "objective": context.get("objective"),
         "platform": context.get("platform"),
@@ -2011,6 +2144,7 @@ def _compact_demo_context_for_prompt(context: dict[str, Any]) -> dict[str, Any]:
             "save_model_default": context.get("artifact_policy", {}).get("save_model_default"),
         },
         "recent_trials": context.get("recent_trials", []),
+        "user_insight_override": context.get("user_insight_override"),
             "decision_context": {
                 "decision": decision_context.get("decision"),
                 "active_axis": decision_context.get("active_axis"),
@@ -2121,6 +2255,9 @@ def _normalize_plan(plan: dict[str, Any], context: dict[str, Any]) -> dict[str, 
     normalized.setdefault("expected_outputs", ["metrics.json", "submission.csv"])
     normalized.setdefault("candidate", {})
     normalized.setdefault("do_not_repeat", [])
+    normalized.setdefault("affected_stages", [])
+    normalized.setdefault("required_code_symbols", [])
+    normalized.setdefault("expected_metadata_changes", [])
     normalized.setdefault("issues", [])
     normalized["plan_title"] = _normalize_plan_text(normalized.get("plan_title"))
     normalized["objective"] = _normalize_plan_text(normalized.get("objective"))
@@ -2135,6 +2272,9 @@ def _normalize_plan(plan: dict[str, Any], context: dict[str, Any]) -> dict[str, 
     normalized["implementation_notes"] = _normalize_plan_items(normalized.get("implementation_notes"))
     normalized["expected_outputs"] = _normalize_plan_items(normalized.get("expected_outputs"))
     normalized["do_not_repeat"] = _normalize_plan_items(normalized.get("do_not_repeat"))
+    normalized["affected_stages"] = _normalize_plan_items(normalized.get("affected_stages"))
+    normalized["required_code_symbols"] = _normalize_plan_items(normalized.get("required_code_symbols"))
+    normalized["expected_metadata_changes"] = _normalize_plan_items(normalized.get("expected_metadata_changes"))
     if not isinstance(normalized.get("candidate"), dict):
         normalized["candidate"] = {"name": _normalize_plan_text(normalized.get("candidate"))}
     else:
@@ -2145,6 +2285,8 @@ def _normalize_plan(plan: dict[str, Any], context: dict[str, Any]) -> dict[str, 
         }
     if plan_type == "continuation_delta_plan":
         _promote_implementation_notes(normalized)
+    if normalized.get("source_trial_id"):
+        normalized = enrich_delta_plan(normalized)
     if not isinstance(normalized["issues"], list):
         normalized["issues"] = [str(normalized["issues"])]
     return normalized

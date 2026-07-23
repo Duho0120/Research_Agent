@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,13 @@ from .retrieval.context_pack import build_context_pack
 from .store import read_text, write_text
 
 
-def prepare_workspace_coding_handoff(competition: str, trial_id: str) -> dict[str, Any]:
+def prepare_workspace_coding_handoff(
+    competition: str,
+    trial_id: str,
+    *,
+    expanded_snapshot: bool = False,
+    retry_reason: str | None = None,
+) -> dict[str, Any]:
     out_dir = trial_dir(competition, trial_id)
     next_experiment_path = out_dir / "next_experiment.md"
     continuation_path = out_dir / "continuation_context.json"
@@ -47,6 +54,8 @@ def prepare_workspace_coding_handoff(competition: str, trial_id: str) -> dict[st
         profile=profile,
         profile_validation=validation,
         continuation=continuation,
+        expanded_snapshot=expanded_snapshot,
+        retry_reason=retry_reason,
     )
     write_text(out_dir / "workspace_coding_handoff.json", json.dumps(handoff, ensure_ascii=False, indent=2) + "\n")
     if status == "ready":
@@ -77,7 +86,10 @@ def _build_handoff(
     profile: dict[str, Any],
     profile_validation: dict[str, Any],
     continuation: dict[str, Any],
+    expanded_snapshot: bool = False,
+    retry_reason: str | None = None,
 ) -> dict[str, Any]:
+    out_dir = trial_dir(competition, trial_id)
     artifacts = profile.get("artifacts", {}) if profile else {}
     scope = profile.get("write_scope", {}) if profile else {}
     allowed = list(scope.get("allowed", [])) if isinstance(scope, dict) else []
@@ -89,17 +101,29 @@ def _build_handoff(
         validation_commands = list(commands.get("test", []))
     edit_mode = _edit_mode_for_continuation(continuation)
     source_trial_id = str(continuation.get("source_trial_id") or "") or None
-    base_code_files = _source_trial_code_files(competition, source_trial_id)
-    restore_base_before_patch = bool(source_trial_id and base_code_files)
+    code_base_trial_id = str(continuation.get("recommended_base_trial") or "") or source_trial_id
+    base_code_files = _source_trial_code_files(competition, code_base_trial_id)
+    base_code_source = _source_trial_code_source_label(competition, code_base_trial_id) if base_code_files else None
+    restore_base_before_patch = bool(code_base_trial_id and base_code_files)
     next_action = "send-to-workspace-coding-agent" if status == "ready" else "resolve-workspace-handoff-blockers"
     metrics_paths = artifacts.get("metrics", []) if isinstance(artifacts, dict) else []
     metrics_path = metrics_paths[0] if metrics_paths else "outputs/metrics.json"
     context_files = _context_files(competition, trial_id)
+    delta_plan = _load_json_object(out_dir / "delta_plan.json") or {}
+    patch_budget = _patch_budget_for_delta(delta_plan)
     artifact_policy = load_policy("artifact_policy")
     data_card_summary = _load_data_card_summary(competition)
     retrieval_context: dict[str, Any] = {}
     if status == "ready" and profile:
-        context_files.extend(_write_workspace_context_snapshot(competition, trial_id, profile, continuation))
+        context_files.extend(
+            _write_workspace_context_snapshot(
+                competition,
+                trial_id,
+                profile,
+                continuation,
+                expanded_snapshot=expanded_snapshot,
+            )
+        )
         rag_policy = _workspace_coding_rag_policy(continuation)
         if rag_policy["use_rag"]:
             retrieval_context = build_context_pack(
@@ -140,10 +164,13 @@ def _build_handoff(
         "platform": profile.get("platform") if profile else None,
         "continuation_mode": continuation.get("continuation_mode"),
         "source_trial_id": source_trial_id,
-        "code_base_trial_id": source_trial_id,
+        "code_base_trial_id": code_base_trial_id,
+        "recommended_base_trial": continuation.get("recommended_base_trial"),
         "pending_human_review": bool(continuation.get("pending_human_review")),
         "review_source_trial": continuation.get("review_source_trial"),
         "context_files": context_files,
+        "snapshot_mode": "expanded_after_code_writer_blocked" if expanded_snapshot else "standard",
+        "retry_reason": retry_reason,
         "retrieval_context": _compact_retrieval_context(retrieval_context),
         "data_card_summary": data_card_summary,
         "edit_policy": {
@@ -151,9 +178,8 @@ def _build_handoff(
             "prefer_patch_updates": edit_mode == "patch_only",
             "allow_full_file_updates": edit_mode == "full_file_allowed",
             "restore_base_before_patch": restore_base_before_patch,
-            "base_code_source": f"experiments/{competition}/{source_trial_id}/internal/code_snapshot"
-            if restore_base_before_patch
-            else None,
+            "base_code_source": base_code_source if restore_base_before_patch else None,
+            "patch_budget": patch_budget,
             "patch_schema": {
                 "path": "project-root-relative file path",
                 "find": "exact existing text to replace",
@@ -200,6 +226,16 @@ def _build_handoff(
 
 def _edit_mode_for_continuation(continuation: dict[str, Any]) -> str:
     return "patch_only" if continuation.get("source_trial_id") else "full_file_allowed"
+
+
+def _patch_budget_for_delta(delta_plan: dict[str, Any]) -> int:
+    stages = delta_plan.get("affected_stages") if isinstance(delta_plan, dict) else []
+    stage_count = len(stages) if isinstance(stages, list) else 0
+    if stage_count <= 2:
+        return 2
+    if stage_count <= 4:
+        return 4
+    return 6
 
 
 def _coding_instruction_text(out_dir: Path, continuation: dict[str, Any], fallback: str) -> str:
@@ -376,7 +412,7 @@ def render_workspace_coding_request(handoff: dict[str, Any], next_experiment: st
 def _context_files(competition: str, trial_id: str) -> list[str]:
     out_dir = trial_dir(competition, trial_id)
     continuation = _load_json_object(out_dir / "continuation_context.json") or {}
-    if _is_active_axis_refinement(continuation) and (out_dir / "delta_plan.json").exists():
+    if continuation.get("source_trial_id") and (out_dir / "delta_plan.json").exists():
         candidates = [
             "delta_plan.json",
             "delta_plan.md",
@@ -395,12 +431,18 @@ def _write_workspace_context_snapshot(
     trial_id: str,
     profile: dict[str, Any],
     continuation: dict[str, Any],
+    *,
+    expanded_snapshot: bool = False,
 ) -> list[str]:
     out_dir = trial_dir(competition, trial_id)
-    source_trial_id = continuation.get("source_trial_id")
-    is_delta_refinement = _is_active_axis_refinement(continuation) and (out_dir / "delta_plan.json").exists()
+    source_trial_id = continuation.get("recommended_base_trial") or continuation.get("source_trial_id")
+    is_delta_refinement = bool(source_trial_id and (out_dir / "delta_plan.json").exists())
     delta_plan = _load_json_object(out_dir / "delta_plan.json") if is_delta_refinement else {}
-    snapshot_limits = _workspace_snapshot_limits(bool(source_trial_id), is_delta_refinement)
+    snapshot_limits = _workspace_snapshot_limits(
+        bool(source_trial_id),
+        is_delta_refinement,
+        expanded_snapshot=expanded_snapshot,
+    )
     content = render_workspace_context_snapshot(
         competition,
         trial_id,
@@ -408,6 +450,7 @@ def _write_workspace_context_snapshot(
         source_trial_id=str(source_trial_id) if source_trial_id else None,
         delta_plan=delta_plan if isinstance(delta_plan, dict) else {},
         compact_for_delta=is_delta_refinement,
+        include_current_code_body=expanded_snapshot,
         **snapshot_limits,
     )
     path = out_dir / "workspace_context_snapshot.md"
@@ -415,7 +458,14 @@ def _write_workspace_context_snapshot(
     return [f"experiments/{competition}/{trial_id}/workspace_context_snapshot.md"]
 
 
-def _workspace_snapshot_limits(has_source_trial: bool, is_delta_refinement: bool) -> dict[str, int]:
+def _workspace_snapshot_limits(
+    has_source_trial: bool,
+    is_delta_refinement: bool,
+    *,
+    expanded_snapshot: bool = False,
+) -> dict[str, int]:
+    if expanded_snapshot:
+        return {"max_files": 10, "max_chars_per_file": 16000, "max_total_chars": 52000}
     if not has_source_trial:
         return {"max_files": 5, "max_chars_per_file": 900, "max_total_chars": 2600}
     if is_delta_refinement:
@@ -431,6 +481,7 @@ def render_workspace_context_snapshot(
     source_trial_id: str | None,
     delta_plan: dict[str, Any] | None = None,
     compact_for_delta: bool = False,
+    include_current_code_body: bool = False,
     max_files: int = 16,
     max_chars_per_file: int = 3000,
     max_total_chars: int = 12000,
@@ -462,8 +513,26 @@ def render_workspace_context_snapshot(
             max_total_chars=max_total_chars,
         )
         lines.extend(source_sections or ["- No saved source trial code snapshot was found."])
-        lines.extend(["", "## Current Workspace Code Inventory", ""])
-        lines.extend(_current_code_inventory(profile))
+        if source_sections and not include_current_code_body:
+            lines.extend(["", "## Current Workspace Code Inventory", ""])
+            lines.extend(_current_code_inventory(profile))
+        else:
+            lines.extend(
+                [
+                    "",
+                    "## Current Workspace Code",
+                    "",
+                    "- Used as exact patch context because no saved base-trial code snapshot was available or an expanded retry was requested.",
+                    "",
+                ]
+            )
+            current_sections = _current_code_sections(
+                profile,
+                max_files=max_files,
+                max_chars_per_file=max_chars_per_file,
+                max_total_chars=max_total_chars,
+            )
+            lines.extend(current_sections or ["- No readable current workspace code files were found."])
     else:
         lines.extend(["## Current Project Code", ""])
         code_sections = _current_code_sections(
@@ -571,6 +640,23 @@ def _source_trial_code_files(competition: str, source_trial_id: str | None) -> l
     return sorted(files, key=lambda item: _code_file_priority(Path(item[0])))
 
 
+def _source_trial_code_source_label(competition: str, source_trial_id: str | None) -> str | None:
+    if not source_trial_id:
+        return None
+    source_dir = trial_dir(competition, source_trial_id)
+    if load_trial_code_snapshot(source_dir):
+        return f"experiments/{competition}/{source_trial_id}/internal/code_snapshot"
+    if (source_dir / "user_view" / "code").is_dir():
+        return f"experiments/{competition}/{source_trial_id}/user_view/code"
+    result_path = source_dir / "workspace_coding_result.json"
+    if result_path.exists():
+        return f"experiments/{competition}/{source_trial_id}/workspace_coding_result.json"
+    internal_result_path = source_dir / "internal" / "workspace_coding_result.json"
+    if internal_result_path.exists():
+        return f"experiments/{competition}/{source_trial_id}/internal/workspace_coding_result.json"
+    return None
+
+
 def _current_code_sections(
     profile: dict[str, Any],
     *,
@@ -618,8 +704,10 @@ def _current_code_inventory(profile: dict[str, Any]) -> list[str]:
 
 def _context_file_limit(relative_path: str, default_limit: int) -> int:
     normalized = relative_path.replace("\\", "/")
+    if normalized.endswith("src/titanic_pipeline.py"):
+        return max(default_limit, 14000)
     if normalized.endswith("src/baseline.py"):
-        return max(default_limit, 13000)
+        return min(max(default_limit, 2200), 4000)
     return default_limit
 
 
@@ -631,9 +719,64 @@ def _source_code_snippet(
     delta_plan: dict[str, Any] | None = None,
 ) -> str:
     normalized = relative_path.replace("\\", "/")
+    if normalized.endswith(".py") and len(text) > max_chars:
+        compact = _compact_python_code_for_patch(text, max_chars, delta_plan=delta_plan)
+        if compact:
+            return compact
     if normalized.endswith("src/baseline.py") and len(text) > max_chars:
         return _compact_baseline_code_for_patch(text, max_chars, delta_plan=delta_plan)
     return text[:max_chars]
+
+
+def _compact_python_code_for_patch(
+    text: str,
+    max_chars: int,
+    *,
+    delta_plan: dict[str, Any] | None = None,
+) -> str:
+    if not isinstance(delta_plan, dict):
+        return ""
+    required = {
+        str(item).strip()
+        for item in delta_plan.get("required_code_symbols", [])
+        if str(item).strip()
+    }
+    if not required:
+        return ""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return ""
+    lines = text.splitlines()
+    top_level = [
+        node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    ]
+    selected = set(required)
+    for node in top_level:
+        if node.name not in required:
+            continue
+        selected.update(
+            child.func.id
+            for child in ast.walk(node)
+            if isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
+        )
+    first_definition = min((node.lineno for node in top_level), default=len(lines) + 1) - 1
+    output = [
+        "# Compacted Python context selected from delta_plan.required_code_symbols.",
+        *lines[:first_definition],
+    ]
+    for node in top_level:
+        if node.name not in selected:
+            continue
+        start = max(node.lineno - 1, 0)
+        end = getattr(node, "end_lineno", node.lineno)
+        output.extend(["", f"# --- {node.name} ---", *lines[start:end]])
+    compact = "\n".join(output).strip() + "\n"
+    if len(compact) <= max_chars:
+        return compact
+    return compact[:max_chars] + "\n# ... symbol context truncated at prompt budget ...\n"
 
 
 def _compact_baseline_code_for_patch(text: str, max_chars: int, *, delta_plan: dict[str, Any] | None = None) -> str:
@@ -739,8 +882,10 @@ def _safe_relative_code_path(value: object) -> str:
 
 def _code_file_priority(path: Path) -> tuple[int, str]:
     normalized = path.as_posix()
-    if normalized.endswith("/src/baseline.py") or normalized.endswith("src/baseline.py"):
+    if normalized.endswith("/src/titanic_pipeline.py") or normalized.endswith("src/titanic_pipeline.py"):
         return (0, normalized)
+    if normalized.endswith("/src/baseline.py") or normalized.endswith("src/baseline.py"):
+        return (4, normalized)
     if path.name in {"train_step.py", "predict_step.py", "test_step.py"}:
         return (1, normalized)
     return (2, normalized)

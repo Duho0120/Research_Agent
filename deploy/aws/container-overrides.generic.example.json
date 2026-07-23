@@ -1,0 +1,33 @@
+{
+  "containerOverrides": [
+    {
+      "name": "research-agent",
+      "command": [
+        "python",
+        "-B",
+        "scripts/generic_workspace_auto_loop.py",
+        "--competition",
+        "<competition-slug>",
+        "--start-trial",
+        "trial_001",
+        "--max-trials",
+        "5",
+        "--submit",
+        "--kaggle-slug",
+        "<competition-slug>",
+        "--code-writer",
+        "--allow-api"
+      ],
+      "environment": [
+        {
+          "name": "RESEARCH_AGENT_STORAGE_DIR",
+          "value": "/mnt/research-agent/users/<user-id>/<competition-slug>"
+        },
+        {
+          "name": "RESEARCH_AGENT_RUNTIME_DIR",
+          "value": "/mnt/research-agent/users/<user-id>/<competition-slug>/runtime"
+        }
+      ]
+    }
+  ]
+}

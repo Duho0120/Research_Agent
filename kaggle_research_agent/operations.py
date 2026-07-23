@@ -128,7 +128,8 @@ def _with_operation_fields(status: dict[str, Any]) -> dict[str, Any]:
     trials = list(status.get("trials") or [])
     latest = _latest_trial(trials)
     pending_actions = list(status.get("pending_actions") or [])
-    next_id = next_trial_id(trials)
+    latest_status = str(latest.get("status") or "").casefold()
+    next_id = str(latest.get("trial_id")) if latest_status in {"planned", "ready"} else next_trial_id(trials)
     competition_id = experiment["competition_id"]
     active_axis = latest.get("active_axis") or latest.get("primary_change_axis") or latest.get("change_axis")
     attempt_count = latest.get("axis_attempt_count")
@@ -140,7 +141,7 @@ def _with_operation_fields(status: dict[str, Any]) -> dict[str, Any]:
     elif not trials:
         state = "ready_first_trial"
         label = "첫 trial을 실행할 수 있습니다."
-    elif str(latest.get("status") or "").lower() == "blocked":
+    elif latest_status == "blocked":
         state = "blocked"
         label = "최신 trial이 중단되었습니다. show-trial로 원인을 확인하세요."
     elif str(experiment.get("status") or "").lower() in {"needs_data", "needs_review"}:
@@ -148,7 +149,9 @@ def _with_operation_fields(status: dict[str, Any]) -> dict[str, Any]:
         label = "실험 입력 자료 또는 데이터 준비가 필요합니다."
     else:
         state = "ready_next_trial"
-        if _axis_refinement_in_progress(active_axis, attempt_count, attempt_limit):
+        if latest_status in {"planned", "ready"}:
+            label = "준비된 계획으로 코드 작성을 시작할 수 있습니다."
+        elif _axis_refinement_in_progress(active_axis, attempt_count, attempt_limit):
             label = f"`{active_axis}` 개선축 안에서 다음 후보/파라미터 변형을 시도하세요."
         else:
             label = "다음 trial을 실행할 수 있습니다."
