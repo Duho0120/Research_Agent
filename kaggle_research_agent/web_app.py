@@ -572,6 +572,7 @@ def floating_chat(answer: str = "") -> str:
     return f"""
       <button type="button" class="chat-fab" id="chat-fab" aria-label="에이전트 채팅 열기" aria-controls="chat-widget" aria-expanded="false">AI</button>
       <section class="chat-widget" id="chat-widget" aria-label="에이전트 채팅" hidden>
+        <button type="button" class="chat-resize-handle" id="chat-resize-handle" aria-label="채팅창 크기 조절" title="드래그하여 채팅창 크기 조절"></button>
         <header class="chat-widget-head">
           <div>
             <strong>Research Agent</strong>
@@ -993,8 +994,13 @@ def page(*, title: str, body: str) -> str:
     ul {{ margin: 0; padding-left: 20px; line-height: 1.7; }}
     li form {{ margin-top: 8px; display: grid; gap: 8px; }}
     .chat-fab {{ position: fixed; right: 24px; bottom: 24px; z-index: 30; width: 58px; height: 58px; border-radius: 50%; box-shadow: 0 10px 24px rgba(22,32,42,.2); font-size: 16px; }}
-    .chat-widget {{ position: fixed; right: 24px; bottom: 94px; z-index: 31; width: 390px; max-width: calc(100vw - 32px); height: min(620px, calc(100vh - 126px)); border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: 0 18px 46px rgba(22,32,42,.22); display: flex; flex-direction: column; overflow: hidden; }}
-    .chat-widget-head {{ display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 14px 12px; border-bottom: 1px solid var(--line); }}
+    .chat-widget {{ position: fixed; right: 24px; bottom: 94px; z-index: 31; width: 390px; min-width: 390px; max-width: calc(100vw - 48px); height: min(620px, calc(100vh - 126px)); min-height: min(620px, calc(100vh - 126px)); max-height: calc(100vh - 110px); border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: 0 18px 46px rgba(22,32,42,.22); display: flex; flex-direction: column; overflow: hidden; }}
+    .chat-resize-handle {{ position: absolute; top: 0; left: 0; z-index: 2; width: 28px; height: 28px; padding: 0; border-radius: 7px 0 7px 0; background: transparent; color: var(--muted); cursor: nwse-resize; touch-action: none; }}
+    .chat-resize-handle::before, .chat-resize-handle::after {{ content: ""; position: absolute; left: 7px; top: 7px; width: 9px; height: 1px; background: currentColor; transform: rotate(-45deg); transform-origin: left center; }}
+    .chat-resize-handle::after {{ left: 7px; top: 12px; width: 15px; }}
+    .chat-resize-handle:hover, .chat-resize-handle:focus-visible {{ background: var(--soft); color: var(--accent); }}
+    .chat-widget.is-resizing {{ user-select: none; }}
+    .chat-widget-head {{ display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 14px 12px 36px; border-bottom: 1px solid var(--line); }}
     .chat-widget-head div {{ display: grid; gap: 3px; }}
     .chat-widget-head span {{ color: var(--muted); font-size: 12px; }}
     .chat-close {{ width: 34px; height: 34px; border-radius: 50%; padding: 0; background: var(--soft); color: var(--ink); font-size: 18px; }}
@@ -1022,7 +1028,8 @@ def page(*, title: str, body: str) -> str:
       .inline-control, .inline-control.compact, .two {{ grid-template-columns: 1fr; }}
       .control-actions {{ align-items: stretch; }}
       .chat-fab {{ right: 16px; bottom: 16px; }}
-      .chat-widget {{ right: 16px; bottom: 84px; width: calc(100vw - 32px); height: min(620px, calc(100vh - 104px)); }}
+      .chat-widget {{ right: 16px; bottom: 84px; width: calc(100vw - 32px) !important; min-width: 0; max-width: none; height: min(620px, calc(100vh - 104px)) !important; min-height: 0; max-height: none; }}
+      .chat-resize-handle {{ display: none; }}
       .chat-widget .chat-form {{ grid-template-columns: 1fr; }}
     }}
   </style>
@@ -1105,7 +1112,86 @@ def page(*, title: str, body: str) -> str:
     const chatWidget = document.getElementById("chat-widget");
     const chatFab = document.getElementById("chat-fab");
     const chatClose = document.getElementById("chat-close");
+    const chatResizeHandle = document.getElementById("chat-resize-handle");
     const chatOpenButtons = document.querySelectorAll("[data-open-chat]");
+    const chatSizeStorageKey = "research-agent-chat-size";
+    const minimumChatWidth = 390;
+    function minimumChatHeight() {{
+      return Math.min(620, Math.max(180, window.innerHeight - 126));
+    }}
+    function clamp(value, minimum, maximum) {{
+      return Math.min(Math.max(value, minimum), Math.max(minimum, maximum));
+    }}
+    function applyChatSize(width, height, persist = true) {{
+      if (!chatWidget || window.innerWidth <= 900) return;
+      const nextWidth = clamp(width, minimumChatWidth, window.innerWidth - 48);
+      const nextHeight = clamp(height, minimumChatHeight(), window.innerHeight - 110);
+      chatWidget.style.width = `${{Math.round(nextWidth)}}px`;
+      chatWidget.style.height = `${{Math.round(nextHeight)}}px`;
+      if (persist) {{
+        try {{
+          localStorage.setItem(chatSizeStorageKey, JSON.stringify({{width: nextWidth, height: nextHeight}}));
+        }} catch (error) {{
+          // The chat remains resizable when browser storage is unavailable.
+        }}
+      }}
+    }}
+    function restoreChatSize() {{
+      if (!chatWidget || window.innerWidth <= 900) return;
+      try {{
+        const saved = JSON.parse(localStorage.getItem(chatSizeStorageKey) || "null");
+        if (saved && Number.isFinite(saved.width) && Number.isFinite(saved.height)) {{
+          applyChatSize(saved.width, saved.height, false);
+        }}
+      }} catch (error) {{
+        localStorage.removeItem(chatSizeStorageKey);
+      }}
+    }}
+    if (chatResizeHandle && chatWidget) {{
+      chatResizeHandle.addEventListener("pointerdown", (event) => {{
+        if (window.innerWidth <= 900) return;
+        event.preventDefault();
+        chatResizeHandle.setPointerCapture(event.pointerId);
+        const startX = event.clientX;
+        const startY = event.clientY;
+        const startWidth = chatWidget.getBoundingClientRect().width;
+        const startHeight = chatWidget.getBoundingClientRect().height;
+        chatWidget.classList.add("is-resizing");
+        const resize = (moveEvent) => {{
+          applyChatSize(
+            startWidth + startX - moveEvent.clientX,
+            startHeight + startY - moveEvent.clientY,
+            false,
+          );
+        }};
+        const finish = () => {{
+          chatResizeHandle.removeEventListener("pointermove", resize);
+          chatResizeHandle.removeEventListener("pointerup", finish);
+          chatResizeHandle.removeEventListener("pointercancel", finish);
+          chatWidget.classList.remove("is-resizing");
+          const bounds = chatWidget.getBoundingClientRect();
+          applyChatSize(bounds.width, bounds.height, true);
+        }};
+        chatResizeHandle.addEventListener("pointermove", resize);
+        chatResizeHandle.addEventListener("pointerup", finish);
+        chatResizeHandle.addEventListener("pointercancel", finish);
+      }});
+      chatResizeHandle.addEventListener("keydown", (event) => {{
+        if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+        event.preventDefault();
+        const bounds = chatWidget.getBoundingClientRect();
+        const step = event.shiftKey ? 48 : 16;
+        const width = bounds.width + (event.key === "ArrowLeft" ? step : event.key === "ArrowRight" ? -step : 0);
+        const height = bounds.height + (event.key === "ArrowUp" ? step : event.key === "ArrowDown" ? -step : 0);
+        applyChatSize(width, height);
+      }});
+    }}
+    restoreChatSize();
+    window.addEventListener("resize", () => {{
+      if (!chatWidget || window.innerWidth <= 900) return;
+      const bounds = chatWidget.getBoundingClientRect();
+      applyChatSize(bounds.width, bounds.height, false);
+    }});
     function setChatOpen(open) {{
       if (!chatWidget || !chatFab) return;
       chatWidget.hidden = !open;

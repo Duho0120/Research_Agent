@@ -1,19 +1,13 @@
 from __future__ import annotations
 
 import os
-import json
 import re
-from pathlib import Path
 from typing import Any, Protocol
 
 from .agents.code_writer_adapter import OpenAIResponsesClient
 from .agents.memory import log_token_usage
+from .experiment_qa_retrieval import retrieve_experiment_evidence
 from .paths import project_root
-
-
-MAX_DOCUMENTS = 16
-MAX_CHARS_PER_DOCUMENT = 8_000
-MAX_CONTEXT_CHARS = 60_000
 
 
 class ResponseClient(Protocol):
@@ -29,7 +23,7 @@ def answer_experiment_question(
     client: ResponseClient | None = None,
     use_llm: bool = True,
 ) -> dict[str, Any]:
-    evidence = collect_experiment_evidence(competition, trial_id)
+    evidence = collect_experiment_evidence(competition, trial_id, question)
     if not evidence:
         return {
             "answer": "현재 선택된 실험에서 답변 근거가 될 문서를 찾지 못했습니다.",
@@ -76,96 +70,12 @@ def answer_experiment_question(
     }
 
 
-def collect_experiment_evidence(competition: str, trial_id: str | None) -> list[tuple[str, str]]:
-    root = project_root()
-    candidates: list[Path] = []
-    manual_root = root / "demo_workspaces" / competition / "manual_trials"
-    manual_summary = _manual_score_summary(root, manual_root)
-    for base in [root / "runs" / competition, root / "experiments" / competition]:
-        if trial_id:
-            candidates.extend(_document_files(base / trial_id))
-        candidates.extend(_document_files(base, recursive=False))
-    if trial_id:
-        candidates.extend(_document_files(manual_root / trial_id))
-    candidates.extend(sorted(manual_root.glob("trial_*/metrics.json")))
-    for user_view in sorted(manual_root.glob("trial_*/user_view")):
-        candidates.extend(_document_files(user_view))
-    candidates.extend(_document_files(root / "memory" / competition, recursive=False))
-
-    seen: set[Path] = set()
-    evidence: list[tuple[str, str]] = list(manual_summary)
-    total_chars = sum(len(content) for _, content in evidence)
-    for path in candidates:
-        resolved = path.resolve()
-        if resolved in seen or not path.is_file():
-            continue
-        seen.add(resolved)
-        try:
-            content = path.read_text(encoding="utf-8", errors="replace").strip()
-        except OSError:
-            continue
-        if not content:
-            continue
-        content = content[:MAX_CHARS_PER_DOCUMENT]
-        remaining = MAX_CONTEXT_CHARS - total_chars
-        if remaining <= 0:
-            break
-        content = content[:remaining]
-        evidence.append((str(path.relative_to(root)), content))
-        total_chars += len(content)
-        if len(evidence) >= MAX_DOCUMENTS:
-            break
-    return evidence
-
-
-def _manual_score_summary(root: Path, manual_root: Path) -> list[tuple[str, str]]:
-    rows: list[dict[str, Any]] = []
-    for path in sorted(manual_root.glob("trial_*/metrics.json")):
-        try:
-            row = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if isinstance(row, dict):
-            row["_path"] = str(path.relative_to(root))
-            rows.append(row)
-    if not rows:
-        return []
-
-    lines = [
-        "# Trial score summary",
-        "",
-        "| trial | local_score | kaggle_submitted | kaggle_lb_score | kaggle_ref | change_axis | model | source |",
-        "|---|---:|---|---:|---|---|---|---|",
-    ]
-    for row in rows:
-        lines.append(
-            "| {trial} | {local} | {submitted} | {lb} | {ref} | {axis} | {model} | {source} |".format(
-                trial=row.get("trial_id") or "-",
-                local=_display_field(row.get("local_score") or row.get("cv_score")),
-                submitted=_display_field(row.get("kaggle_submitted")),
-                lb=_display_field(row.get("kaggle_lb_score") or row.get("lb_score")),
-                ref=_display_field(row.get("kaggle_ref")),
-                axis=_display_field(row.get("change_axis")),
-                model=_display_field(row.get("model")),
-                source=_display_field(row.get("_path")),
-            )
-        )
-    return [("demo_workspaces/{}/manual_trials/SCORE_SUMMARY".format(manual_root.parent.name), "\n".join(lines))]
-
-
-def _display_field(value: Any) -> str:
-    return "-" if value is None or value == "" else str(value)
-
-
-def _document_files(base: Path, *, recursive: bool = True) -> list[Path]:
-    if not base.exists():
-        return []
-    patterns = ("*.md", "*.json", "*.jsonl", "*.csv")
-    paths: list[Path] = []
-    for pattern in patterns:
-        paths.extend(base.rglob(pattern) if recursive else base.glob(pattern))
-    priorities = {"01_plan.ko.md": 0, "02_pipeline_structure.ko.md": 1, "03_scores.ko.md": 2, "metrics.json": 3}
-    return sorted(paths, key=lambda item: (priorities.get(item.name, 20), str(item)))
+def collect_experiment_evidence(
+    competition: str,
+    trial_id: str | None,
+    question: str = "전체 trial 점수와 실험 기록",
+) -> list[tuple[str, str]]:
+    return retrieve_experiment_evidence(project_root(), competition, trial_id, question)
 
 
 def _question_payload(
@@ -182,7 +92,8 @@ def _question_payload(
         "답변 끝에 사용한 파일 경로를 '근거:'로 짧게 적으세요.\n\n"
         f"실험: {competition}\nTrial: {trial_id or '-'}\n질문: {question}\n\n{context}"
     )
-    return {"model": model, "input": prompt, "max_output_tokens": 700}
+    configured_limit = int(os.environ.get("RESEARCH_AGENT_CHAT_MAX_OUTPUT_TOKENS", "1000"))
+    return {"model": model, "input": prompt, "max_output_tokens": max(300, min(configured_limit, 2000))}
 
 
 def _extract_output_text(response: dict[str, Any]) -> str:
