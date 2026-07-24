@@ -1901,6 +1901,7 @@ def _infer_target_id_from_headers(
 
 def _question_dialog(competition: str, snapshot: dict[str, Any], input_fn: Input, output: Output) -> str:
     output("에이전트 질문 모드입니다. 메뉴로 돌아가려면 q를 입력하세요.")
+    output("읽기 전용: 질문과 답변은 실험 계획, 코드, 점수, 연구 판단을 변경하지 않습니다.")
     answered = 0
     while True:
         question = input_fn("\n질문 (q: 메뉴로 돌아가기)> ").strip()
@@ -1914,7 +1915,7 @@ def _question_dialog(competition: str, snapshot: dict[str, Any], input_fn: Input
         lines = []
         if result.get("warning"):
             lines.append(str(result["warning"]))
-        lines.append(f"[{result.get('mode')}]\n{result.get('answer')}")
+        lines.append(f"[{result.get('mode_label') or result.get('mode')}]\n{result.get('answer')}")
         output("\n".join(["", "답변:", *lines]))
         answered += 1
 
@@ -1923,6 +1924,7 @@ def _insight_dialog(competition: str, snapshot: dict[str, Any], input_fn: Input,
     trial_id = snapshot.get("current_trial") or snapshot.get("last_completed_trial") or "trial_001"
     next_trial = snapshot.get("next_trial") or _next_trial_after(str(trial_id)) or "다음"
     existing = _latest_user_insight(competition, str(trial_id))
+    output("명시적으로 저장한 인사이트만 다음 계획 단계의 입력으로 기록됩니다.")
     if existing:
         output(
             "\n".join(
@@ -2036,6 +2038,7 @@ def _feedback_dialog(competition: str, input_fn: Input, output: Output) -> str:
     requests = list(result.get("data", {}).get("requests") or [])
     if not requests:
         return "피드백 요청이 없습니다."
+    output("Human Review 답변은 선택한 요청에만 기록되며, 해당 요청을 완료 상태로 변경합니다.")
     for index, request in enumerate(requests, start=1):
         output(f"{index}. {request.get('title') or request.get('type')} | {request.get('question') or request.get('message')}")
     raw = input_fn("답변할 요청 (q: 취소)> ").strip().lower()

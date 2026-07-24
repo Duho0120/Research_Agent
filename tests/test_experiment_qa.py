@@ -24,6 +24,39 @@ class FakeClient:
 
 
 class ExperimentQuestionTest(unittest.TestCase):
+    def test_question_channel_is_read_only_and_does_not_mutate_research_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan = root / "runs" / "demo" / "trial_001" / "01_plan.ko.md"
+            plan.parent.mkdir(parents=True)
+            plan.write_text("local_score: 0.81\nplan: baseline", encoding="utf-8")
+            state = root / "memory" / "demo" / "decision.json"
+            state.parent.mkdir(parents=True)
+            state.write_text('{"decision":"accept"}', encoding="utf-8")
+            before = {
+                path.relative_to(root).as_posix(): path.read_bytes()
+                for path in root.rglob("*")
+                if path.is_file()
+            }
+
+            with patch("kaggle_research_agent.experiment_qa.project_root", return_value=root):
+                result = answer_experiment_question(
+                    "demo",
+                    "trial_001",
+                    "local_score?",
+                    use_llm=False,
+                )
+
+            after = {
+                path.relative_to(root).as_posix(): path.read_bytes()
+                for path in root.rglob("*")
+                if path.is_file()
+            }
+            self.assertEqual(before, after)
+            self.assertEqual("read_only", result["interaction"]["access"])
+            self.assertEqual([], result["interaction"]["research_state_mutations"])
+            self.assertFalse(result["interaction"]["requires_explicit_submit"])
+
     def test_llm_answer_uses_collected_evidence_and_records_usage(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -208,6 +241,47 @@ class ExperimentQuestionTest(unittest.TestCase):
                 [("sqlite:trial_summary", "{}")],
             )
         self.assertEqual(1000, payload["max_output_tokens"])
+
+    def test_demo_mode_never_calls_api_and_renders_structured_score_table(self):
+        class UnexpectedClient:
+            def create_response(self, payload):
+                raise AssertionError("Demo mode must not call the API")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            metrics = root / "demo_workspaces" / "titanic" / "manual_trials" / "trial_001" / "metrics.json"
+            metrics.parent.mkdir(parents=True)
+            metrics.write_text(
+                json.dumps(
+                    {
+                        "trial_id": "trial_001",
+                        "local_score": 0.81,
+                        "kaggle_lb_score": 0.77,
+                        "kaggle_submitted": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch("kaggle_research_agent.experiment_qa.project_root", return_value=root):
+                with patch.dict(
+                    "os.environ",
+                    {
+                        "RESEARCH_AGENT_CHAT_DEMO_MODE": "1",
+                        "OPENAI_API_KEY": "must-not-be-used",
+                    },
+                    clear=False,
+                ):
+                    result = answer_experiment_question(
+                        "titanic",
+                        "trial_001",
+                        "전체 실험 점수와 베스트를 알려줘",
+                        client=UnexpectedClient(),
+                    )
+
+        self.assertEqual("demo_local_rag", result["mode"])
+        self.assertEqual("DEMO · 로컬 근거 모드", result["mode_label"])
+        self.assertIn("| trial | 로컬 점수 | 제출 점수 |", result["answer"])
+        self.assertIn("0.77000", result["answer"])
 
 
 if __name__ == "__main__":

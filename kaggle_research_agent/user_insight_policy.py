@@ -12,7 +12,7 @@ from . import paths
 from .agents.code_writer_adapter import create_llm_client, provider_log_name
 from .agents.memory import log_token_usage
 from .paths import competition_memory_dir, competition_submissions_dir
-from .policies import load_policy
+from .policies import load_policy, resolve_model_for_call
 from .store import write_text
 from .trial_decision import MAX_AXIS_NO_IMPROVE_ATTEMPTS, load_latest_decision_context
 
@@ -976,9 +976,13 @@ def _interpret_with_low_cost_llm(
     client: InsightClient | None,
 ) -> dict[str, Any]:
     policy = load_policy("model_policy")
-    low_cost = dict(policy.get("low_cost", {}))
-    provider = str(low_cost.get("provider") or "openai")
-    model = str(low_cost.get("model") or "gpt-5.6-luna")
+    model_selection = resolve_model_for_call(
+        "user_insight_interpretation",
+        policy=policy,
+        model_env_var="RESEARCH_AGENT_INSIGHT_MODEL",
+    )
+    provider = str(model_selection.get("provider") or "openai")
+    model = str(model_selection.get("model"))
     request = {
         "model": model,
         "input": [

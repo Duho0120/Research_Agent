@@ -69,6 +69,10 @@ class WebAppTest(unittest.TestCase):
         self.assertIn('id="chat-widget"', html)
         self.assertIn('id="chat-resize-handle"', html)
         self.assertIn('class="chat-resize-handle"', html)
+        self.assertIn("읽기 전용 · 대화는 실험 계획, 코드, 점수, 연구 판단을 변경하지 않습니다.", html)
+        self.assertIn("명시적으로 저장한 인사이트만 다음 계획 단계의 입력으로 기록됩니다.", html)
+        self.assertIn("읽기 전용 · 대화는 실험 계획, 코드, 점수, 연구 판단을 변경하지 않습니다.", html)
+        self.assertIn("명시적으로 저장한 인사이트만 다음 계획 단계의 입력으로 기록됩니다.", html)
         self.assertIn("min-width: 390px", html)
         self.assertIn('chatResizeHandle.addEventListener("pointerdown"', html)
         self.assertIn('localStorage.setItem(chatSizeStorageKey', html)
@@ -80,6 +84,13 @@ class WebAppTest(unittest.TestCase):
     def test_resolve_project_file_blocks_paths_outside_project(self):
         with self.assertRaises(ValueError):
             web_app.resolve_project_file("../outside.txt")
+
+    def test_chat_header_identifies_api_free_demo_mode(self):
+        with patch.dict("os.environ", {"RESEARCH_AGENT_CHAT_DEMO_MODE": "1"}, clear=False):
+            html = web_app.floating_chat()
+        self.assertIn("DEMO · API 없이 로컬 근거로 답변", html)
+        self.assertIn("읽기 전용", html)
+        self.assertIn("읽기 전용", html)
 
     def test_start_from_form_uses_trial_count_or_continuous_mode(self):
         with patch("kaggle_research_agent.web_app.selected_competition", return_value="demo"):

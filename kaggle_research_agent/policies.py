@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from . import simple_yaml
 from .paths import policies_dir
+
+
+DEFAULT_HIGH_COST_MODEL = "gpt-5.5"
+DEFAULT_LOW_COST_MODEL = "gpt-5.6-luna"
 
 
 DEFAULT_POLICIES: dict[str, dict[str, Any]] = {
@@ -132,7 +137,7 @@ DEFAULT_POLICIES: dict[str, dict[str, Any]] = {
         "high_cost": {
             "provider": "openai",
             "api": "responses",
-            "model": "gpt-5.5",
+            "model": DEFAULT_HIGH_COST_MODEL,
             "call_types": [
                 "experiment_planning",
                 "code_writing",
@@ -144,19 +149,21 @@ DEFAULT_POLICIES: dict[str, dict[str, Any]] = {
         "low_cost": {
             "provider": "openai",
             "api": "responses",
-            "model": "gpt-5.6-luna",
+            "model": DEFAULT_LOW_COST_MODEL,
             "call_types": [
                 "status_summary",
                 "log_summary",
                 "short_note_rewrite",
                 "simple_context_summary",
                 "user_summary_card",
+                "experiment_question",
+                "user_insight_interpretation",
             ],
         },
         "fallback": {
             "provider": "openai",
             "api": "responses",
-            "model": "gpt-5.6-luna",
+            "model": DEFAULT_LOW_COST_MODEL,
         },
     },
     "rag_policy": {
@@ -270,6 +277,26 @@ def select_model_for_call(call_type: str, *, policy: dict[str, Any] | None = Non
         "model": fallback.get("model"),
         "call_type": call_type,
     }
+
+
+def resolve_model_for_call(
+    call_type: str,
+    *,
+    policy: dict[str, Any] | None = None,
+    model_env_var: str | None = None,
+) -> dict[str, Any]:
+    selection = select_model_for_call(call_type, policy=policy)
+    tier_env = {
+        "high_cost": "RESEARCH_AGENT_HIGH_COST_MODEL",
+        "low_cost": "RESEARCH_AGENT_LOW_COST_MODEL",
+        "fallback": "RESEARCH_AGENT_FALLBACK_MODEL",
+    }.get(str(selection.get("tier") or ""))
+    model = (
+        (os.environ.get(model_env_var) if model_env_var else None)
+        or (os.environ.get(tier_env) if tier_env else None)
+        or selection.get("model")
+    )
+    return {**selection, "model": model}
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

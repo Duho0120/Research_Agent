@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from typing import Any
 
 from .execution_facts import load_executed_trial_facts, resolve_trial_plan
@@ -170,10 +171,10 @@ def _compact_mapping(value: Any, *, limit: int) -> dict[str, list[str]]:
 
 
 def _compact_text(value: Any) -> str:
-    text = str(value or "").replace("\r", " ").replace("\n", " ")
+    text = unicodedata.normalize("NFC", str(value or ""))
+    text = "".join(character if character.isprintable() else " " for character in text)
     text = re.sub(r"\s+", " ", text).strip()
-    text = re.sub(r"[^\x20-\x7E가-힣ㄱ-ㅎㅏ-ㅣ]", "", text)
-    text = re.sub(r"\s+", " ", text).strip(" |")
+    text = text.strip(" |")
     if len(text) <= MAX_TEXT_CHARS:
         return text
     return text[: MAX_TEXT_CHARS - 3].rstrip() + "..."

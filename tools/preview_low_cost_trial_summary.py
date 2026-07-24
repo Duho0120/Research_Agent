@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from kaggle_research_agent.agents.code_writer_adapter import OpenAIResponsesClient
-from kaggle_research_agent.policies import load_policy
+from kaggle_research_agent.policies import load_policy, resolve_model_for_call
 
 
 def main() -> int:
@@ -37,8 +37,12 @@ def main() -> int:
 
     payload_input = build_payload_input(root, args.competition, trial_dir)
     model_policy = load_policy("model_policy")
-    low_cost = model_policy.get("low_cost", {})
-    model = str(low_cost.get("model") or model_policy.get("fallback", {}).get("model") or "gpt-5.6-luna")
+    model_selection = resolve_model_for_call(
+        "user_summary_card",
+        policy=model_policy,
+        model_env_var="RESEARCH_AGENT_SUMMARY_MODEL",
+    )
+    model = str(model_selection.get("model"))
 
     print("=== BEFORE: rule/user-view source snippets ===")
     print_source_preview(payload_input)

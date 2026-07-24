@@ -17,6 +17,9 @@ low_cost:
     - log_summary
     - short_note_rewrite
     - simple_context_summary
+    - user_summary_card
+    - experiment_question
+    - user_insight_interpretation
 fallback:
   provider: openai
   api: responses

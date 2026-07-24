@@ -1,4 +1,4 @@
-"""Colab worker skeleton.
+"""Colab job worker.
 
 Run this inside Colab after mounting/syncing the project folder. It scans the
 `jobs` directory, executes pending jobs, and expects each job command to produce
@@ -9,34 +9,61 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from typing import Any, Callable
 
+from kaggle_research_agent import simple_yaml
 
 ROOT = Path.cwd()
 JOBS_DIR = ROOT / "jobs"
 
 
-def parse_simple_job(path: Path) -> dict[str, str]:
-    data: dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if ":" in line and not line.startswith(" "):
-            key, value = line.split(":", 1)
-            data[key.strip()] = value.strip().strip('"')
-    return data
+def load_job(path: Path) -> dict[str, Any]:
+    job = simple_yaml.load(path, default={})
+    if not isinstance(job, dict):
+        raise ValueError(f"Job file must contain a YAML mapping: {path}")
+    return job
 
 
-def run_pending_jobs() -> None:
-    for job_path in sorted(JOBS_DIR.rglob("*.yaml")):
-        text = job_path.read_text(encoding="utf-8")
-        if "status: pending" not in text:
+def update_job(path: Path, job: dict[str, Any], *, status: str, error: str | None = None) -> dict[str, Any]:
+    updated = dict(job)
+    updated["status"] = status
+    if error:
+        updated["worker_error"] = error
+    else:
+        updated.pop("worker_error", None)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(simple_yaml.to_yaml(updated), encoding="utf-8")
+    temporary.replace(path)
+    return updated
+
+
+def run_pending_jobs(
+    *,
+    root: Path | None = None,
+    jobs_dir: Path | None = None,
+    runner: Callable[..., Any] = subprocess.run,
+) -> None:
+    effective_root = root or ROOT
+    effective_jobs_dir = jobs_dir or effective_root / "jobs"
+    for job_path in sorted(effective_jobs_dir.rglob("*.yaml")):
+        job = load_job(job_path)
+        if str(job.get("status") or "").strip().lower() != "pending":
             continue
-        job = parse_simple_job(job_path)
-        command = job["command"]
+        command = str(job.get("command") or "").strip()
+        if not command:
+            update_job(job_path, job, status="failed", error="missing_command")
+            print(f"Skipped {job.get('job_id', job_path.stem)}: missing command")
+            continue
         print(f"Running {job.get('job_id', job_path.stem)}: {command}")
-        job_path.write_text(text.replace("status: pending", "status: running"), encoding="utf-8")
-        result = subprocess.run(command, shell=True, cwd=ROOT)
-        updated = job_path.read_text(encoding="utf-8")
-        final_status = "done" if result.returncode == 0 else "failed"
-        job_path.write_text(updated.replace("status: running", f"status: {final_status}"), encoding="utf-8")
+        running_job = update_job(job_path, job, status="running")
+        try:
+            result = runner(command, shell=True, cwd=effective_root)
+            final_status = "done" if result.returncode == 0 else "failed"
+            error = None if result.returncode == 0 else f"return_code_{result.returncode}"
+        except Exception as exc:  # Keep the queue readable even when process creation fails.
+            final_status = "failed"
+            error = f"{type(exc).__name__}: {exc}"
+        update_job(job_path, running_job, status=final_status, error=error)
         print(f"Finished with status={final_status}")
 
 

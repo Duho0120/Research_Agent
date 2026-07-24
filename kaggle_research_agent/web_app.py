@@ -266,7 +266,7 @@ def ask_agent(question: str) -> str:
     snapshot = app_state()["snapshot"]
     trial_id = snapshot.get("current_trial") or snapshot.get("last_completed_trial")
     result = answer_experiment_question(str(snapshot["competition"]), trial_id, question)
-    mode = result.get("mode") or "unknown"
+    mode = result.get("mode_label") or result.get("mode") or "unknown"
     answer = result.get("answer") or ""
     warning = result.get("warning")
     return f"[{mode}]\n{warning}\n{answer}" if warning else f"[{mode}]\n{answer}"
@@ -486,6 +486,7 @@ def render_home(
           </div>
           <p class="insight-lead">현재 trial은 그대로 두고 다음 계획 단계에 반영합니다.</p>
           <p class="insight-description">코드 작성 전 계획 회차가 있으면 해당 계획을 수정하고, 실행 중이면 다음 trial 계획에 반영합니다.</p>
+          <p class="interaction-boundary">명시적으로 저장한 인사이트만 다음 계획 단계의 입력으로 기록됩니다.</p>
           {insight_hint(existing_insight, snapshot) if existing_insight else ""}
           <form method="post" action="/action" class="stack insight-form">
             {hidden("action", "insight")}
@@ -569,6 +570,7 @@ def new_experiment_panel(settings: dict[str, Any] | None = None) -> str:
 
 def floating_chat(answer: str = "") -> str:
     initial_answer = answer_block(answer)
+    chat_status = _chat_status_label()
     return f"""
       <button type="button" class="chat-fab" id="chat-fab" aria-label="에이전트 채팅 열기" aria-controls="chat-widget" aria-expanded="false">AI</button>
       <section class="chat-widget" id="chat-widget" aria-label="에이전트 채팅" hidden>
@@ -576,10 +578,11 @@ def floating_chat(answer: str = "") -> str:
         <header class="chat-widget-head">
           <div>
             <strong>Research Agent</strong>
-            <span>현재 실험 기준 답변</span>
+            <span>{escape(chat_status)}</span>
           </div>
           <button type="button" class="chat-close" id="chat-close" aria-label="채팅 닫기">x</button>
         </header>
+        <p class="chat-boundary">읽기 전용 · 대화는 실험 계획, 코드, 점수, 연구 판단을 변경하지 않습니다.</p>
         <div class="chat-log" id="chat-log" aria-live="polite">
           <div class="chat-message agent">궁금한 점을 물어보세요. 현재 선택된 실험의 사용자용 산출물과 내부 기록을 기준으로 답변합니다.</div>
           {initial_answer}
@@ -590,6 +593,14 @@ def floating_chat(answer: str = "") -> str:
         </form>
       </section>
 """
+
+
+def _chat_status_label() -> str:
+    if str(os.environ.get("RESEARCH_AGENT_CHAT_DEMO_MODE") or "").strip().lower() in {"1", "true", "yes", "on"}:
+        return "DEMO · API 없이 로컬 근거로 답변"
+    if os.environ.get("OPENAI_API_KEY"):
+        return "현재 실험 기준 · 저비용 LLM"
+    return "현재 실험 기준 · 로컬 근거 모드"
 
 
 def latest_metric(snapshot: dict[str, Any]) -> str:
@@ -1003,6 +1014,8 @@ def page(*, title: str, body: str) -> str:
     .chat-widget-head {{ display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 14px 12px 36px; border-bottom: 1px solid var(--line); }}
     .chat-widget-head div {{ display: grid; gap: 3px; }}
     .chat-widget-head span {{ color: var(--muted); font-size: 12px; }}
+    .chat-boundary {{ margin: 0; padding: 9px 14px; border-bottom: 1px solid var(--line); background: #f5f8fa; color: var(--muted); font-size: 12px; line-height: 1.45; }}
+    .interaction-boundary {{ margin: 0 0 18px; padding: 10px 12px; border-left: 3px solid var(--accent); background: var(--soft); color: var(--muted); line-height: 1.5; }}
     .chat-close {{ width: 34px; height: 34px; border-radius: 50%; padding: 0; background: var(--soft); color: var(--ink); font-size: 18px; }}
     .chat-log {{ display: grid; gap: 10px; margin-bottom: 10px; max-height: 420px; overflow-y: auto; }}
     .chat-widget .chat-log {{ flex: 1; max-height: none; margin: 0; padding: 14px; align-content: start; }}

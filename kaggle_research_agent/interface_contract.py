@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from .agents.memory import record_user_feedback
+from .interaction_contract import interaction_contract
 from .user_insight_policy import interpret_user_insight, new_insight_id, register_user_insight
 from .operations import build_operations_status, can_run_next_trial
 from .state_db import list_pending_actions, resolve_pending_action
@@ -207,6 +208,7 @@ def respond_to_request(
     follow_up_action: str | None = None,
     db_path: Path | None = None,
 ) -> dict[str, Any]:
+    interaction = interaction_contract("human_review_response")
     action = _find_pending_action(request_id, db_path=db_path, statuses=("pending",))
     if not action:
         return _envelope(
@@ -214,7 +216,7 @@ def respond_to_request(
             ok=False,
             status="not_found",
             message="Pending request not found or already resolved.",
-            data={"request_id": request_id},
+            data={"request_id": request_id, "interaction": interaction},
             db_path=db_path,
             synced=False,
             errors=[
@@ -233,7 +235,7 @@ def respond_to_request(
             ok=False,
             status="blocked",
             message="Pending request does not have enough context to record feedback.",
-            data={"request": _pending_request(action)},
+            data={"request": _pending_request(action), "interaction": interaction},
             db_path=db_path,
             synced=False,
             errors=[{"code": "missing_feedback_context", "message": "competition_id and trial_id are required."}],
@@ -260,6 +262,7 @@ def respond_to_request(
         data={
             "request": _pending_request(resolved or action),
             "feedback": feedback,
+            "interaction": interaction,
         },
         next_actions=[
             {
@@ -289,6 +292,7 @@ def submit_human_insight(
     allow_api: bool = False,
     insight_client: Any | None = None,
 ) -> dict[str, Any]:
+    interaction = interaction_contract("user_insight")
     insight_id = new_insight_id(competition, trial_id, insight)
     interpretation = interpret_user_insight(
         insight,
@@ -320,6 +324,7 @@ def submit_human_insight(
             "trial_id": trial_id,
             "feedback": feedback,
             "insight": insight_record,
+            "interaction": interaction,
         },
         next_actions=[
             {

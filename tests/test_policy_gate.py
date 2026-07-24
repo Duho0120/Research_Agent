@@ -13,7 +13,7 @@ from kaggle_research_agent.agents.policy_gate import (
     should_call_llm,
 )
 from kaggle_research_agent.agents.memory import log_decision
-from kaggle_research_agent.policies import load_policy, select_model_for_call
+from kaggle_research_agent.policies import load_policy, resolve_model_for_call, select_model_for_call
 
 
 class PolicyGateTest(unittest.TestCase):
@@ -34,6 +34,25 @@ class PolicyGateTest(unittest.TestCase):
         self.assertEqual("gpt-5.5", high_cost["model"])
         self.assertEqual("openai", low_cost["provider"])
         self.assertEqual("gpt-5.6-luna", low_cost["model"])
+
+    def test_low_cost_model_can_be_overridden_centrally_or_per_feature(self):
+        with patch.dict("os.environ", {"RESEARCH_AGENT_LOW_COST_MODEL": "central-low-cost"}, clear=False):
+            selected = resolve_model_for_call("experiment_question")
+        self.assertEqual("central-low-cost", selected["model"])
+
+        with patch.dict(
+            "os.environ",
+            {
+                "RESEARCH_AGENT_LOW_COST_MODEL": "central-low-cost",
+                "RESEARCH_AGENT_CHAT_MODEL": "chat-specific",
+            },
+            clear=False,
+        ):
+            selected = resolve_model_for_call(
+                "experiment_question",
+                model_env_var="RESEARCH_AGENT_CHAT_MODEL",
+            )
+        self.assertEqual("chat-specific", selected["model"])
 
     def test_decide_execution_chooses_local_run_when_safe(self):
         with tempfile.TemporaryDirectory() as tmp:

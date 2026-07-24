@@ -6,7 +6,7 @@ from typing import Any, Protocol
 
 from .agents.code_writer_adapter import create_llm_client, provider_log_name
 from .agents.memory import log_token_usage
-from .policies import load_policy
+from .policies import load_policy, resolve_model_for_call
 from .store import write_text
 
 
@@ -32,9 +32,13 @@ def generate_low_cost_user_summary_card(
     """
 
     model_policy = load_policy("model_policy")
-    low_cost = dict(model_policy.get("low_cost", {}))
-    provider = str(low_cost.get("provider") or model_policy.get("fallback", {}).get("provider") or "openai")
-    model = str(low_cost.get("model") or model_policy.get("fallback", {}).get("model") or "gpt-5.6-luna")
+    model_selection = resolve_model_for_call(
+        "user_summary_card",
+        policy=model_policy,
+        model_env_var="RESEARCH_AGENT_SUMMARY_MODEL",
+    )
+    provider = str(model_selection.get("provider") or "openai")
+    model = str(model_selection.get("model"))
     result: dict[str, Any] = {
         "schema_version": "1.0",
         "status": "skipped",

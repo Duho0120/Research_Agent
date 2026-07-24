@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 from typing import Any, Protocol
@@ -7,7 +8,9 @@ from typing import Any, Protocol
 from .agents.code_writer_adapter import OpenAIResponsesClient
 from .agents.memory import log_token_usage
 from .experiment_qa_retrieval import retrieve_experiment_evidence
+from .interaction_contract import interaction_contract
 from .paths import project_root
+from .policies import resolve_model_for_call
 
 
 class ResponseClient(Protocol):
@@ -23,19 +26,27 @@ def answer_experiment_question(
     client: ResponseClient | None = None,
     use_llm: bool = True,
 ) -> dict[str, Any]:
+    interaction = interaction_contract("experiment_question")
     evidence = collect_experiment_evidence(competition, trial_id, question)
     if not evidence:
         return {
             "answer": "현재 선택된 실험에서 답변 근거가 될 문서를 찾지 못했습니다.",
             "mode": "no_evidence",
+            "mode_label": "근거 없음",
             "sources": [],
             "warning": None,
+            "interaction": interaction,
         }
 
     warning = None
-    if use_llm and (client is not None or os.environ.get("OPENAI_API_KEY")):
+    demo_mode = _truthy_env("RESEARCH_AGENT_CHAT_DEMO_MODE")
+    if not demo_mode and use_llm and (client is not None or os.environ.get("OPENAI_API_KEY")):
         try:
-            model = os.environ.get("RESEARCH_AGENT_CHAT_MODEL", "gpt-5.6-luna")
+            model_selection = resolve_model_for_call(
+                "experiment_question",
+                model_env_var="RESEARCH_AGENT_CHAT_MODEL",
+            )
+            model = str(model_selection.get("model"))
             active_client = client or OpenAIResponsesClient()
             response = active_client.create_response(_question_payload(model, competition, trial_id, question, evidence))
             answer = _extract_output_text(response).strip()
@@ -55,18 +66,22 @@ def answer_experiment_question(
             return {
                 "answer": answer,
                 "mode": "low_cost_llm",
+                "mode_label": "저비용 LLM · 근거 검색",
                 "sources": [item[0] for item in evidence],
                 "warning": None,
+                "interaction": interaction,
             }
         except Exception as error:  # The CLI must remain usable during API/quota outages.
             warning = f"저비용 LLM 호출 실패: {error}"
 
-    answer, selected_sources = _local_evidence_answer(question, evidence)
+    answer, selected_sources = _local_rag_answer(question, evidence)
     return {
         "answer": answer,
-        "mode": "local_evidence",
+        "mode": "demo_local_rag" if demo_mode else "local_evidence",
+        "mode_label": "DEMO · 로컬 근거 모드" if demo_mode else "로컬 근거 모드",
         "sources": selected_sources,
         "warning": warning,
+        "interaction": interaction,
     }
 
 
@@ -135,3 +150,58 @@ def _local_evidence_answer(question: str, evidence: list[tuple[str, str]]) -> tu
             sources.append(path)
     lines.append("근거: " + ", ".join(sources))
     return "\n".join(lines), sources
+
+
+def _local_rag_answer(question: str, evidence: list[tuple[str, str]]) -> tuple[str, list[str]]:
+    structured = next((content for source, content in evidence if source == "sqlite:trial_summary"), None)
+    if structured and _is_score_question(question):
+        try:
+            payload = json.loads(structured)
+        except json.JSONDecodeError:
+            payload = {}
+        trials = payload.get("trials") if isinstance(payload, dict) else None
+        if isinstance(trials, list) and trials:
+            return _render_structured_score_answer(trials), ["sqlite:trial_summary"]
+    return _local_evidence_answer(question, evidence)
+
+
+def _render_structured_score_answer(trials: list[dict[str, Any]]) -> str:
+    rows = [row for row in trials if isinstance(row, dict)]
+    lines = [
+        "| trial | 로컬 점수 | 제출 점수 | 베스트 |",
+        "|---|---:|---:|---|",
+    ]
+    for row in rows:
+        lines.append(
+            "| {trial} | {local} | {lb} | {best} |".format(
+                trial=row.get("trial_id") or "-",
+                local=_display_score(row.get("local_score")),
+                lb=_display_score(row.get("lb_score")),
+                best="Best" if row.get("is_best_lb") else "-",
+            )
+        )
+    scored = [row for row in rows if isinstance(row.get("lb_score"), (int, float))]
+    if scored:
+        objective = str(scored[0].get("objective") or "maximize").lower()
+        best = (min if objective == "minimize" else max)(scored, key=lambda row: float(row["lb_score"]))
+        lines.extend(
+            [
+                "",
+                f"제출 점수 기준 베스트는 {best.get('trial_id')}이며 점수는 {_display_score(best.get('lb_score'))}입니다.",
+            ]
+        )
+    lines.extend(["", "근거: sqlite:trial_summary"])
+    return "\n".join(lines)
+
+
+def _display_score(value: Any) -> str:
+    return "-" if not isinstance(value, (int, float)) else f"{float(value):.5f}"
+
+
+def _is_score_question(question: str) -> bool:
+    normalized = question.lower()
+    return any(term in normalized for term in ("점수", "score", "베스트", "best", "lb", "리더보드"))
+
+
+def _truthy_env(name: str) -> bool:
+    return str(os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}

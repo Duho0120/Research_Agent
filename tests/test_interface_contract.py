@@ -141,11 +141,35 @@ class InterfaceContractTest(unittest.TestCase):
             self.assertTrue(result["ok"])
             self.assertEqual("completed", result["status"])
             self.assertEqual("resolved", result["data"]["request"]["status"])
+            interaction = result["data"]["interaction"]
+            self.assertEqual("resolve_request", interaction["access"])
+            self.assertEqual("requested_trial", interaction["scope"])
+            self.assertTrue(interaction["requires_pending_request"])
+            self.assertTrue(interaction["requires_explicit_submit"])
             self.assertEqual([], list_pending_actions("demo", db_path))
             self.assertEqual(["review_001"], [item["action_id"] for item in list_pending_actions("demo", db_path, status="resolved")])
             feedback_path = root / "memory" / "demo" / "user_feedback.jsonl"
             self.assertTrue(feedback_path.exists())
             self.assertIn("keep the next change narrow", feedback_path.read_text(encoding="utf-8"))
+
+    def test_respond_to_request_requires_an_existing_pending_request(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "state.sqlite3"
+            _write_contract_fixture(db_path)
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = respond_to_request(
+                    "missing_review",
+                    free_text="This must not be recorded.",
+                    db_path=db_path,
+                )
+
+            self.assertFalse(result["ok"])
+            self.assertEqual("not_found", result["status"])
+            self.assertEqual("human_review_response", result["data"]["interaction"]["channel"])
+            self.assertFalse((root / "memory" / "demo" / "user_feedback.jsonl").exists())
+            self.assertEqual([], list_pending_actions("demo", db_path, status="resolved"))
 
     def test_submit_human_insight_records_feedback_without_pending_request(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -163,6 +187,11 @@ class InterfaceContractTest(unittest.TestCase):
 
             self.assertTrue(result["ok"])
             self.assertEqual("submit_human_insight", result["action"])
+            interaction = result["data"]["interaction"]
+            self.assertEqual("write_intent", interaction["access"])
+            self.assertEqual("next_trial", interaction["scope"])
+            self.assertEqual(["user_feedback", "user_insight"], interaction["research_state_mutations"])
+            self.assertTrue(interaction["requires_explicit_submit"])
             feedback_path = root / "memory" / "demo" / "user_feedback.jsonl"
             self.assertTrue(feedback_path.exists())
             self.assertIn("Avoid changing model family", feedback_path.read_text(encoding="utf-8"))
