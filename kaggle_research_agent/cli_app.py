@@ -5,13 +5,15 @@ import csv
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Callable
 
 from . import simple_yaml
-from .experiment_qa import answer_experiment_question
+from .integrations import dacon_api
+from .chat_history import answer_chat_question, chat_history_snapshot
 from .interface_contract import (
     get_experiment,
     list_experiments,
@@ -21,15 +23,23 @@ from .interface_contract import (
     submit_human_insight,
 )
 from .execution_profile import load_execution_profile
-from .paths import competition_dir, project_root
-from .state_db import default_db_path, state_db_connection
+from .paths import (
+    competition_configs_dir,
+    competition_data_dir,
+    competition_dir,
+    competition_jobs_dir,
+    competition_memory_dir,
+    competition_submissions_dir,
+    experiment_dir,
+    project_root,
+    trial_dir,
+)
+from .state_db import default_db_path, delete_competition, state_db_connection
 from .workspace_preparer import prepare_workspace
 from .user_insight_policy import interpret_user_insight
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_COMPETITION = "titanic"
-TRIAL_IDS = [f"trial_{index:03d}" for index in range(1, 6)]
 Input = Callable[[str], str]
 Output = Callable[[str], None]
 KNOWN_EXPERIMENT_PRESETS: dict[str, dict[str, Any]] = {
@@ -100,13 +110,73 @@ def save_json_atomic(path: Path, value: dict[str, Any]) -> None:
 
 
 def selected_competition() -> str:
-    return str(load_json(cli_state_path()).get("selected_competition") or DEFAULT_COMPETITION)
+    selected = str(load_json(cli_state_path()).get("selected_competition") or "").strip()
+    if selected:
+        return selected
+    experiments = load_experiments(sync=False)
+    return str(experiments[0].get("competition") or "") if experiments else ""
 
 
 def select_competition(competition: str) -> None:
     state = load_json(cli_state_path())
     state["selected_competition"] = competition
     save_json_atomic(cli_state_path(), state)
+
+
+def delete_experiment(competition: str) -> dict[str, Any]:
+    """Permanently remove a registered experiment: its state DB row (and
+    everything that cascades from it -- trials, scores, decisions,
+    artifacts, submissions, chat history), and its on-disk folders.
+
+    The workspace/source folder is only removed if this codebase created it
+    (create_workspace was chosen at registration) -- a path the user pointed
+    at an existing external project ("기존 경로 사용") is never deleted, only
+    forgotten.
+    """
+    source_record = load_json(competition_dir(competition) / "workspace_source.json")
+    created_workspace = bool(source_record.get("created_workspace"))
+    source_path = source_record.get("source_path")
+
+    removed: list[str] = []
+
+    def _remove(path: Path) -> None:
+        if path.exists():
+            shutil.rmtree(path, ignore_errors=True)
+            removed.append(str(path))
+
+    if created_workspace and source_path:
+        _remove(Path(source_path))
+    _remove(competition_dir(competition))
+    _remove(experiment_dir(competition))
+    _remove(competition_memory_dir(competition))
+    _remove(competition_jobs_dir(competition))
+    _remove(competition_configs_dir(competition))
+    _remove(competition_submissions_dir(competition))
+    _remove(competition_data_dir(competition))
+    _remove(project_root() / "runs" / competition)
+
+    # auto_loop_state.json (and its pause.request flag) is a single global
+    # file, not namespaced per competition, that records the last/active run
+    # loop -- if it still points at this competition, clear it too.
+    # Otherwise a re-registered experiment reusing the same id (e.g. a
+    # numeric DACON id) would immediately show the previous run's stale
+    # failure/status, since _current_loop_state() only checks the id match.
+    loop_state = load_json(loop_state_path())
+    if str(loop_state.get("competition") or "") == competition:
+        if loop_state_path().exists():
+            loop_state_path().unlink()
+            removed.append(str(loop_state_path()))
+        if pause_request_path().exists():
+            pause_request_path().unlink()
+            removed.append(str(pause_request_path()))
+
+    delete_competition(competition)
+
+    if selected_competition() == competition:
+        remaining = [item.get("competition") for item in load_experiments(sync=False) if item.get("competition") != competition]
+        select_competition(str(remaining[0]) if remaining else "")
+
+    return {"ok": True, "competition": competition, "removed_paths": removed}
 
 
 def load_experiments(*, sync: bool) -> list[dict[str, Any]]:
@@ -116,12 +186,6 @@ def load_experiments(*, sync: bool) -> list[dict[str, Any]]:
     for item in _filesystem_experiments():
         key = str(item["competition"])
         by_competition[key] = by_competition.get(key, {}) | item
-    if DEFAULT_COMPETITION not in by_competition:
-        by_competition[DEFAULT_COMPETITION] = {
-            "competition": DEFAULT_COMPETITION,
-            "topic": "Titanic",
-            "state": "local_workspace",
-        }
     return sorted(by_competition.values(), key=lambda item: str(item.get("competition") or ""))
 
 
@@ -131,15 +195,41 @@ def experiment_snapshot(competition: str, *, sync: bool) -> dict[str, Any]:
     trials = list(result.get("data", {}).get("trials") or []) if result.get("ok") else []
     loop = _current_loop_state(competition)
     manual = _manual_trial_rows(competition)
-    latest = _latest_trial(trials, manual)
-    best = _best_trial(trials, manual)
+    loop_status = str(loop.get("status") or "").casefold()
+    loop_active = loop_status in {"starting", "running", "resuming"}
+    current_trial, display_next_trial = _display_trial_sequence(loop) if loop_active else (None, None)
+    reported_completed = str(loop.get("last_completed_trial") or "").strip()
+    if loop_active:
+        latest = (
+            _trial_record(trials, manual, reported_completed)
+            if reported_completed and reported_completed != current_trial
+            else _latest_trial(trials, manual, exclude_trial_id=current_trial)
+        )
+    else:
+        latest = _latest_trial(trials, manual)
+    best = _best_trial(trials, manual, objective=str(experiment.get("objective") or "maximize"))
+    filesystem_topic = _filesystem_topic(competition)
+    database_topic = str(experiment.get("topic") or "").strip()
+    topic = (
+        filesystem_topic
+        if filesystem_topic and (not database_topic or database_topic == competition)
+        else database_topic or filesystem_topic or competition
+    )
     return {
         "competition": competition,
-        "topic": experiment.get("topic") or _filesystem_topic(competition) or competition,
+        "topic": topic,
         "state": _display_state(experiment.get("state"), loop, manual),
-        "current_trial": loop.get("current_trial"),
-        "last_completed_trial": loop.get("last_completed_trial") or (latest or {}).get("trial_id"),
-        "next_trial": loop.get("next_trial") or experiment.get("next_trial_id") or _infer_next_trial(manual),
+        "current_trial": current_trial if loop_active else loop.get("current_trial"),
+        "last_completed_trial": (
+            (latest or {}).get("trial_id")
+            if loop_active
+            else loop.get("last_completed_trial") or (latest or {}).get("trial_id")
+        ),
+        "next_trial": (
+            display_next_trial
+            if loop_active
+            else loop.get("next_trial") or experiment.get("next_trial_id") or _infer_next_trial(manual)
+        ),
         "latest": latest,
         "best": best,
         "pause_requested": bool(loop.get("pause_requested")),
@@ -148,19 +238,83 @@ def experiment_snapshot(competition: str, *, sync: bool) -> dict[str, Any]:
     }
 
 
+def _display_trial_sequence(loop: dict[str, Any]) -> tuple[str | None, str | None]:
+    current = str(loop.get("current_trial") or loop.get("next_trial") or "").strip() or None
+    if current is None:
+        return None, None
+    phase = str(loop.get("phase") or "").casefold()
+    if phase == "planning_next" and loop.get("current_trial") and loop.get("next_trial"):
+        return current, str(loop["next_trial"])
+    return current, next_trial_id(current)
+
+
 def _current_loop_state(competition: str) -> dict[str, Any]:
-    loop = load_json(loop_state_path())
+    loop = _reconcile_dead_loop_process(load_json(loop_state_path()))
     if not loop:
         return {}
     loop_competition = str(loop.get("competition") or "")
     if loop_competition and loop_competition != competition:
         return {}
     status = str(loop.get("status") or "").casefold()
+    if status == "failed" and _loop_failure_is_stale(loop, competition):
+        return {}
     if status in {"starting", "running", "resuming", "paused", "failed"}:
         return loop
     if status == "completed" and loop.get("next_trial"):
         return loop
     return {}
+
+
+_COMPLETED_RESULT_STATUSES = {
+    "completed",
+    "completed_feedback_applied",
+    "completed_review_deferred",
+    "already_processed",
+}
+
+
+def _loop_failure_is_stale(loop: dict[str, Any], competition: str) -> bool:
+    """True when a recorded loop failure has since been resolved.
+
+    auto_loop_state.json is a single global file that keeps the last run's
+    outcome until some later run overwrites it. When the trial it failed on
+    was afterwards completed -- by a retry, or by running the remaining
+    steps directly -- the dashboard kept reporting that old error, and the
+    stale next_trial with it, even though the trial had finished and the
+    next one was already planned.
+    """
+    trial_id = str(loop.get("next_trial") or loop.get("current_trial") or "").strip()
+    if not trial_id:
+        return False
+    cycle = load_json(trial_dir(competition, trial_id) / "workspace_result_cycle.json")
+    return str(cycle.get("status") or "").casefold() in _COMPLETED_RESULT_STATUSES
+
+
+def _reconcile_dead_loop_process(loop: dict[str, Any]) -> dict[str, Any]:
+    status = str(loop.get("status") or "").casefold()
+    pid = loop.get("pid")
+    if status not in {"starting", "running", "resuming"} or not pid:
+        return loop
+    try:
+        process_alive = int(pid) > 0
+        if process_alive:
+            os.kill(int(pid), 0)
+    except (OSError, TypeError, ValueError):
+        process_alive = False
+    if process_alive:
+        return loop
+
+    previous_status = str(loop.get("resume_from_status") or "").casefold()
+    if not previous_status:
+        previous_status = "failed" if loop.get("error") else status
+    repaired = loop | {
+        "status": "failed",
+        "pid": None,
+        "resume_from_status": previous_status,
+        "error": loop.get("error") or "process_not_running",
+    }
+    save_json_atomic(loop_state_path(), repaired)
+    return repaired
 
 
 def render_snapshot(snapshot: dict[str, Any]) -> str:
@@ -207,7 +361,11 @@ def _next_base_trial_text(snapshot: dict[str, Any]) -> str:
 def _progress_lines(snapshot: dict[str, Any]) -> list[str]:
     loop = snapshot.get("loop") or {}
     status = _progress_status_text(loop)
-    log_lines = _recent_log_lines(loop.get("log_path"), limit=4)
+    log_lines = _recent_log_lines(
+        loop.get("log_path"),
+        limit=4,
+        competition=str(snapshot.get("competition") or loop.get("competition") or ""),
+    )
     if not status and not log_lines:
         return []
     lines: list[str] = []
@@ -224,18 +382,22 @@ def _progress_lines(snapshot: dict[str, Any]) -> list[str]:
 def _progress_status_text(loop: dict[str, Any]) -> str:
     status = str(loop.get("status") or "").casefold()
     current = loop.get("current_trial") or loop.get("next_trial") or "-"
+    runtime = "LangGraph" if loop.get("graph_runtime") == "langgraph" else None
+    phase = str(loop.get("phase") or "").strip()
+    detail = " · ".join(item for item in [runtime, phase] if item)
+    suffix = f" ({detail})" if detail else ""
     if status in {"running", "starting", "resuming"}:
-        return f"{current} 진행 중"
+        return f"{current} 진행 중{suffix}"
     if status == "paused":
-        return f"중단 대기 완료. 다음 trial: {loop.get('next_trial') or '-'}"
+        return f"중단 대기 완료. 다음 trial: {loop.get('next_trial') or '-'}{suffix}"
     if status == "completed":
-        return f"완료. 최근 완료 trial: {loop.get('last_completed_trial') or '-'}"
+        return f"완료. 최근 완료 trial: {loop.get('last_completed_trial') or '-'}{suffix}"
     if status == "failed":
-        return f"실패: {loop.get('error') or '원인 미상'}"
+        return f"실패: {loop.get('error') or '원인 미상'}{suffix}"
     return ""
 
 
-def _recent_log_lines(log_path: Any, *, limit: int) -> list[str]:
+def _recent_log_lines(log_path: Any, *, limit: int, competition: str = "") -> list[str]:
     path = Path(str(log_path)) if log_path else runtime_dir() / "auto_loop.log"
     if not path.exists():
         return []
@@ -243,8 +405,25 @@ def _recent_log_lines(log_path: Any, *, limit: int) -> list[str]:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return []
+    if competition:
+        text = _competition_log_text(text, competition)
     visible = _summarize_log_text(text)
     return visible[-limit:]
+
+
+def _competition_log_text(text: str, competition: str) -> str:
+    selected: list[str] = []
+    collecting = False
+    header_seen = False
+    expected = f"=== {competition} /"
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("===") and stripped.endswith("==="):
+            header_seen = True
+            collecting = stripped.startswith(expected)
+        if collecting:
+            selected.append(line)
+    return "\n".join(selected) if header_seen else text
 
 
 def _summarize_log_text(text: str) -> list[str]:
@@ -376,8 +555,23 @@ def _render_home(snapshot: dict[str, Any], recent_message: str | None = None) ->
     return "\n".join(lines)
 
 
+def _resolve_start_trial(competition: str, resumable_loop: dict[str, Any]) -> str:
+    """Pick the trial to (re)start from, without trusting a stale failed loop pointer.
+
+    A manual rollback (archiving trials and replanning from an earlier base) can leave
+    a "failed" loop state pointing at a next_trial whose folder no longer exists. Trusting
+    it blindly would make the UI's start button retry a dead trial forever, so a failed
+    loop's next_trial is only honored if that trial still has a folder on disk.
+    """
+    next_trial = str(resumable_loop.get("next_trial") or "")
+    if next_trial and str(resumable_loop.get("status") or "").casefold() == "failed":
+        if not trial_dir(competition, next_trial).exists():
+            next_trial = ""
+    return next_trial or str(_infer_start_trial(competition) or "")
+
+
 def start_experiment(competition: str, *, trial_count: int | None = None, continuous: bool = False) -> str:
-    active = load_json(loop_state_path())
+    active = _reconcile_dead_loop_process(load_json(loop_state_path()))
     active_competition = str(active.get("competition") or "")
     active_status = str(active.get("status") or "")
     if active_status in {"running", "starting", "resuming"}:
@@ -394,7 +588,7 @@ def start_experiment(competition: str, *, trial_count: int | None = None, contin
         request_experiment_stop(active_competition)
         return f"{active_competition} 실험에 중단을 요청했습니다. 중단 완료 후 {competition} 실험을 시작해주세요."
     resumable_loop = _current_loop_state(competition)
-    start_trial = str(resumable_loop.get("next_trial") or _infer_start_trial(competition) or "")
+    start_trial = _resolve_start_trial(competition, resumable_loop)
     if not start_trial:
         return "남은 trial이 없습니다. 다음 trial 계획을 먼저 생성해야 합니다."
     profile = _load_profile_safely(competition)
@@ -418,23 +612,42 @@ def start_experiment(competition: str, *, trial_count: int | None = None, contin
     planned_count = max_trials
     if platform == "kaggle":
         command.extend(["--submit", "--kaggle-slug", competition])
+    elif platform == "dacon":
+        # DACON needs the numeric competition id plus the team name the
+        # submission is filed under; the team name has no default, so a
+        # profile that omits it runs locally without auto-submitting rather
+        # than failing every trial at the submit step.
+        dacon_team_name = str(profile.get("dacon_team_name") or "").strip()
+        dacon_competition_id = str(profile.get("dacon_competition_id") or competition).strip()
+        if dacon_team_name:
+            command.extend(
+                [
+                    "--submit",
+                    "--dacon-competition-id",
+                    dacon_competition_id,
+                    "--dacon-team-name",
+                    dacon_team_name,
+                ]
+            )
 
-    log_path = runtime_dir() / "auto_loop.log"
+    log_path = runtime_dir() / "logs" / f"{_normalize_competition_id(competition)}.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         pause_request_path().unlink()
     except FileNotFoundError:
         pass
+    resume_from_status = str(active.get("resume_from_status") or active_status or "").casefold()
     starting_state = active | {
         "competition": competition,
         "status": "starting",
+        "resume_from_status": resume_from_status,
         "next_trial": start_trial,
         "pause_requested": False,
         "pid": None,
         "log_path": str(log_path),
     }
     save_json_atomic(loop_state_path(), starting_state)
-    log_file = log_path.open("a", encoding="utf-8")
+    log_file = log_path.open("w", encoding="utf-8")
     creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     env = os.environ.copy()
     env["RESEARCH_AGENT_RUNTIME_DIR"] = str(runtime_dir())
@@ -1487,7 +1700,7 @@ def _propose_new_experiment_settings(
     return {
         "competition": competition,
         "topic": _infer_topic_from_description(description, competition, preset),
-        "platform": "kaggle",
+        "platform": _infer_platform_from_description(description),
         "source_path": source_path,
         "create_workspace": not bool(source_path),
         "target_column": target_column,
@@ -1631,6 +1844,9 @@ def _infer_experiment_id_from_description(description: str) -> str:
     match = re.search(r"kaggle\.com/(?:c|competitions)/([^/?#\s]+)", value)
     if match:
         return _normalize_competition_id(match.group(1))
+    dacon_id = dacon_api.competition_id_from_link(value)
+    if dacon_id:
+        return _normalize_competition_id(dacon_id)
     if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{1,80}", value):
         return _normalize_competition_id(value)
     first_line = next((line.strip() for line in value.splitlines() if line.strip()), value)
@@ -1643,6 +1859,15 @@ def _infer_experiment_id_from_description(description: str) -> str:
     if ascii_words:
         return _normalize_competition_id("-".join(ascii_words[:6]))
     return "research_experiment"
+
+
+def _infer_platform_from_description(description: str) -> str:
+    lowered = description.lower()
+    if "dacon.io" in lowered:
+        return "dacon"
+    if "kaggle.com" in lowered:
+        return "kaggle"
+    return "kaggle"
 
 
 def _experiment_preset_for(competition: str, description: str = "") -> dict[str, Any]:
@@ -1840,6 +2065,10 @@ def _candidate_data_roots(source: Path) -> list[Path]:
 
 def _find_data_file(source: Path, names: list[str]) -> Path | None:
     lowered_names = {name.casefold() for name in names}
+    normalized_names = {
+        "".join(character for character in Path(name).stem.casefold() if character.isalnum())
+        for name in names
+    }
     for root in _candidate_data_roots(source):
         for name in names:
             candidate = root / name
@@ -1847,7 +2076,10 @@ def _find_data_file(source: Path, names: list[str]) -> Path | None:
                 return candidate
         if root.exists():
             for candidate in root.glob("*.csv"):
-                if candidate.name.casefold() in lowered_names:
+                normalized_candidate = "".join(
+                    character for character in candidate.stem.casefold() if character.isalnum()
+                )
+                if candidate.name.casefold() in lowered_names or normalized_candidate in normalized_names:
                     return candidate
     return None
 
@@ -1882,16 +2114,20 @@ def _infer_target_id_from_headers(
     test = [column for column in test_header if column]
     sample = [column for column in sample_header if column]
     train_only = [column for column in train if column not in set(test)]
-    target_preferences = ["target", "label", "Survived", "Exited", "SalePrice", "y"]
-    target = next((name for name in target_preferences if name in train_only), None)
+    target = sample[1] if len(sample) >= 2 and sample[1] in train else None
+    target_preferences = ["target", "label", "y"]
+    if target is None:
+        target = next((name for name in target_preferences if name in train_only), None)
     if target is None and len(sample) >= 2:
         target = sample[1]
     if target is None and train_only:
         target = train_only[0]
 
     common = [column for column in train if column in set(test)]
-    id_preferences = ["id", "ID", "PassengerId", "CustomerId", "Id"]
-    identifier = next((name for name in id_preferences if name in common or name in sample), None)
+    identifier = sample[0] if sample and sample[0] in common else None
+    id_preferences = ["id", "ID", "Id"]
+    if identifier is None:
+        identifier = next((name for name in id_preferences if name in common or name in sample), None)
     if identifier is None:
         identifier = next((name for name in common if name.lower().endswith("id") or "id" in name.lower()), None)
     if identifier is None and sample:
@@ -1902,6 +2138,20 @@ def _infer_target_id_from_headers(
 def _question_dialog(competition: str, snapshot: dict[str, Any], input_fn: Input, output: Output) -> str:
     output("에이전트 질문 모드입니다. 메뉴로 돌아가려면 q를 입력하세요.")
     output("읽기 전용: 질문과 답변은 실험 계획, 코드, 점수, 연구 판단을 변경하지 않습니다.")
+    session_id = None
+    try:
+        history = chat_history_snapshot(competition)
+        active = history.get("active_session") or {}
+        session_id = active.get("session_id")
+        recent = list(history.get("messages") or [])[-6:]
+        if recent:
+            output("\n최근 대화:")
+            for message in recent:
+                role = "사용자" if message.get("role") == "user" else "에이전트"
+                trial_label = f" · {message.get('trial_id')}" if message.get("trial_id") else ""
+                output(f"[{role}{trial_label}] {message.get('content') or ''}")
+    except Exception as error:
+        output(f"이전 대화를 불러오지 못했습니다: {error}")
     answered = 0
     while True:
         question = input_fn("\n질문 (q: 메뉴로 돌아가기)> ").strip()
@@ -1911,12 +2161,14 @@ def _question_dialog(competition: str, snapshot: dict[str, Any], input_fn: Input
             output("질문을 입력하거나 q로 메뉴에 돌아가세요.")
             continue
         trial_id = snapshot.get("current_trial") or snapshot.get("last_completed_trial")
-        result = answer_experiment_question(competition, trial_id, question)
-        lines = []
-        if result.get("warning"):
-            lines.append(str(result["warning"]))
-        lines.append(f"[{result.get('mode_label') or result.get('mode')}]\n{result.get('answer')}")
-        output("\n".join(["", "답변:", *lines]))
+        result = answer_chat_question(
+            competition,
+            trial_id,
+            question,
+            session_id=str(session_id) if session_id else None,
+        )
+        session_id = (result.get("session") or {}).get("session_id")
+        output("\n".join(["", "답변:", str(result.get("rendered_answer") or "")]))
         answered += 1
 
 
@@ -2048,11 +2300,80 @@ def _feedback_dialog(competition: str, input_fn: Input, output: Output) -> str:
         request = requests[int(raw) - 1]
     except (ValueError, IndexError):
         return "올바른 번호를 입력해주세요."
-    answer = input_fn("답변 (q: 취소)> ").strip()
-    if answer.lower() == "q" or not answer:
+    for line in _feedback_request_lines(request):
+        output(line)
+    options = [item for item in request.get("options") or [] if isinstance(item, dict)]
+    answers: dict[str, Any] = {}
+    if options:
+        raw_option = input_fn("선택 (q: 취소)> ").strip().lower()
+        if raw_option == "q":
+            return "피드백 답변 입력을 취소했습니다."
+        try:
+            selected = options[int(raw_option) - 1]
+        except (ValueError, IndexError):
+            return "올바른 선택지 번호를 입력해주세요."
+        answers["decision"] = str(selected.get("value") or selected.get("label") or "")
+        answer = input_fn("추가 의견 (Enter: 없음, q: 취소)> ").strip()
+    else:
+        answer = input_fn("답변 (q: 취소)> ").strip()
+        if not answer:
+            return "피드백 답변 입력을 취소했습니다."
+    if answer.lower() == "q":
         return "피드백 답변 입력을 취소했습니다."
-    response = respond_to_request(str(request["request_id"]), free_text=answer)
+    response = respond_to_request(str(request["request_id"]), answers=answers, free_text=answer)
     return "답변을 기록했습니다. 다음 실험에 반영하겠습니다." if response.get("ok") else response.get("message", "기록 실패")
+
+
+def _feedback_request_lines(request: dict[str, Any]) -> list[str]:
+    lines = [
+        "",
+        f"[{request.get('interaction_label') or '사용자 판단 요청'}]",
+        f"문제: {request.get('problem') or request.get('message') or '-'}",
+    ]
+    evidence = [item for item in request.get("evidence_snapshot") or [] if isinstance(item, dict)]
+    if evidence:
+        lines.extend(["", "핵심 근거:"])
+        lines.extend(
+            f"- {item.get('label')}: {item.get('value')} ({item.get('meaning') or '설명 없음'})"
+            for item in evidence
+        )
+    repeated_evidence = [str(item) for item in request.get("evidence_summary") or [] if str(item).strip()]
+    if repeated_evidence:
+        lines.extend(["", "반복 근거:"])
+        lines.extend(f"- {item}" for item in repeated_evidence)
+    policy = request.get("policy") if isinstance(request.get("policy"), dict) else {}
+    if policy.get("score") is not None:
+        lines.append(
+            f"- 요청 필요도: {policy.get('score')}/{policy.get('threshold')} "
+            "(회차 수가 아니라 반복 근거와 사용자 판단 필요성을 기준으로 계산)"
+        )
+    lines.extend(
+        [
+            "",
+            f"에이전트 해석: {request.get('interpretation') or '-'}",
+            f"에이전트 추천: {request.get('recommendation') or '-'}",
+            f"사용자 판단이 필요한 이유: {request.get('why_user_needed') or '-'}",
+            "",
+            f"질문: {request.get('question') or request.get('message') or '-'}",
+        ]
+    )
+    options = [item for item in request.get("options") or [] if isinstance(item, dict)]
+    if options:
+        lines.extend(["", "선택지:"])
+        lines.extend(
+            f"{index}. {item.get('label') or item.get('value')} - {item.get('impact') or '반영 결과 미기록'}"
+            for index, item in enumerate(options, start=1)
+        )
+    lines.extend(["", f"답변이 없을 때: {request.get('default_if_no_response') or '-'}"])
+    if request.get("execution_supported") is False:
+        lines.append(
+            "실행 안내: "
+            + str(
+                request.get("execution_note")
+                or "현재 버전에서는 이 답변이 외부 계산 환경을 자동 실행하지 않습니다."
+            )
+        )
+    return lines
 
 
 def _manual_trial_rows(competition: str) -> list[dict[str, Any]]:
@@ -2075,10 +2396,16 @@ def _manual_trial_rows(competition: str) -> list[dict[str, Any]]:
     return rows
 
 
-def _latest_trial(db_trials: list[dict[str, Any]], manual: list[dict[str, Any]]) -> dict[str, Any] | None:
+def _latest_trial(
+    db_trials: list[dict[str, Any]],
+    manual: list[dict[str, Any]],
+    *,
+    exclude_trial_id: str | None = None,
+) -> dict[str, Any] | None:
     completed_db = [
         row
         for row in db_trials
+        if str(row.get("trial_id") or "") != str(exclude_trial_id or "")
         if str(row.get("status") or "").casefold() not in {"planned", "ready"}
         and (
             row.get("local_score") is not None
@@ -2088,29 +2415,60 @@ def _latest_trial(db_trials: list[dict[str, Any]], manual: list[dict[str, Any]])
     ]
     if completed_db:
         return max(completed_db, key=lambda row: str(row.get("trial_id") or ""))
-    submitted = [row for row in manual if row.get("lb_score") is not None]
+    submitted = [
+        row
+        for row in manual
+        if row.get("lb_score") is not None
+        and str(row.get("trial_id") or "") != str(exclude_trial_id or "")
+    ]
     if submitted:
         return max(submitted, key=lambda row: str(row.get("trial_id") or ""))
-    merged = {str(row.get("trial_id")): row for row in db_trials if row.get("trial_id")}
-    merged.update({str(row.get("trial_id")): row for row in manual if row.get("trial_id")})
-    return merged[sorted(merged)[-1]] if merged else None
+    return None
 
 
-def _best_trial(db_trials: list[dict[str, Any]], manual: list[dict[str, Any]]) -> dict[str, Any] | None:
+def _trial_record(
+    db_trials: list[dict[str, Any]],
+    manual: list[dict[str, Any]],
+    trial_id: str,
+) -> dict[str, Any] | None:
+    return next(
+        (
+            row
+            for row in [*db_trials, *manual]
+            if str(row.get("trial_id") or "") == trial_id
+        ),
+        None,
+    )
+
+
+def _best_trial(
+    db_trials: list[dict[str, Any]],
+    manual: list[dict[str, Any]],
+    *,
+    objective: str = "maximize",
+) -> dict[str, Any] | None:
     rows = [*db_trials, *manual]
     scored = [row for row in rows if row.get("lb_score") is not None]
     if scored:
-        return max(scored, key=lambda row: float(row["lb_score"]))
+        selector = min if objective.strip().casefold() == "minimize" else max
+        return selector(scored, key=lambda row: float(row["lb_score"]))
     return None
 
 
 def _infer_next_trial(manual: list[dict[str, Any]]) -> str | None:
     completed = {str(row.get("trial_id")) for row in manual if row.get("lb_score") is not None}
-    manual_next = next((trial_id for trial_id in TRIAL_IDS if trial_id not in completed), None)
-    if manual_next:
-        return manual_next
-    trial_ids = sorted(str(row.get("trial_id")) for row in manual if row.get("trial_id"))
-    return next_trial_id(trial_ids[-1]) if trial_ids else None
+    numbers = [
+        int(match.group(1))
+        for trial_id in completed
+        if (match := re.fullmatch(r"trial_(\d+)", trial_id))
+    ]
+    if not numbers:
+        return None
+    for number in range(1, max(numbers) + 2):
+        candidate = f"trial_{number:03d}"
+        if candidate not in completed:
+            return candidate
+    return None
 
 
 def _infer_start_trial(competition: str) -> str | None:
@@ -2158,6 +2516,8 @@ def _display_state(db_state: Any, loop: dict[str, Any], manual: list[dict[str, A
     }
     if loop.get("pause_requested") and state in {"starting", "running", "resuming"}:
         return "중단 대기 중"
+    if state == "failed" and loop.get("error") == "recoverable_after_metrics_collection":
+        return "후처리 복구 대기"
     if state:
         return labels.get(state, state)
     if _infer_next_trial(manual):
@@ -2174,6 +2534,62 @@ def _load_profile_safely(competition: str) -> dict[str, Any]:
         return load_execution_profile(competition)
     except (FileNotFoundError, ValueError):
         return {}
+
+
+def check_dacon_submission_limit(competition: str) -> dict[str, Any]:
+    """Resolve the effective daily DACON submission limit for a competition.
+
+    A manual override in execution_profile.yaml (dacon_daily_submission_limit)
+    always wins, since the rules-page scrape can miss it or the user may
+    simply know a more current number. Otherwise this fetches the rules page
+    fresh on every call -- deliberately not cached, since the limit almost
+    never changes mid-competition and a stale cached "no limit" reading would
+    be worse than one extra network call per check.
+    """
+    profile = _load_profile_safely(competition)
+    dacon_competition_id = str(profile.get("dacon_competition_id") or competition).strip()
+    override = profile.get("dacon_daily_submission_limit")
+    if isinstance(override, (int, float)) and not isinstance(override, bool) and override > 0:
+        return {
+            "competition": competition,
+            "dacon_competition_id": dacon_competition_id,
+            "status": "manual_override",
+            "daily_submission_limit": int(override),
+            "message": f"사용자가 직접 입력한 일일 제출 한도: {int(override)}회",
+        }
+    fetched = dacon_api.fetch_daily_submission_limit(dacon_competition_id)
+    if fetched.get("ok"):
+        return {
+            "competition": competition,
+            "dacon_competition_id": dacon_competition_id,
+            "status": "auto_detected",
+            "daily_submission_limit": fetched["daily_submission_limit"],
+            "message": f"규칙 페이지에서 자동으로 확인한 일일 제출 한도: {fetched['daily_submission_limit']}회",
+        }
+    return {
+        "competition": competition,
+        "dacon_competition_id": dacon_competition_id,
+        "status": "unknown",
+        "daily_submission_limit": None,
+        "message": (
+            "일일 제출 한도를 규칙 페이지에서 자동으로 찾지 못했습니다. "
+            "필요하면 직접 입력해주세요."
+        ),
+    }
+
+
+def set_dacon_submission_limit_override(competition: str, value: int | None) -> dict[str, Any]:
+    """Set (value given) or clear (value=None) the manual daily-submission-limit override."""
+    path = competition_dir(competition) / "execution_profile.yaml"
+    profile = simple_yaml.load(path, default={})
+    if not isinstance(profile, dict):
+        profile = {}
+    if value is None:
+        profile.pop("dacon_daily_submission_limit", None)
+    else:
+        profile["dacon_daily_submission_limit"] = int(value)
+    simple_yaml.dump(profile, path)
+    return {"competition": competition, "dacon_daily_submission_limit": value}
 
 
 def _filesystem_experiments() -> list[dict[str, Any]]:

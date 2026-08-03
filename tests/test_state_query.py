@@ -68,6 +68,41 @@ class StateQueryTest(unittest.TestCase):
             self.assertIn("사용자가 확인할 파일", text_output.getvalue())
             self.assertIn('"competition_id": "demo"', json_output.getvalue())
 
+    def test_kaggle_best_prefers_leaderboard_score_over_local_score(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "state.sqlite3"
+            _write_state_db_fixture(db_path)
+            upsert_trial_score(
+                {
+                    "competition_id": "demo",
+                    "trial_id": "trial_001",
+                    "metric": "accuracy",
+                    "objective": "maximize",
+                    "local_score": 0.83,
+                    "lb_score": 0.76,
+                    "is_best_local": True,
+                    "is_best_lb": False,
+                },
+                db_path,
+            )
+            upsert_trial_score(
+                {
+                    "competition_id": "demo",
+                    "trial_id": "trial_002",
+                    "metric": "accuracy",
+                    "objective": "maximize",
+                    "local_score": 0.81,
+                    "lb_score": 0.78,
+                    "is_best_local": False,
+                    "is_best_lb": True,
+                },
+                db_path,
+            )
+
+            experiment = get_experiment_status("demo", db_path)
+
+            self.assertEqual("trial_002", experiment["best_trial"]["trial_id"])
+
 
 def _write_state_db_fixture(db_path: Path) -> None:
     initialize_state_db(db_path)

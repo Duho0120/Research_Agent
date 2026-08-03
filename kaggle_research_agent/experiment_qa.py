@@ -23,11 +23,16 @@ def answer_experiment_question(
     trial_id: str | None,
     question: str,
     *,
+    conversation: list[dict[str, Any]] | None = None,
     client: ResponseClient | None = None,
     use_llm: bool = True,
 ) -> dict[str, Any]:
     interaction = interaction_contract("experiment_question")
-    evidence = collect_experiment_evidence(competition, trial_id, question)
+    evidence = collect_experiment_evidence(
+        competition,
+        trial_id,
+        _retrieval_question(question, conversation or []),
+    )
     if not evidence:
         return {
             "answer": "현재 선택된 실험에서 답변 근거가 될 문서를 찾지 못했습니다.",
@@ -48,7 +53,16 @@ def answer_experiment_question(
             )
             model = str(model_selection.get("model"))
             active_client = client or OpenAIResponsesClient()
-            response = active_client.create_response(_question_payload(model, competition, trial_id, question, evidence))
+            response = active_client.create_response(
+                _question_payload(
+                    model,
+                    competition,
+                    trial_id,
+                    question,
+                    evidence,
+                    conversation=conversation or [],
+                )
+            )
             answer = _extract_output_text(response).strip()
             if not answer:
                 raise ValueError("LLM response did not contain text.")
@@ -99,13 +113,26 @@ def _question_payload(
     trial_id: str | None,
     question: str,
     evidence: list[tuple[str, str]],
+    *,
+    conversation: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     context = "\n\n".join(f"[SOURCE: {path}]\n{text}" for path, text in evidence)
+    conversation_context = _conversation_context(conversation or [])
+    recent_chat = f"\n\n최근 대화:\n{conversation_context}" if conversation_context else ""
+    authority_rule = (
+        "Evidence rule: code-derived executed_facts and pipeline structure describe what actually ran. "
+        "Plan documents describe intent only. For questions about applied changes or completed trials, "
+        "do not mention an unverified plan-only parameter unless the user explicitly asks about plans. "
+        "If plan and execution conflict, use execution. Do not surface the conflict unless the user asks "
+        "about plans, failures, or discrepancies. "
+    )
     prompt = (
-        "선택된 실험의 문서 근거만 사용해 한국어로 간결하게 답하세요. "
+        authority_rule
+        + "선택된 실험의 문서 근거만 사용해 한국어로 간결하게 답하세요. "
         "근거에 없는 사실은 추측하지 말고 '문서에서 확인되지 않습니다'라고 밝히세요. "
+        "최근 대화는 후속 질문의 의미를 파악하는 용도로만 사용하고, 사실 근거로 취급하지 마세요. "
         "답변 끝에 사용한 파일 경로를 '근거:'로 짧게 적으세요.\n\n"
-        f"실험: {competition}\nTrial: {trial_id or '-'}\n질문: {question}\n\n{context}"
+        f"실험: {competition}\nTrial: {trial_id or '-'}{recent_chat}\n\n현재 질문: {question}\n\n{context}"
     )
     configured_limit = int(os.environ.get("RESEARCH_AGENT_CHAT_MAX_OUTPUT_TOKENS", "1000"))
     return {"model": model, "input": prompt, "max_output_tokens": max(300, min(configured_limit, 2000))}
@@ -201,6 +228,30 @@ def _display_score(value: Any) -> str:
 def _is_score_question(question: str) -> bool:
     normalized = question.lower()
     return any(term in normalized for term in ("점수", "score", "베스트", "best", "lb", "리더보드"))
+
+
+def _conversation_context(messages: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
+    for message in messages[-6:]:
+        role = str(message.get("role") or "").strip().lower()
+        if role not in {"user", "assistant"}:
+            continue
+        content = " ".join(str(message.get("content") or "").split()).strip()
+        if not content:
+            continue
+        label = "사용자" if role == "user" else "에이전트"
+        lines.append(f"{label}: {content[:700]}")
+    return "\n".join(lines)
+
+
+def _retrieval_question(question: str, messages: list[dict[str, Any]]) -> str:
+    for message in reversed(messages[-6:]):
+        if str(message.get("role") or "").lower() != "user":
+            continue
+        previous = " ".join(str(message.get("content") or "").split()).strip()
+        if previous:
+            return f"{previous[:300]}\n{question}"
+    return question
 
 
 def _truthy_env(name: str) -> bool:

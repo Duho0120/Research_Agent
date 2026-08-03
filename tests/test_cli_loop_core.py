@@ -297,6 +297,45 @@ class CliLoopCoreTest(unittest.TestCase):
             self.assertTrue((trial / "BEST_MARKER.md").exists())
             self.assertTrue((root / "submissions" / "demo" / "submission_log.jsonl").exists())
 
+    def test_submit_trial_command_forwards_dacon_flags(self):
+        # submit_trial() (agents/submission.py) already supports
+        # dacon_competition_id/dacon_team_name/dacon_message kwargs -- this
+        # only covers that the CLI's --dacon-* flags actually reach it,
+        # since until now only --kaggle-* flags were wired up here.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.cli.submit_trial") as fake_submit:
+                    fake_submit.return_value = {"trial_id": "trial_001", "status": "submitted"}
+                    with redirect_stdout(io.StringIO()):
+                        code = main(
+                            [
+                                "submit-trial",
+                                "--competition",
+                                "236716",
+                                "--trial",
+                                "trial_001",
+                                "--version-name",
+                                "236716_trial_001_v01",
+                                "--submission-file",
+                                "experiments/236716/trial_001/submission.csv",
+                                "--dacon-competition-id",
+                                "236716",
+                                "--dacon-team-name",
+                                "뚜로",
+                                "--dacon-message",
+                                "trial_001 baseline",
+                            ]
+                        )
+
+            self.assertEqual(code, 0)
+            fake_submit.assert_called_once()
+            call_kwargs = fake_submit.call_args.kwargs
+            self.assertEqual("236716", call_kwargs["dacon_competition_id"])
+            self.assertEqual("뚜로", call_kwargs["dacon_team_name"])
+            self.assertEqual("trial_001 baseline", call_kwargs["dacon_message"])
+            self.assertIsNone(call_kwargs["kaggle_competition_slug"])
+
     def test_prepare_submission_command_creates_manifest_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

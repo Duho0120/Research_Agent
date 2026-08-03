@@ -929,57 +929,6 @@ def _render_trial_overview(trial: dict[str, Any], artifacts: list[dict[str, Any]
     if not trial:
         return "Trial을 선택하면 핵심 요약이 표시됩니다."
     axis = trial.get("change_axis") or trial.get("active_axis") or "-"
-    best_flags = []
-    if trial.get("is_best_local"):
-        best_flags.append("local best")
-    if trial.get("is_best_lb"):
-        best_flags.append("LB best")
-    lines = [
-        "핵심 요약",
-        "=" * 48,
-        "",
-        f"실험: {trial.get('competition')} / {trial.get('trial_id')}",
-        f"상태: {trial.get('status') or '-'}",
-        f"점수: {_score_text(trial.get('local_score'))} ({trial.get('metric') or '-'})",
-        f"개선축: {axis}",
-        f"판단: {trial.get('decision') or '-'}",
-        f"참고 기준 trial: {trial.get('recommended_base_trial') or '-'}",
-        f"토큰 사용량: {trial.get('token_total') or 0}",
-    ]
-    if best_flags:
-        lines.append(f"Best 표시: {', '.join(best_flags)}")
-    lines.extend(
-        [
-            "",
-            "추천 읽기 순서",
-            "-" * 48,
-            "1. 실험 계획서: 이번 trial의 목적과 바꾼 개선축을 확인",
-            "2. 파이프라인 구조도: 실제로 데이터/전처리/모델/추론이 어떻게 흐르는지 확인",
-            "3. 실행 결과: 로컬 점수와 실행 상태 확인",
-            "4. 판단 카드: 다음 trial에서 유지/기각/보류할 내용 확인",
-            "",
-            "산출물 목록",
-            "-" * 48,
-        ]
-    )
-    for index, artifact in enumerate(_ordered_artifacts(artifacts), start=1):
-        label = artifact.get("label") or artifact.get("type")
-        purpose = ARTIFACT_PURPOSE.get(str(artifact.get("type")), "추가 참고 자료")
-        lines.append(f"{index}. {label}: {purpose}")
-    lines.extend(
-        [
-            "",
-            "왼쪽 산출물을 누르면 Markdown 문서를 앱에서 읽기 쉬운 형태로 정리해서 보여줍니다.",
-            "원문 그대로 확인하고 싶으면 아래의 '파일 열기' 버튼을 사용하세요.",
-        ]
-    )
-    return "\n".join(lines)
-
-
-def _render_trial_overview(trial: dict[str, Any], artifacts: list[dict[str, Any]]) -> str:
-    if not trial:
-        return "Trial을 선택하면 핵심 요약이 표시됩니다."
-    axis = trial.get("change_axis") or trial.get("active_axis") or "-"
     best = _best_badge(trial) or "-"
     lines = [
         "핵심 요약",
@@ -991,17 +940,33 @@ def _render_trial_overview(trial: dict[str, Any], artifacts: list[dict[str, Any]
         f"로컬 점수: {_score_text(trial.get('local_score'))} ({trial.get('metric') or '-'})",
         f"제출 점수: {_score_text(trial.get('lb_score'))}",
         f"개선축: {axis}",
+        f"판단: {trial.get('decision') or '-'}",
+        f"참고 기준 trial: {trial.get('recommended_base_trial') or '-'}",
+        f"토큰 사용량: {trial.get('token_total') or 0}",
+        "",
+        "추천 읽기 순서",
+        "-" * 48,
+        "1. 실험 계획서: 이번 trial의 목적과 바꾼 개선축을 확인",
+        "2. 파이프라인 구조도: 실제로 데이터/전처리/모델/추론이 어떻게 흐르는지 확인",
+        "3. 실행 결과: 로컬 점수와 실행 상태 확인",
+        "4. 판단 카드: 다음 trial에서 유지/기각/보류할 내용 확인",
         "",
         "사용자용 산출물",
         "-" * 48,
     ]
     for index, artifact in enumerate(_ordered_artifacts(artifacts), start=1):
         label = artifact.get("label") or artifact.get("type")
-        purpose = ARTIFACT_PURPOSE.get(str(artifact.get("type")), "")
-        suffix = f" - {purpose}" if purpose else ""
-        lines.append(f"{index}. {label}{suffix}")
+        purpose = ARTIFACT_PURPOSE.get(str(artifact.get("type")), "추가 참고 자료")
+        lines.append(f"{index}. {label}: {purpose}")
     if not artifacts:
         lines.append("- 표시할 사용자용 산출물이 없습니다.")
+    lines.extend(
+        [
+            "",
+            "왼쪽 산출물을 누르면 Markdown 문서를 앱에서 읽기 쉬운 형태로 정리해서 보여줍니다.",
+            "원문 그대로 확인하고 싶으면 아래의 '파일 열기' 버튼을 사용하세요.",
+        ]
+    )
     return "\n".join(lines)
 
 

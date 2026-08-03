@@ -83,7 +83,7 @@ def _render_data_notes(inspection: dict[str, Any]) -> str:
     lines = ["# Data Notes", "", "## Files", ""]
     lines.extend(f"- {name}" for name in names or ["No files discovered yet."])
     lines.extend(["", "## Submission Format", ""])
-    if any("sample_submission" in name for name in names):
+    if any("samplesubmission" in "".join(character for character in name.casefold() if character.isalnum()) for name in names):
         lines.append("- Use sample_submission file as the source of required submission columns.")
     else:
         lines.append("- Sample submission file not detected in the current listing.")

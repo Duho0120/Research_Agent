@@ -99,6 +99,167 @@ class ExecutionFactsTest(unittest.TestCase):
             self.assertEqual("trial_001", plan["source_trial_id"])
             self.assertEqual("model_ensemble", plan["primary_change_axis"])
 
+    def test_plan_resolution_rejects_self_referential_retry_plan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trial = root / "experiments" / "demo" / "trial_005"
+            internal = trial / "internal"
+            revision = internal / "plan_revisions" / "20260727_113618"
+            revision.mkdir(parents=True)
+            (internal / "workspace_coding_handoff.json").write_text(
+                json.dumps(
+                    {
+                        "trial_id": "trial_005",
+                        "source_trial_id": "trial_004",
+                        "code_base_trial_id": "trial_004",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (internal / "demo_experiment_plan.json").write_text(
+                json.dumps(
+                    {
+                        "trial_id": "trial_005",
+                        "source_trial_id": "trial_005",
+                        "plan_title": "HGBR max_iter 300",
+                        "primary_change_axis": "hyperparameter",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (trial / "delta_plan.json").write_text(
+                json.dumps(
+                    {
+                        "trial_id": "trial_005",
+                        "source_trial_id": "trial_005",
+                        "change_details": ["Set max_iter=300"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (revision / "delta_plan.json").write_text(
+                json.dumps(
+                    {
+                        "trial_id": "trial_005",
+                        "source_trial_id": "trial_004",
+                        "primary_change_axis": "model_family",
+                        "candidate": {"name": "HGBR with log target transform"},
+                        "change_details": ["Replace Ridge with HGBR"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                plan = resolve_trial_plan("demo", "trial_005")
+
+            self.assertEqual("trial_004", plan["source_trial_id"])
+            self.assertEqual("model_family", plan["primary_change_axis"])
+            self.assertEqual("HGBR with log target transform", plan["plan_title"])
+            self.assertEqual(["Replace Ridge with HGBR"], plan["change_details"])
+            self.assertNotIn("max_iter", json.dumps(plan))
+
+    def test_plan_resolution_uses_finalized_execution_snapshot_over_conflicting_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trial = root / "experiments" / "demo" / "trial_006"
+            internal = trial / "internal"
+            internal.mkdir(parents=True)
+            (internal / "execution_plan_snapshot.json").write_text(
+                json.dumps(
+                    {
+                        "status": "finalized",
+                        "plan": {
+                            "trial_id": "trial_006",
+                            "source_trial_id": "trial_003",
+                            "plan_title": "Adopt time series validation",
+                            "primary_change_axis": "validation_review",
+                            "change_details": ["Use TimeSeriesSplit"],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (trial / "delta_plan.json").write_text(
+                json.dumps(
+                    {
+                        "trial_id": "trial_006",
+                        "source_trial_id": "trial_005",
+                        "primary_change_axis": "model_family",
+                        "change_details": ["Use Poisson loss"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (internal / "workspace_coding_handoff.json").write_text(
+                json.dumps(
+                    {
+                        "trial_id": "trial_006",
+                        "source_trial_id": "trial_005",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                plan = resolve_trial_plan("demo", "trial_006")
+
+            self.assertEqual("trial_003", plan["source_trial_id"])
+            self.assertEqual("validation_review", plan["primary_change_axis"])
+            self.assertEqual(["Use TimeSeriesSplit"], plan["change_details"])
+            self.assertEqual(
+                ["internal/execution_plan_snapshot.json"],
+                plan["_resolved_plan_sources"],
+            )
+
+    def test_plan_resolution_falls_back_when_snapshot_has_no_primary_axis(self):
+        # A plan rendered with research_planner's "## Strategy" layout (rather than
+        # demo_one_cycle's "## Primary Change Axis" layout) still produces a
+        # non-empty execution_plan_snapshot.json, since the markdown parser only
+        # understands the latter layout. That near-empty snapshot must not be
+        # trusted over the richer next_experiment.json fallback, which already
+        # knows how to recover primary_change_axis/change_details from either
+        # layout.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trial = root / "experiments" / "demo" / "trial_002"
+            internal = trial / "internal"
+            internal.mkdir(parents=True)
+            (internal / "execution_plan_snapshot.json").write_text(
+                json.dumps(
+                    {
+                        "status": "finalized",
+                        "plan": {"trial_id": "trial_002", "plan_type": "initial_pipeline_plan"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (trial / "next_experiment.md").write_text(
+                "# trial_002 Next Experiment\n\n## Strategy\n\nhyperparameter_tuning\n\n"
+                "## Changes\n\n- tweak learning rate\n",
+                encoding="utf-8",
+            )
+            (trial / "next_experiment.json").write_text(
+                json.dumps(
+                    {
+                        "strategy": "hyperparameter_tuning",
+                        "changes": ["tweak learning rate"],
+                        "source_trial_id": "trial_001",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (internal / "workspace_coding_handoff.json").write_text(
+                json.dumps({"trial_id": "trial_002", "source_trial_id": "trial_001"}),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                plan = resolve_trial_plan("demo", "trial_002")
+
+            self.assertEqual("hyperparameter_tuning", plan["primary_change_axis"])
+            self.assertNotIn("internal/execution_plan_snapshot.json", plan["_resolved_plan_sources"])
+
 
 if __name__ == "__main__":
     unittest.main()

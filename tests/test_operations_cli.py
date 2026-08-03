@@ -37,6 +37,38 @@ class OperationsCliTest(unittest.TestCase):
         self.assertEqual("trial_010", next_trial_id([{"trial_id": "trial_002"}, {"trial_id": "trial_009"}]))
         self.assertEqual("trial_004", next_trial_id([{"trial_id": "trial_v16"}, {"trial_id": "baseline"}, {"trial_id": "trial_003"}]))
 
+    def test_discovered_scaffold_is_ready_first_trial_not_completed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "state.sqlite3"
+            initialize_state_db(db_path)
+            upsert_competition(
+                {
+                    "competition_id": "demo",
+                    "platform": "kaggle",
+                    "topic": "Demo Competition",
+                    "metric": "rmsle",
+                    "objective": "minimize",
+                    "status": "has_trials",
+                    "workspace_path": "demo_workspaces/demo",
+                },
+                db_path,
+            )
+            upsert_trial(
+                {
+                    "competition_id": "demo",
+                    "trial_id": "trial_001",
+                    "status": "discovered",
+                },
+                db_path,
+            )
+
+            status = build_operations_status(competition="demo", db_path=db_path)
+            operation = status["experiment"]["operation"]
+
+            self.assertEqual("ready_first_trial", operation["state"])
+            self.assertEqual("trial_001", operation["next_trial_id"])
+            self.assertEqual("discovered", operation["latest_trial"]["status"])
+
     def test_status_command_renders_operator_friendly_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "state.sqlite3"

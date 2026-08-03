@@ -112,7 +112,7 @@ class CodeWriterAdapterTest(unittest.TestCase):
             client = FakeCodeWriterClient({"output_text": "{}"})
 
             with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                result = run_code_writer("demo", "trial_002", client=client, allow_api=True, trial_llm_calls=4)
+                result = run_code_writer("demo", "trial_002", client=client, allow_api=True, trial_llm_calls=10)
 
             self.assertEqual(result["status"], "blocked")
             self.assertEqual(client.calls, [])

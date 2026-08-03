@@ -69,9 +69,30 @@ def _scalar(value: Any) -> str:
     if isinstance(value, (int, float)):
         return str(value)
     text = str(value)
-    if not text or text.strip() != text or any(ch in text for ch in ":#[]{}"):
+    if not text or text.strip() != text or any(ch in text for ch in ":#[]{}") or _parses_as_non_string(text):
         return json.dumps(text, ensure_ascii=False)
     return text
+
+
+def _parses_as_non_string(text: str) -> bool:
+    """True if _parse_scalar would read this text back as something other
+    than the plain string it is -- e.g. an all-digit string like a numeric
+    DACON competition id ("236716") would otherwise round-trip as an int,
+    breaking any later `value == competition_id` string comparison.
+    """
+    if text in {"true", "True", "false", "False", "null", "None", "~"}:
+        return True
+    try:
+        int(text)
+        return True
+    except ValueError:
+        pass
+    try:
+        float(text)
+        return True
+    except ValueError:
+        pass
+    return False
 
 
 def _parse_lines(lines: list[str]) -> Any:

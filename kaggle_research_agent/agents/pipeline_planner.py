@@ -129,6 +129,17 @@ def _select_axes(
     consecutive_failures: int,
     protect_model_changes: bool,
 ) -> tuple[str, list[str], list[str], bool]:
+    # NOTE: the metrics-dict branches below (leakage_warning, segment_errors,
+    # class_imbalance, class_errors, threshold_sweep_needed, data_quality_issues,
+    # prediction_correlation_with_best) are currently DORMANT in practice: no
+    # generated training script or metrics contract is asked to emit these keys
+    # today (workspace_coding_handoff.py's metrics_output_contract only requires
+    # cv_score/metric/objective), and prediction_correlation_with_best would need
+    # per-trial prediction storage that the artifact policy doesn't keep by
+    # default. Only the diagnosis-text checks ("cv/lb", "threshold") and
+    # consecutive_failures are driven by real, currently-populated data. Do not
+    # assume the metrics-keyed branches fire in production without first wiring
+    # up their inputs — see docs/superpowers/plans/ for the extension design.
     issues = " ".join(diagnosis.get("issues", [])).casefold()
     corr = metrics.get("prediction_correlation_with_best")
     protected_axes: list[str] = []

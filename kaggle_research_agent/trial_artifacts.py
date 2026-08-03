@@ -10,7 +10,7 @@ from typing import Any
 
 from . import paths, simple_yaml
 from .code_snapshot import load_trial_code_snapshot
-from .execution_facts import write_executed_trial_facts
+from .execution_facts import resolve_trial_plan, write_executed_trial_facts
 from .incremental_trial import write_effective_trial_artifacts
 from .paths import competition_dir, trial_dir
 from .store import read_text, write_text
@@ -39,6 +39,7 @@ INTERNAL_FILE_NAMES = {
     "workspace_coding_result.json",
     "workspace_coding_result_validation.json",
     "workspace_run.json",
+    "execution_consistency.json",
 }
 
 
@@ -66,6 +67,101 @@ def prepare_trial_execution_facts(competition: str, trial_id: str) -> dict[str, 
     )
 
 
+def reconcile_trial_execution_metadata(competition: str, trial_id: str) -> dict[str, Any]:
+    """Align decision-critical metrics metadata with executed code before final analysis."""
+
+    out_dir = trial_dir(competition, trial_id)
+    summary = build_trial_summary(competition, trial_id)
+    structure = build_pipeline_structure(out_dir, summary)
+    metrics = _read_json(out_dir / "metrics.json")
+    plan = resolve_trial_plan(competition, trial_id)
+    repairs: list[str] = []
+
+    model_stage = next(
+        (stage for stage in structure.get("stages", []) if stage.get("id") == "model_definition"),
+        {},
+    )
+    model_details = (
+        model_stage.get("structured_details")
+        if isinstance(model_stage.get("structured_details"), dict)
+        else {}
+    )
+    estimator = str(model_details.get("estimator") or "").strip()
+    recorded_model = str(metrics.get("model") or metrics.get("model_type") or "").strip()
+    if estimator and (not recorded_model or estimator.lower() not in recorded_model.lower()):
+        metrics["model"] = estimator
+        metrics["model_type"] = estimator
+        metrics["model_details"] = model_details
+        repairs.append(f"model_metadata:{recorded_model or 'missing'}->{estimator}")
+
+    expected_trial = str(trial_id)
+    if str(metrics.get("trial_id") or "") != expected_trial:
+        metrics["trial_id"] = expected_trial
+        metrics["trial"] = expected_trial
+        repairs.append(f"trial_id_metadata->{expected_trial}")
+
+    source_trial = plan.get("source_trial_id")
+    if source_trial and metrics.get("source_trial_id") != source_trial:
+        metrics["source_trial_id"] = source_trial
+        metrics["base_trial"] = source_trial
+        repairs.append(f"source_trial_id_metadata->{source_trial}")
+
+    axis = plan.get("primary_change_axis")
+    if axis and metrics.get("change_axis") != axis:
+        metrics["change_axis"] = axis
+        repairs.append(f"change_axis_metadata->{axis}")
+
+    pipeline_summary = metrics.get("pipeline_summary")
+    if not isinstance(pipeline_summary, dict):
+        pipeline_summary = {}
+    pipeline_summary.update(
+        {
+            "competition": competition,
+            "trial": expected_trial,
+            "trial_id": expected_trial,
+            "base_trial": source_trial,
+            "change_axis": axis,
+        }
+    )
+    metrics["pipeline_summary"] = pipeline_summary
+
+    if repairs:
+        write_text(out_dir / "metrics.json", json.dumps(metrics, ensure_ascii=False, indent=2) + "\n")
+        summary = build_trial_summary(competition, trial_id)
+        structure = build_pipeline_structure(out_dir, summary)
+
+    internal_dir = out_dir / "internal"
+    write_text(
+        internal_dir / "pipeline_structure.json",
+        json.dumps(structure, ensure_ascii=False, indent=2) + "\n",
+    )
+    facts = write_executed_trial_facts(
+        competition,
+        trial_id,
+        pipeline_structure=structure,
+        summary=summary,
+    )
+    remaining = [
+        issue
+        for issue in structure.get("consistency_issues", [])
+        if str(issue).startswith(("model_metadata_mismatch:", "trial_id_metadata_mismatch:"))
+    ]
+    result = {
+        "competition": competition,
+        "trial_id": trial_id,
+        "status": "blocked" if remaining else ("corrected" if repairs else "ready"),
+        "repairs": repairs,
+        "remaining_issues": remaining,
+        "all_consistency_issues": structure.get("consistency_issues", []),
+        "executed_trial_facts": facts,
+    }
+    write_text(
+        internal_dir / "execution_consistency.json",
+        json.dumps(result, ensure_ascii=False, indent=2) + "\n",
+    )
+    return result
+
+
 def trial_artifact_path(out_dir: Path, name: str) -> Path:
     root_path = out_dir / name
     if root_path.exists():
@@ -88,6 +184,7 @@ def organize_trial_artifacts(
     low_cost_user_summary: bool = False,
     allow_api: bool = False,
     low_cost_summary_client: Any | None = None,
+    plan_translation_client: Any | None = None,
 ) -> dict[str, Any]:
     """Write a compact human-facing README and tuck obvious debug artifacts away."""
     out_dir = trial_dir(competition, trial_id)
@@ -131,7 +228,9 @@ def organize_trial_artifacts(
             client=low_cost_summary_client,
         )
         summary["low_cost_user_summary"] = low_cost_result
-    summary["user_view_files"] = _write_user_view(out_dir, summary)
+    summary["user_view_files"] = _write_user_view(
+        out_dir, summary, allow_api=allow_api, plan_translation_client=plan_translation_client
+    )
     if low_cost_result is not None:
         low_cost_path = out_dir / "internal" / "low_cost_user_summary_card.json"
         write_text(low_cost_path, json.dumps(low_cost_result, ensure_ascii=False, indent=2) + "\n")
@@ -158,6 +257,16 @@ def build_trial_summary(competition: str, trial_id: str) -> dict[str, Any]:
     submission_result = _latest_submission_result(competition, trial_id)
     decision_card = read_trial_json(out_dir, "decision_card.json")
     profile = _load_execution_profile(competition)
+    submission_paths = (
+        profile.get("artifacts", {}).get("submission", [])
+        if isinstance(profile.get("artifacts"), dict)
+        else []
+    )
+    submission_file = (
+        submit_manifest.get("submission_file")
+        or submission_result.get("submission_file")
+        or (submission_paths[0] if submission_paths else None)
+    )
 
     status = _summary_status(
         workspace_result_cycle,
@@ -187,13 +296,15 @@ def build_trial_summary(competition: str, trial_id: str) -> dict[str, Any]:
         "key_files": _key_files(out_dir),
         "log_paths": log_paths,
         "project_root": profile.get("project_root"),
+        "python": profile.get("python"),
+        "execution_commands": profile.get("commands") if isinstance(profile.get("commands"), dict) else {},
         "workspace_status": workspace_run.get("status"),
         "metrics_collection_status": metrics_collection.get("status"),
         "submit_manifest": submit_manifest,
         "submission_run": submission_run,
         "submission_result": submission_result,
         "submission_prepare_status": submit_manifest.get("status"),
-        "submission_file": submit_manifest.get("submission_file"),
+        "submission_file": submission_file,
         "submitted_lb_score": submission_result.get("submitted_lb_score"),
         "submitted_rank": submission_result.get("submitted_rank"),
         "is_best_submission": submission_result.get("is_best"),
@@ -322,7 +433,7 @@ def build_pipeline_structure(out_dir: Path, summary: dict[str, Any]) -> dict[str
         _stage(
             "dataset_dataloader",
             "Dataset / DataLoader",
-            _contains_any(code_text, ["dataloader", "dataset", "__getitem__", "torch.utils.data", "tf.data"]),
+            _has_dataset_loader_usage(code_files),
             "배치 기반 프레임워크를 사용할 때 포함합니다. tabular sklearn baseline에서는 보통 제외됩니다.",
             stage_context,
             role="배치 단위 학습을 위한 데이터 접근 골격을 제공합니다.",
@@ -511,6 +622,20 @@ def _workspace_pipeline_summary(summary: dict[str, Any]) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _pipeline_submission_columns(pipeline_summary: dict[str, Any]) -> list[str] | None:
+    # Actual writers nest this under "submission": {"columns": [...]}; a
+    # top-level "submission_columns" key is also accepted for callers that
+    # pre-flatten the summary. Without this, the nested shape silently missed
+    # and downstream code fell back to a single generic "target" column name
+    # even when the real submission schema had multiple prediction columns.
+    columns = pipeline_summary.get("submission_columns")
+    if not isinstance(columns, list):
+        submission = pipeline_summary.get("submission")
+        if isinstance(submission, dict):
+            columns = submission.get("columns")
+    return columns if isinstance(columns, list) and columns else None
+
+
 def _code_files_from_coding_result(summary: dict[str, Any]) -> list[tuple[str, str]]:
     competition = summary.get("competition")
     trial_id = summary.get("trial_id")
@@ -685,22 +810,82 @@ def _extract_code_constants(code_files: list[tuple[str, str]]) -> dict[str, list
             tree = ast.parse(text)
         except SyntaxError:
             continue
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Assign):
+        assignments = [node for node in ast.walk(tree) if isinstance(node, (ast.Assign, ast.AnnAssign))]
+        unresolved: list[tuple[str, ast.AST]] = []
+        for node in assignments:
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            value_node = node.value
+            if value_node is None:
                 continue
-            for target in node.targets:
+            for target in targets:
                 if not isinstance(target, ast.Name) or not target.id.isupper():
                     continue
                 try:
-                    value = ast.literal_eval(node.value)
+                    value = ast.literal_eval(value_node)
                 except (ValueError, TypeError):
+                    unresolved.append((target.id, value_node))
                     continue
                 if isinstance(value, list):
                     constants[target.id] = value
+        for _ in range(len(unresolved) + 1):
+            progressed = False
+            remaining: list[tuple[str, ast.AST]] = []
+            for name, value_node in unresolved:
+                value = _resolve_list_expression(value_node, constants)
+                if value is None:
+                    remaining.append((name, value_node))
+                    continue
+                constants[name] = value
+                progressed = True
+            unresolved = remaining
+            if not progressed:
+                break
     return constants
 
 
-def _extract_pipeline_facts(
+def _resolve_list_expression(node: ast.AST, constants: dict[str, list[Any]]) -> list[Any] | None:
+    if isinstance(node, ast.Name):
+        value = constants.get(node.id)
+        return list(value) if isinstance(value, list) else None
+    if isinstance(node, (ast.List, ast.Tuple)):
+        try:
+            value = ast.literal_eval(node)
+        except (ValueError, TypeError):
+            return None
+        return list(value)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _resolve_list_expression(node.left, constants)
+        right = _resolve_list_expression(node.right, constants)
+        if left is not None and right is not None:
+            return [*left, *right]
+    return None
+
+
+def _has_dataset_loader_usage(code_files: list[tuple[str, str]]) -> bool:
+    for relative, text in code_files:
+        if not relative.lower().endswith(".py"):
+            continue
+        tree = _parse_ast(text)
+        if tree is None:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Name, ast.Attribute)):
+                name = _call_name(node)
+                if name in {"Dataset", "DataLoader", "__getitem__"}:
+                    return True
+                if name.startswith("torch.utils.data") or name.startswith("tf.data"):
+                    return True
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                module = str(getattr(node, "module", "") or "")
+                imported = {alias.name for alias in node.names}
+                if module.startswith(("torch.utils.data", "tensorflow.data")):
+                    return True
+                if imported & {"Dataset", "DataLoader"}:
+                    return True
+    return False
+
+
+def _extract_pipeline_facts_legacy(
     summary: dict[str, Any],
     code_files: list[tuple[str, str]],
     code_text: str,
@@ -716,7 +901,7 @@ def _extract_pipeline_facts(
         ("pandas", "import pandas"),
         ("numpy", "import numpy"),
         ("sklearn", "sklearn"),
-        ("joblib", "import joblib"),
+        ("joblib", "joblib"),
         ("pathlib.Path", "from pathlib import path"),
     ]:
         if needle in lowered:
@@ -854,7 +1039,7 @@ def _extract_pipeline_facts(
 
     if "submission.csv" in lowered:
         facts["test_inference_output"].append("`outputs/submission.csv`를 생성합니다.")
-    submission_columns = pipeline_summary.get("submission_columns")
+    submission_columns = _pipeline_submission_columns(pipeline_summary)
     if isinstance(submission_columns, list) and submission_columns:
         facts["test_inference_output"].append(
             "제출 파일은 " + ", ".join(f"`{column}`" for column in submission_columns) + " 컬럼을 사용합니다."
@@ -925,11 +1110,10 @@ def _extract_pipeline_facts(
     if "read_csv" in lowered:
         files = ", ".join(required_files) if required_files else "train/test CSV"
         facts["data_load"].append(f"`pd.read_csv`로 {files}를 읽습니다.")
-    target = (
+    explicit_target = (
         pipeline_summary.get("target_column")
         or _workspace_config_value(code_files, "target_column")
         or _constant_string_value(code_files, "TARGET_COLUMN")
-        or "target"
     )
     identifier = (
         pipeline_summary.get("id_column")
@@ -937,6 +1121,19 @@ def _extract_pipeline_facts(
         or _constant_string_value(code_files, "ID_COLUMN")
         or "id"
     )
+    submission_columns_for_target = _pipeline_submission_columns(pipeline_summary)
+    if explicit_target:
+        target = explicit_target
+    elif isinstance(submission_columns_for_target, list) and len(submission_columns_for_target) >= 2:
+        # No single target column exists (e.g. multi-column regression like
+        # id,x,y,z); reporting a fabricated "target" column name here was the
+        # source of a real planning bug -- a later trial's plan claimed the
+        # submission had an "id,target" schema that never existed, because
+        # this fact line always asserted a literal "target" column even when
+        # none was ever detected.
+        target = ",".join(str(column) for column in submission_columns_for_target[1:])
+    else:
+        target = "target"
     facts["data_load"].append(f"학습 타깃은 `{target}`, 제출 ID는 `{identifier}`로 사용합니다.")
 
     numeric = _feature_list(metrics, constants, "numeric")
@@ -985,6 +1182,14 @@ def _extract_pipeline_facts(
         if "stratify=" in lowered:
             split_note += " 가능한 경우 target 분포를 유지하도록 `stratify`를 사용합니다."
         facts["data_split_cv"].append(split_note)
+    validation_details = _validation_details(metrics, code_text, lowered)
+    if validation_details.get("method") == "time_ordered_holdout":
+        split_note = "시간 순서를 유지한 holdout 검증을 사용합니다."
+        if validation_details.get("train_fraction") is not None:
+            split_note += f" 앞 {float(validation_details['train_fraction']):.0%}를 학습에 사용합니다."
+        if validation_details.get("sorted_by"):
+            split_note += f" `{validation_details['sorted_by']}` 기준으로 정렬합니다."
+        facts["data_split_cv"].append(split_note)
 
     derived: list[str] = []
     if "familysize" in lowered:
@@ -997,6 +1202,9 @@ def _extract_pipeline_facts(
         derived.append("`is_alone = family_size == 1`")
     if "title" in lowered and ("extract_title" in lowered or "_extract_title" in lowered):
         derived.append("`Name`에서 `Title`을 추출하고 희귀 호칭을 그룹화")
+    datetime_features = [item for item in features if item.casefold().startswith(("dt_", "date_", "time_"))]
+    if datetime_features:
+        derived.append(f"`{identifier}`에서 시간 파생 피처 생성: {', '.join(datetime_features)}")
     if derived:
         facts["feature_representation"].append("파생 피처: " + "; ".join(_unique(derived)) + ".")
     if features:
@@ -1020,6 +1228,13 @@ def _extract_pipeline_facts(
             params = [f"{key}={metrics[key]}" for key in ["n_estimators", "max_depth", "min_samples_leaf", "random_state"] if key in metrics]
         suffix = f" ({', '.join(params)})" if params else ""
         facts["model_definition"].append(f"`RandomForestClassifier`{suffix}를 사용합니다.")
+    model_details = _model_details(metrics, code_text, lowered)
+    estimator = str(model_details.get("estimator") or "")
+    if estimator and not any(estimator in item for item in facts["model_definition"]):
+        parameters = model_details.get("parameters") if isinstance(model_details.get("parameters"), dict) else {}
+        rendered_params = ", ".join(f"{key}={value}" for key, value in parameters.items())
+        suffix = f" ({rendered_params})" if rendered_params else ""
+        facts["model_definition"].append(f"`{estimator}`{suffix}를 사용합니다.")
 
     metric = metrics.get("metric") or summary.get("metric")
     objective = metrics.get("objective") or summary.get("objective")
@@ -1029,10 +1244,13 @@ def _extract_pipeline_facts(
         facts["loss_objective"].append("명시적 loss 함수를 따로 구현하지 않고 sklearn `LogisticRegression`의 내부 최적화 목적을 사용합니다.")
     if "randomforestclassifier" in lowered:
         facts["loss_objective"].append("명시적 loss 함수를 따로 구현하지 않고 sklearn `RandomForestClassifier`의 분류 기준을 사용합니다.")
+    if estimator and not any(estimator in item for item in facts["loss_objective"]):
+        facts["loss_objective"].append(f"명시적 loss 구현 대신 `{estimator}`의 내부 학습 목적을 사용합니다.")
 
     if ".fit(" in lowered or "fit(" in lowered:
         facts["training"].append("검증 점수를 계산한 뒤 학습 pipeline을 fit합니다.")
-    if "joblib.dump" in lowered:
+    checkpoint_writer = _checkpoint_writer(lowered)
+    if checkpoint_writer:
         facts["training"].append("학습된 pipeline과 메타데이터를 model bundle로 저장합니다.")
 
     score = metrics.get("cv_score")
@@ -1044,19 +1262,18 @@ def _extract_pipeline_facts(
     if "validation_accuracy" in metrics:
         facts["evaluation"].append("`validation_accuracy`와 `cv_score`를 동일한 로컬 검증 점수로 기록합니다.")
 
-    if "joblib.dump" in lowered or "pickle.dump" in lowered:
-        model_path = _path_constant_value(code_files, "MODEL_PATH")
+    if checkpoint_writer:
+        model_path = _checkpoint_path(code_files, lowered)
         if model_path:
             facts["model_checkpoint"].append(f"`{model_path}`에 학습된 모델 bundle을 저장합니다.")
         else:
-            writer = "joblib.dump" if "joblib.dump" in lowered else "pickle.dump"
-            facts["model_checkpoint"].append(f"학습된 모델 bundle을 `{writer}`로 저장합니다.")
+            facts["model_checkpoint"].append(f"학습된 모델 bundle을 `{checkpoint_writer}`로 저장합니다.")
     else:
         facts["model_checkpoint"].append("이번 실험에서는 별도 모델 checkpoint 저장을 확인하지 못했습니다.")
 
     if "submission.csv" in lowered:
         facts["test_inference_output"].append("`outputs/submission.csv`를 생성합니다.")
-    submission_columns = pipeline_summary.get("submission_columns")
+    submission_columns = _pipeline_submission_columns(pipeline_summary)
     if isinstance(submission_columns, list) and submission_columns:
         facts["test_inference_output"].append(
             "제출 파일은 " + ", ".join(f"`{column}`" for column in submission_columns) + " 컬럼을 사용합니다."
@@ -1078,11 +1295,10 @@ def _extract_pipeline_details(
     pipeline_summary = _workspace_pipeline_summary(summary)
     constants = _extract_code_constants(code_files)
     lowered = code_text.lower()
-    target = (
+    explicit_target = (
         pipeline_summary.get("target_column")
         or _workspace_config_value(code_files, "target_column")
         or _constant_string_value(code_files, "TARGET_COLUMN")
-        or "target"
     )
     identifier = (
         pipeline_summary.get("id_column")
@@ -1090,20 +1306,24 @@ def _extract_pipeline_details(
         or _constant_string_value(code_files, "ID_COLUMN")
         or "id"
     )
-    submission_columns = pipeline_summary.get("submission_columns")
+    submission_columns = _pipeline_submission_columns(pipeline_summary)
+    if explicit_target:
+        target = explicit_target
+    elif isinstance(submission_columns, list) and len(submission_columns) >= 2:
+        target = ",".join(str(column) for column in submission_columns[1:])
+    else:
+        target = "target"
     prediction_column = target
-    if isinstance(submission_columns, list) and len(submission_columns) >= 2:
-        prediction_column = str(submission_columns[1])
     required_files = _workspace_config_required_files(code_files)
     numeric = _feature_list(metrics, constants, "numeric")
     categorical = _feature_list(metrics, constants, "categorical")
     final_features = _final_feature_list(metrics, constants)
-    derived_features = _derived_feature_details(lowered, final_features)
+    derived_features = _derived_feature_details(lowered, final_features, identifier=identifier)
     raw_feature_columns = _raw_feature_columns(numeric, categorical, derived_features)
     preprocessing_steps = _preprocessing_step_details(metrics, code_text, lowered, numeric, categorical)
     validation = _validation_details(metrics, code_text, lowered)
     model = _model_details(metrics, code_text, lowered)
-    checkpoint = _path_constant_value(code_files, "MODEL_PATH")
+    checkpoint = _checkpoint_path(code_files, lowered)
 
     details: dict[str, dict[str, Any]] = {
         "data_load": {
@@ -1156,11 +1376,16 @@ def _extract_pipeline_details(
     return {key: value for key, value in details.items() if _has_detail(value)}
 
 
-def _derived_feature_details(lowered: str, final_features: list[str]) -> list[dict[str, Any]]:
+def _derived_feature_details(
+    lowered: str,
+    final_features: list[str],
+    *,
+    identifier: str = "datetime",
+) -> list[dict[str, Any]]:
     details: list[dict[str, Any]] = []
     final_lookup = {item.lower(): item for item in final_features}
     family_name = final_lookup.get("family_size") or final_lookup.get("familysize")
-    if family_name or "family_size" in lowered or "familysize" in lowered:
+    if (family_name or "family_size" in lowered or "familysize" in lowered) and "sibsp" in lowered and "parch" in lowered:
         family_name = family_name or ("family_size" if "family_size" in lowered else "FamilySize")
         details.append(
             {
@@ -1168,6 +1393,15 @@ def _derived_feature_details(lowered: str, final_features: list[str]) -> list[di
                 "source_columns": ["SibSp", "Parch"],
                 "formula": "SibSp + Parch + 1",
                 "purpose": "동승 가족 규모를 생존 예측 신호로 사용",
+            }
+        )
+    elif family_name:
+        details.append(
+            {
+                "name": family_name,
+                "source_columns": [],
+                "formula": "declared in final feature list; source formula was not found in executable code",
+                "purpose": "코드에서 파생 공식을 확인해야 하는 선언형 피처",
             }
         )
     alone_name = final_lookup.get("is_alone") or final_lookup.get("isalone")
@@ -1191,7 +1425,7 @@ def _derived_feature_details(lowered: str, final_features: list[str]) -> list[di
                 "purpose": "성별/사회적 호칭 정보를 범주형 피처로 사용",
             }
         )
-    if final_lookup.get("deck") or "deck" in lowered:
+    if (final_lookup.get("deck") or "deck" in lowered) and "cabin" in lowered:
         details.append(
             {
                 "name": final_lookup.get("deck") or "Deck",
@@ -1200,13 +1434,26 @@ def _derived_feature_details(lowered: str, final_features: list[str]) -> list[di
                 "purpose": "객실 구역 정보를 범주형 피처로 사용",
             }
         )
-    if final_lookup.get("fareperperson") or "fareperperson" in lowered:
+    if (final_lookup.get("fareperperson") or "fareperperson" in lowered) and "fare" in lowered:
         details.append(
             {
                 "name": final_lookup.get("fareperperson") or "FarePerPerson",
                 "source_columns": ["Fare", family_name or "FamilySize"],
                 "formula": "Fare / FamilySize",
                 "purpose": "가족 규모를 고려한 1인당 운임 피처",
+            }
+        )
+    for name in final_features:
+        normalized = name.casefold()
+        if not normalized.startswith(("dt_", "date_", "time_")):
+            continue
+        component = normalized.split("_", 1)[-1]
+        details.append(
+            {
+                "name": name,
+                "source_columns": [identifier],
+                "formula": f"datetime.{component}",
+                "purpose": "시간 패턴을 모델 입력으로 표현",
             }
         )
     return details
@@ -1370,6 +1617,9 @@ def _validation_details(metrics: dict[str, Any], code_text: str, lowered: str) -
         details["method"] = "stratified_k_fold_cv"
     elif "train_test_split" in lowered:
         details["method"] = "holdout_train_test_split"
+    elif "sort_values" in lowered and re.search(r"\.iloc\s*\[\s*:?\s*split_", lowered):
+        details["method"] = "time_ordered_holdout"
+        details["split_strategy"] = "time_ordered"
     if split_strategy:
         details["split_strategy"] = split_strategy
     n_splits = re.search(r"n_splits\s*=\s*([^,\n\)]+)", code_text)
@@ -1380,6 +1630,12 @@ def _validation_details(metrics: dict[str, Any], code_text: str, lowered: str) -
         details["test_size"] = metrics["validation_size"]
     elif test_size:
         details["test_size"] = test_size.group(1).strip()
+    elif re.search(r"(?m)split_\w*\s*=\s*[^\n]*\b0\.8\b", lowered):
+        details["train_fraction"] = 0.8
+        details["test_size"] = 0.2
+    sort_match = re.search(r"sort_values\(\s*([^,\)]+)", code_text)
+    if sort_match and details.get("method") == "time_ordered_holdout":
+        details["sorted_by"] = sort_match.group(1).strip()
     random_state = metrics.get("random_state")
     if random_state is None:
         random_state = metrics.get("random_seed")
@@ -1401,9 +1657,33 @@ def _model_details(metrics: dict[str, Any], code_text: str, lowered: str) -> dic
         "StackingClassifier",
         "VotingRegressor",
         "StackingRegressor",
+        "XGBRegressor",
+        "LGBMRegressor",
+        "CatBoostRegressor",
+        "HistGradientBoostingRegressor",
+        "GradientBoostingRegressor",
+        "RandomForestRegressor",
+        "ExtraTreesRegressor",
+        "XGBClassifier",
+        "LGBMClassifier",
+        "CatBoostClassifier",
+        "HistGradientBoostingClassifier",
         "RandomForestClassifier",
         "GradientBoostingClassifier",
+        "ExtraTreesClassifier",
         "LogisticRegression",
+        "LinearRegression",
+        "ElasticNet",
+        "Lasso",
+        "Ridge",
+        "SVR",
+        "SVC",
+        "KNeighborsRegressor",
+        "KNeighborsClassifier",
+        "SGDRegressor",
+        "SGDClassifier",
+        "DummyRegressor",
+        "DummyClassifier",
     ]
     estimator = ""
     for candidate in candidates:
@@ -1526,9 +1806,24 @@ def _prediction_postprocessing(lowered: str) -> list[str]:
 def _checkpoint_writer(lowered: str) -> str | None:
     if "joblib.dump" in lowered:
         return "joblib.dump"
+    if "from joblib import" in lowered and re.search(r"\bdump\s*\(", lowered):
+        return "joblib.dump"
     if "pickle.dump" in lowered:
         return "pickle.dump"
     return None
+
+
+def _checkpoint_path(code_files: list[tuple[str, str]], lowered: str) -> str | None:
+    configured = _path_constant_value(code_files, "MODEL_PATH")
+    if configured:
+        return configured
+    match = re.search(r"""["']([^"']+\.(?:joblib|pkl|pickle|pt|pth|keras))["']""", lowered)
+    if not match:
+        return None
+    name = match.group(1).replace("\\", "/")
+    if "/" in name:
+        return name
+    return f"outputs/{name}"
 
 
 def _has_detail(value: Any) -> bool:
@@ -1798,11 +2093,19 @@ def _move_internal_files(out_dir: Path) -> list[str]:
     return moved
 
 
-def _write_user_view(out_dir: Path, summary: dict[str, Any]) -> list[str]:
+def _write_user_view(
+    out_dir: Path,
+    summary: dict[str, Any],
+    *,
+    allow_api: bool = False,
+    plan_translation_client: Any | None = None,
+) -> list[str]:
     user_dir = out_dir / "user_view"
     _reset_user_view_dir(out_dir, user_dir)
     copied_files: list[str] = []
-    files = render_user_view_files(out_dir, summary, copied_files)
+    files = render_user_view_files(
+        out_dir, summary, copied_files, allow_api=allow_api, plan_translation_client=plan_translation_client
+    )
     for name, content in files.items():
         _write_user_markdown(user_dir / name, content)
     return list(files)

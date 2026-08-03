@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import json
 import os
 import sys
 from pathlib import Path
 from . import simple_yaml
+from .cli_app import check_dacon_submission_limit, set_dacon_submission_limit_override
 from .baseline_generator import generate_baseline_pipeline
 from .competition_inspector import inspect_competition
 from .competition_onboarding import start_competition
@@ -273,6 +275,14 @@ def main(argv: list[str] | None = None) -> int:
     p_sync_state_db.add_argument("--competition", default=None)
     p_sync_state_db.add_argument("--db-path", default=None)
 
+    p_check_dacon_limit = sub.add_parser("check-dacon-submission-limit")
+    p_check_dacon_limit.add_argument("--competition", required=True)
+
+    p_set_dacon_limit = sub.add_parser("set-dacon-submission-limit")
+    p_set_dacon_limit.add_argument("--competition", required=True)
+    p_set_dacon_limit.add_argument("--value", type=int, default=None)
+    p_set_dacon_limit.add_argument("--clear", action="store_true")
+
     p_list_experiments = sub.add_parser("list-experiments")
     p_list_experiments.add_argument("--db-path", default=None)
     p_list_experiments.add_argument("--sync", action="store_true")
@@ -390,6 +400,9 @@ def main(argv: list[str] | None = None) -> int:
     p_submit_trial.add_argument("--kaggle-competition-slug", dest="kaggle_competition_slug", default=None)
     p_submit_trial.add_argument("--kaggle-team-name", dest="kaggle_team_name", default=None)
     p_submit_trial.add_argument("--kaggle-message", dest="kaggle_message", default=None)
+    p_submit_trial.add_argument("--dacon-competition-id", dest="dacon_competition_id", default=None)
+    p_submit_trial.add_argument("--dacon-team-name", dest="dacon_team_name", default=None)
+    p_submit_trial.add_argument("--dacon-message", dest="dacon_message", default=None)
     p_submit_trial.add_argument("--poll-leaderboard", action="store_true")
     p_submit_trial.add_argument("--poll-attempts", type=int, default=5)
     p_submit_trial.add_argument("--poll-interval-seconds", type=float, default=30.0)
@@ -774,6 +787,21 @@ def main(argv: list[str] | None = None) -> int:
         print(result["db_path"])
         return 0 if result["status"] == "completed" else 1
 
+    if args.command == "check-dacon-submission-limit":
+        result = check_dacon_submission_limit(args.competition)
+        print(result["message"])
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "set-dacon-submission-limit":
+        value = None if args.clear else args.value
+        if not args.clear and value is None:
+            print("--value <N> or --clear is required.")
+            return 1
+        result = set_dacon_submission_limit_override(args.competition, value)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+
     if args.command == "list-experiments":
         db_path = Path(args.db_path) if args.db_path else None
         if args.sync:
@@ -957,6 +985,9 @@ def main(argv: list[str] | None = None) -> int:
             kaggle_competition_slug=args.kaggle_competition_slug,
             kaggle_team_name=args.kaggle_team_name,
             kaggle_message=args.kaggle_message,
+            dacon_competition_id=args.dacon_competition_id,
+            dacon_team_name=args.dacon_team_name,
+            dacon_message=args.dacon_message,
             poll_leaderboard=args.poll_leaderboard,
             poll_attempts=args.poll_attempts,
             poll_interval_seconds=args.poll_interval_seconds,

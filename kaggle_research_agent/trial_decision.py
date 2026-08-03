@@ -13,6 +13,13 @@ from .store import now_iso, write_text
 
 EPSILON = 1e-12
 MAX_AXIS_NO_IMPROVE_ATTEMPTS = 3
+# Relative worsening beyond this ratio is treated as catastrophic: the axis is
+# rejected immediately instead of getting the usual MAX_AXIS_NO_IMPROVE_ATTEMPTS
+# refinement attempts. Real tuning noise in this loop is well under 5%; the
+# failures this guards against were 120%+ (a bad estimator swap) and 220%+ (a
+# feature set that dropped the dominant predictor), each of which previously
+# burned two more full trials on refining an obviously broken idea.
+CATASTROPHIC_REGRESSION_RATIO = 0.25
 MAX_REJECTED_CANDIDATES = 12
 MAX_REJECTED_CANDIDATES_PER_AXIS = 5
 MAX_CANDIDATE_LABEL_CHARS = 180
@@ -78,6 +85,9 @@ def write_trial_decision_card(
     )
     rejected_candidates = _flatten_rejected_candidates(rejected_candidates_by_axis)
     candidate_label = _candidate_label(plan)
+    catastrophic_regression = _is_catastrophic_regression(
+        best_local, local_score, objective
+    ) or _is_catastrophic_regression(best_lb, lb_score, objective)
     decision = _decision(
         has_previous=previous_card is not None,
         local_status=best_local_status,
@@ -85,8 +95,36 @@ def write_trial_decision_card(
         lb_score=lb_score,
         current_axis=current_axis,
         axis_attempt_count=axis_attempt_count,
+        catastrophic_regression=catastrophic_regression,
     )
-    rejected_axes = _unique(_previous_rejected_axes(previous_cards) + ([current_axis] if _rejects_axis(decision) and current_axis else []))
+    model_type = str(metrics.get("model_type") or "").strip() or None
+    # The trial's code was built on the previous card's recommended base (the
+    # workspace is restored to that snapshot before patching), so that trial
+    # -- not the nominal source trial -- is the right comparator for both
+    # estimator-family changes and bit-identical-score (no-op) detection.
+    code_base_trial = str((previous_card or {}).get("recommended_base_trial") or source_trial_id or "") or None
+    source_card = _card_for_trial(previous_cards, code_base_trial)
+    base_model_type = str((source_card or {}).get("model_type") or "").strip() or None
+    # An axis that swaps the estimator family is a model_family change no
+    # matter what the plan named it ("model_hyperparameters:Ridge" on an HGBR
+    # base is a family swap, not tuning). Free-text axis names previously let
+    # such changes bypass a rejected model_family axis entirely.
+    estimator_family_changed = bool(model_type and base_model_type and model_type != base_model_type)
+    rejected_axes = _unique(
+        _previous_rejected_axes(previous_cards)
+        + ([current_axis] if _rejects_axis(decision) and current_axis else [])
+        + (["model_family"] if _rejects_axis(decision) and estimator_family_changed else [])
+    )
+    # A score bit-identical to the source trial across a claimed code change
+    # is effectively impossible unless nothing actually changed; flag it so
+    # the planner fixes the implementation instead of blaming the idea.
+    no_change_suspected = bool(
+        current_axis
+        and local_score is not None
+        and (source_card or {}).get("local_score") is not None
+        and abs(local_score - float(source_card["local_score"])) <= EPSILON
+        and previous_lb_status in {"flat", "baseline", "missing"}
+    )
     if (_continues_axis(decision) or _rejects_axis(decision)) and candidate_label:
         rejected_candidates_by_axis = _add_rejected_candidate(
             rejected_candidates_by_axis,
@@ -107,6 +145,7 @@ def write_trial_decision_card(
         best_card=best_card,
         previous_card=previous_card,
     )
+    base_trial_axis = _base_trial_change_axis(previous_cards, recommended_base_trial)
     card = {
         "schema_version": "1.0",
         "competition": competition,
@@ -132,6 +171,10 @@ def write_trial_decision_card(
         "previous_lb_status": previous_lb_status,
         "raw_decision": raw_decision,
         "decision": decision,
+        "model_type": model_type,
+        "catastrophic_regression": catastrophic_regression,
+        "estimator_family_changed": estimator_family_changed,
+        "no_change_suspected": no_change_suspected,
         "active_axis": current_axis if _continues_axis(decision) else None,
         "axis_attempt_count": axis_attempt_count,
         "axis_attempt_limit": MAX_AXIS_NO_IMPROVE_ATTEMPTS,
@@ -143,7 +186,15 @@ def write_trial_decision_card(
         "rejected_axes": rejected_axes,
         "accepted_axes": accepted_axes,
         "next_guidance": _next_guidance(decision, current_axis=current_axis, recommended_base_trial=recommended_base_trial),
-        "planner_constraints": _planner_constraints(decision, current_axis=current_axis, recommended_base_trial=recommended_base_trial),
+        "planner_constraints": _planner_constraints(
+            decision,
+            current_axis=current_axis,
+            recommended_base_trial=recommended_base_trial,
+            base_trial_axis=base_trial_axis,
+            catastrophic_regression=catastrophic_regression,
+            estimator_family_changed=estimator_family_changed,
+            no_change_suspected=no_change_suspected,
+        ),
     }
     _write_card_files(competition, trial_id, card)
     log_decision(
@@ -195,6 +246,27 @@ def load_latest_decision_context(competition: str) -> dict[str, Any]:
         "planner_constraints": (latest or {}).get("planner_constraints", []),
         "decision_card_count": len(cards),
     }
+
+
+def candidate_label_for_plan(plan: dict[str, Any]) -> str:
+    """Compute the same dedup label used for rejected_candidates, ahead of running the trial."""
+    return _candidate_label(plan)
+
+
+def find_duplicate_candidate(decision_context: dict[str, Any], plan: dict[str, Any]) -> str | None:
+    """Return the matching previously-rejected candidate label if `plan` repeats one for its axis, else None."""
+    axis = _clean_axis(plan.get("primary_change_axis"))
+    if not axis:
+        return None
+    label = candidate_label_for_plan(plan)
+    if not label:
+        return None
+    rejected = (decision_context.get("rejected_candidates_by_axis") or {}).get(axis, [])
+    normalized = label.strip().casefold()
+    for candidate in rejected:
+        if str(candidate).strip().casefold() == normalized:
+            return str(candidate)
+    return None
 
 
 def render_decision_card(card: dict[str, Any]) -> str:
@@ -368,6 +440,7 @@ def _decision(
     lb_score: float | None,
     current_axis: str = "",
     axis_attempt_count: int = 0,
+    catastrophic_regression: bool = False,
 ) -> str:
     if not has_previous:
         return "baseline_established"
@@ -377,16 +450,34 @@ def _decision(
         if local_status == "improved" and lb_status == "regressed":
             return "reject_or_hold_cv_lb_mismatch"
         if lb_status in {"flat", "regressed"}:
+            if catastrophic_regression:
+                return "reject_or_hold"
             if current_axis and axis_attempt_count < MAX_AXIS_NO_IMPROVE_ATTEMPTS:
                 return "continue_axis_refinement"
             return "reject_or_hold"
     if local_status == "improved":
         return "provisional_accept"
     if local_status in {"flat", "regressed"}:
+        if catastrophic_regression:
+            return "reject_or_hold"
         if current_axis and axis_attempt_count < MAX_AXIS_NO_IMPROVE_ATTEMPTS:
             return "continue_axis_refinement"
         return "reject_or_hold"
     return "inconclusive"
+
+
+def _is_catastrophic_regression(best: float | None, current: float | None, objective: str) -> bool:
+    """A regression so large it cannot plausibly be tuning noise.
+
+    Status alone (improved/flat/regressed) treats a 0.1% dip and a 3x blowup
+    identically, which let obviously broken axes claim their full refinement
+    attempts. Relative worsening beyond CATASTROPHIC_REGRESSION_RATIO means
+    the idea itself is wrong, not the tuning.
+    """
+    if best is None or current is None or abs(best) <= EPSILON:
+        return False
+    worsening = (current - best) if objective == "minimize" else (best - current)
+    return worsening / abs(best) > CATASTROPHIC_REGRESSION_RATIO
 
 
 def _rejects_axis(decision: str) -> bool:
@@ -473,12 +564,40 @@ def _next_guidance(decision: str, *, current_axis: str, recommended_base_trial: 
     return f"Decision is inconclusive. Start from `{recommended_base_trial}` and avoid broad rewrites."
 
 
-def _planner_constraints(decision: str, *, current_axis: str, recommended_base_trial: str) -> list[str]:
+def _planner_constraints(
+    decision: str,
+    *,
+    current_axis: str,
+    recommended_base_trial: str,
+    base_trial_axis: str | None = None,
+    catastrophic_regression: bool = False,
+    estimator_family_changed: bool = False,
+    no_change_suspected: bool = False,
+) -> list[str]:
     constraints = [
         f"Use `{recommended_base_trial}` as the base trial unless the user explicitly overrides it.",
         "Change exactly one primary improvement axis in the next trial.",
         "Keep split/model/preprocessing fixed unless selected as the primary axis.",
     ]
+    if catastrophic_regression and current_axis:
+        constraints.append(
+            f"FACT: `{current_axis}` regressed the score by more than {int(CATASTROPHIC_REGRESSION_RATIO * 100)}% "
+            "-- far beyond tuning noise. The idea itself is wrong for this data; do not retry it with different "
+            "parameters, and do not retry it under a different axis name."
+        )
+    if estimator_family_changed and _rejects_axis(decision):
+        constraints.append(
+            "FACT: this trial swapped the estimator family, which counts as the `model_family` axis regardless of "
+            "the axis name used. `model_family` is now a rejected axis: do not propose another estimator swap "
+            "(under any axis name) unless the user explicitly asks for one."
+        )
+    if no_change_suspected:
+        constraints.append(
+            f"WARNING: this trial's local score is bit-identical to base trial `{recommended_base_trial}`'s, which "
+            "is effectively impossible if the planned change actually ran. The implementation most likely did not "
+            "apply the change to the measured path. Before judging the axis, make the next plan verify the change "
+            "lands in the executed training/validation code."
+        )
     if _rejects_axis(decision) and current_axis:
         constraints.append(f"Do not keep stacking on rejected axis `{current_axis}`.")
         constraints.append("If the rejected axis was implemented in the last trial, roll back to the recommended base before applying a new change.")
@@ -487,11 +606,65 @@ def _planner_constraints(decision: str, *, current_axis: str, recommended_base_t
         constraints.append(
             f"Use `{recommended_base_trial}` as the code/pipeline base even if the active axis was attempted on another trial."
         )
+        # This is a computed fact, not a hint the planner has to infer: only
+        # trials whose own change_axis matches current_axis actually contain
+        # that axis's change in their code, since only accepted trials
+        # become the new base and get carried forward as-is.
+        if base_trial_axis and base_trial_axis != current_axis:
+            constraints.append(
+                f"FACT: `{recommended_base_trial}` was itself planned under axis `{base_trial_axis}`, not "
+                f"`{current_axis}`. Its code does NOT contain the `{current_axis}` change yet -- apply that change "
+                "in full as part of this trial (e.g. the actual model-family swap, not just a parameter tweak that "
+                "assumes it already exists)."
+            )
+        elif base_trial_axis == current_axis:
+            constraints.append(
+                f"FACT: `{recommended_base_trial}` was itself planned under axis `{current_axis}`, so its code "
+                "already reflects this axis -- you are refining a variant within it, not introducing it from scratch."
+            )
         constraints.append("Try a different candidate or parameter variant inside the same axis; do not switch to a new axis yet.")
         constraints.append("Do not preserve the failed candidate unless the new variant explicitly requires it.")
     if decision == "reject_or_hold_cv_lb_mismatch":
         constraints.append("CV improved but leaderboard regressed; consider validation reliability before trusting local gains.")
     return constraints
+
+
+def _card_for_trial(cards: list[dict[str, Any]], trial_id: str | None) -> dict[str, Any] | None:
+    if not trial_id:
+        return None
+    for card in cards:
+        if str(card.get("trial_id") or "") == trial_id:
+            return card
+    return None
+
+
+def _base_trial_change_axis(cards: list[dict[str, Any]], recommended_base_trial: str | None) -> str | None:
+    card = _card_for_trial(cards, recommended_base_trial)
+    axis = str((card or {}).get("change_axis") or "").strip()
+    return axis or None
+
+
+# Axis names are free text written by the planner LLM, so the same conceptual
+# axis shows up under several spellings ("model_params" vs
+# "model_hyperparameters", stray spaces around the colon). Attempt counting
+# and rejected-axis membership must compare the normalized form, or a
+# re-spelled axis silently restarts its attempt budget.
+_AXIS_PREFIX_SYNONYMS = {
+    "model_params": "model_hyperparameters",
+    "model_parameters": "model_hyperparameters",
+    "model_hyperparameter": "model_hyperparameters",
+    "hyperparameter": "model_hyperparameters",
+    "hyperparameters": "model_hyperparameters",
+}
+
+
+def _normalize_axis(axis: Any) -> str:
+    text = re.sub(r"\s+", "", str(axis or "").strip().casefold())
+    if not text:
+        return ""
+    prefix, separator, suffix = text.partition(":")
+    prefix = _AXIS_PREFIX_SYNONYMS.get(prefix, prefix)
+    return f"{prefix}:{suffix}" if separator else prefix
 
 
 def _previous_rejected_axes(cards: list[dict[str, Any]]) -> list[str]:
@@ -556,9 +729,10 @@ def _previous_accepted_axes(cards: list[dict[str, Any]]) -> list[str]:
 def _unresolved_axis_cards(cards: list[dict[str, Any]], axis: str) -> list[dict[str, Any]]:
     if not axis:
         return []
+    normalized = _normalize_axis(axis)
     unresolved: list[dict[str, Any]] = []
     for row in cards:
-        if row.get("change_axis") != axis:
+        if _normalize_axis(row.get("change_axis")) != normalized:
             continue
         if row.get("decision") in {"accept", "provisional_accept"}:
             unresolved = []
@@ -570,8 +744,12 @@ def _unresolved_axis_cards(cards: list[dict[str, Any]], axis: str) -> list[dict[
 def _candidate_label(plan: dict[str, Any]) -> str:
     axis = _clean_axis(plan.get("primary_change_axis"))
     title = _compact_text(plan.get("plan_title"), max_chars=80)
-    details = [_compact_text(item, max_chars=90) for item in plan.get("change_details", []) if _compact_text(item, max_chars=90)]
-    signals = _candidate_signals(details)
+    # Extract signals from the full detail text and only shorten afterwards:
+    # pre-truncating before extraction used to cut class names mid-word, so
+    # rejected-candidate labels stored fragments like "TransformedTarg" and
+    # "HistGradientBoostin" that the planner could not match against anything.
+    details = [_compact_text(item, max_chars=400) for item in plan.get("change_details", []) if _compact_text(item, max_chars=400)]
+    signals = [_compact_text(item, max_chars=90) for item in _candidate_signals(details)]
     if not signals and title:
         signals = [title]
     if not axis:

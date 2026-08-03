@@ -87,6 +87,6 @@ def _next_steps(status: str, files: list[dict[str, Any]]) -> list[str]:
         return ["Accept the competition rules on Kaggle if required, then retry inspection."]
     names = {item["name"] for item in files}
     steps = ["Download competition data with the Kaggle CLI.", "Inspect train/test/sample submission schemas."]
-    if any("sample_submission" in name for name in names):
+    if any("samplesubmission" in "".join(character for character in name.casefold() if character.isalnum()) for name in names):
         steps.append("Use the sample submission file to validate submission.csv format.")
     return steps

@@ -1,3 +1,4 @@
+import contextlib
 import csv
 import json
 import argparse
@@ -11,6 +12,197 @@ from scripts import generic_workspace_auto_loop
 
 
 class GenericWorkspaceAutoLoopTest(unittest.TestCase):
+    def test_only_an_interrupted_langgraph_process_is_resumable(self):
+        state = {
+            "graph_runtime": "langgraph",
+            "status": "running",
+            "competition": "demo",
+            "next_trial": "trial_003",
+            "graph_thread_id": "thread-1",
+        }
+        self.assertTrue(
+            generic_workspace_auto_loop._can_resume_graph_process(
+                state,
+                "demo",
+                "trial_003",
+            )
+        )
+        self.assertFalse(
+            generic_workspace_auto_loop._can_resume_graph_process(
+                state | {"status": "failed"},
+                "demo",
+                "trial_003",
+            )
+        )
+        self.assertFalse(
+            generic_workspace_auto_loop._can_resume_graph_process(
+                state | {"status": "starting", "resume_from_status": "failed"},
+                "demo",
+                "trial_003",
+            )
+        )
+        self.assertTrue(
+            generic_workspace_auto_loop._can_resume_graph_process(
+                state | {"status": "starting", "resume_from_status": "running"},
+                "demo",
+                "trial_003",
+            )
+        )
+
+    def test_run_one_trial_preserves_execute_analyze_submit_artifact_order(self):
+        events: list[str] = []
+        profile = {
+            "project_root": "C:/workspace",
+            "objective": "maximize",
+            "artifacts": {"submission": ["outputs/submission.csv"]},
+        }
+
+        def event(name, result):
+            events.append(name)
+            return result
+
+        with patch.object(
+            generic_workspace_auto_loop,
+            "validate_execution_profile",
+            return_value={"status": "ready"},
+        ):
+            with patch.object(generic_workspace_auto_loop, "load_execution_profile", return_value=profile):
+                with patch.object(
+                    generic_workspace_auto_loop,
+                    "run_workspace_pipeline",
+                    side_effect=lambda *args, **kwargs: event("execute", {"status": "completed"}),
+                ):
+                    with patch.object(
+                        generic_workspace_auto_loop,
+                        "collect_workspace_metrics",
+                        side_effect=lambda *args, **kwargs: event(
+                            "collect",
+                            {"status": "collected", "competition": "demo", "cv_score": 0.81},
+                        ),
+                    ):
+                        with patch.object(
+                            generic_workspace_auto_loop,
+                            "process_workspace_result",
+                            side_effect=lambda *args, **kwargs: event("analyze", {"status": "completed"}),
+                        ):
+                            with patch.object(
+                                generic_workspace_auto_loop,
+                                "reconcile_trial_execution_metadata",
+                                side_effect=lambda *args, **kwargs: event("consistency", {"status": "ready"}),
+                            ):
+                                with patch.object(
+                                    generic_workspace_auto_loop,
+                                    "submit_trial",
+                                    side_effect=lambda **kwargs: event(
+                                        "submit",
+                                        {"status": "submitted", "submitted_lb_score": 0.77},
+                                    ),
+                                ):
+                                    with patch.object(
+                                        generic_workspace_auto_loop,
+                                        "organize_trial_artifacts",
+                                        side_effect=lambda *args, **kwargs: event("artifacts", {"status": "completed"}),
+                                    ):
+                                        with patch.object(
+                                            generic_workspace_auto_loop,
+                                            "submission_artifact_path",
+                                            return_value="C:/workspace/outputs/submission.csv",
+                                        ):
+                                            with patch.object(generic_workspace_auto_loop, "write_loop_trial_result"):
+                                                with patch.object(generic_workspace_auto_loop, "save_loop_state"):
+                                                    result = generic_workspace_auto_loop.run_one_trial(
+                                                        "demo",
+                                                        "trial_001",
+                                                        submit=True,
+                                                        kaggle_slug="demo",
+                                                        poll_attempts=1,
+                                                        poll_interval_seconds=0,
+                                                    )
+
+        self.assertEqual("completed", result["status"])
+        self.assertEqual(["execute", "collect", "consistency", "submit", "analyze", "artifacts"], events)
+
+    def test_recovers_completed_execution_without_calling_code_writer_again(self):
+        recovered = {
+            "workspace_run": {"status": "completed"},
+            "metrics_collection": {
+                "status": "collected",
+                "competition": "demo",
+                "cv_score": 0.81,
+            },
+        }
+        profile = {
+            "project_root": "C:/workspace",
+            "objective": "maximize",
+            "artifacts": {"submission": ["outputs/submission.csv"]},
+        }
+        with patch.object(generic_workspace_auto_loop, "save_loop_state"):
+            with patch.object(
+                generic_workspace_auto_loop,
+                "validate_execution_profile",
+                return_value={"status": "ready"},
+            ):
+                with patch.object(generic_workspace_auto_loop, "load_execution_profile", return_value=profile):
+                    with patch.object(generic_workspace_auto_loop, "_recover_completed_execution", return_value=recovered):
+                        with patch.object(generic_workspace_auto_loop, "run_code_writer_trial") as writer:
+                            with patch.object(
+                                generic_workspace_auto_loop,
+                                "reconcile_trial_execution_metadata",
+                                return_value={"status": "ready"},
+                            ):
+                                with patch.object(
+                                    generic_workspace_auto_loop,
+                                    "process_workspace_result",
+                                    return_value={"status": "completed"},
+                                ):
+                                    with patch.object(
+                                        generic_workspace_auto_loop,
+                                        "organize_trial_artifacts",
+                                        return_value={"status": "completed"},
+                                    ):
+                                        with patch.object(generic_workspace_auto_loop, "write_loop_trial_result"):
+                                            result = generic_workspace_auto_loop.run_one_trial(
+                                                "demo",
+                                                "trial_001",
+                                                submit=False,
+                                                kaggle_slug=None,
+                                                poll_attempts=1,
+                                                poll_interval_seconds=0,
+                                                code_writer=True,
+                                            )
+
+        self.assertEqual("completed", result["status"])
+        self.assertEqual("resumed", result["code_writer"]["status"])
+        writer.assert_not_called()
+
+    def test_recovery_reads_artifacts_after_they_are_organized_under_internal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            internal = root / "experiments" / "demo" / "trial_005" / "internal"
+            internal.mkdir(parents=True)
+            (internal / "workspace_coding_result_validation.json").write_text(
+                json.dumps({"status": "accepted"}),
+                encoding="utf-8",
+            )
+            (internal / "workspace_run.json").write_text(
+                json.dumps({"status": "completed"}),
+                encoding="utf-8",
+            )
+            (internal / "metrics_collection.json").write_text(
+                json.dumps({"status": "collected", "cv_score": 0.33}),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                recovered = generic_workspace_auto_loop._recover_completed_execution(
+                    "demo",
+                    "trial_005",
+                )
+
+        self.assertIsNotNone(recovered)
+        self.assertEqual("completed", recovered["workspace_run"]["status"])
+        self.assertEqual(0.33, recovered["metrics_collection"]["cv_score"])
+
     def test_submission_gate_blocks_missing_or_unscored_kaggle_submission(self):
         self.assertEqual(
             "submission_submit_failed",
@@ -140,7 +332,7 @@ class GenericWorkspaceAutoLoopTest(unittest.TestCase):
 
             self.assertEqual("completed", result["status"])
             self.assertEqual("accepted", result["code_writer"]["status"])
-            self.assertEqual("completed", result["after_coding"]["status"])
+            self.assertEqual("execution_completed", result["after_coding"]["status"])
 
     def test_run_code_writer_retries_once_with_expanded_handoff_for_missing_snapshot(self):
         handoffs = [
@@ -158,10 +350,9 @@ class GenericWorkspaceAutoLoopTest(unittest.TestCase):
             {"status": "accepted", "changed_files": ["src/baseline.py"]},
         ]
         after_coding = {
-            "status": "completed",
+            "status": "execution_completed",
             "workspace_run": {"status": "completed"},
             "metrics_collection": {"status": "collected"},
-            "workspace_result_cycle": {"status": "completed"},
         }
 
         with patch.object(generic_workspace_auto_loop, "prepare_workspace_coding_handoff", side_effect=handoffs) as handoff:
@@ -185,6 +376,167 @@ class GenericWorkspaceAutoLoopTest(unittest.TestCase):
         self.assertEqual(2, writer.call_count)
         self.assertEqual(2, result["code_writer_attempt"])
 
+    def test_run_code_writer_replans_instead_of_retrying_when_handoff_finds_plan_code_mismatch(self):
+        # Regression for trial_027: the plan assumed a model-family change
+        # from an earlier, unaccepted attempt at the same axis was already
+        # in the base trial's code. Showing more code context (the ordinary
+        # retry path) cannot fix a wrong plan -- the plan itself needs to be
+        # regenerated.
+        handoffs = [
+            {
+                "status": "blocked",
+                "blocking_issues": ["plan_find_target_missing_in_base_code:train_step.py"],
+                "source_trial_id": "trial_026",
+            },
+            {"status": "ready", "snapshot_mode": "standard"},
+        ]
+        code_writer_result = {"status": "accepted", "changed_files": ["train_step.py"]}
+        after_coding = {
+            "status": "execution_completed",
+            "workspace_run": {"status": "completed"},
+            "metrics_collection": {"status": "collected"},
+        }
+
+        with patch.object(generic_workspace_auto_loop, "prepare_workspace_coding_handoff", side_effect=handoffs):
+            with patch.object(
+                generic_workspace_auto_loop, "prepare_workspace_trial_plan", return_value={"status": "planned"}
+            ) as replanner:
+                with patch.object(
+                    generic_workspace_auto_loop, "run_workspace_code_writer", return_value=code_writer_result
+                ) as writer:
+                    with patch.object(generic_workspace_auto_loop, "run_workspace_after_coding", return_value=after_coding):
+                        result = generic_workspace_auto_loop.run_code_writer_trial(
+                            "demo",
+                            "trial_027",
+                            model="gpt-5",
+                            provider="openai",
+                            allow_api=True,
+                            trial_llm_calls=None,
+                            strategy_calls_today=None,
+                        )
+
+        self.assertEqual("completed", result["status"])
+        self.assertEqual(1, replanner.call_count)
+        self.assertEqual("trial_027", replanner.call_args.args[1])
+        self.assertEqual("trial_026", replanner.call_args.kwargs["source_trial_id"])
+        self.assertTrue(replanner.call_args.kwargs["force_replan"])
+        self.assertEqual(1, writer.call_count)
+
+    def test_run_code_writer_replans_instead_of_retrying_when_patch_target_not_found(self):
+        handoff = {"status": "ready", "snapshot_mode": "standard", "source_trial_id": "trial_026"}
+        code_writer_results = [
+            {"status": "blocked", "blocking_issues": ["patch_find_not_found:train_step.py"]},
+            {"status": "accepted", "changed_files": ["train_step.py"]},
+        ]
+        after_coding = {
+            "status": "execution_completed",
+            "workspace_run": {"status": "completed"},
+            "metrics_collection": {"status": "collected"},
+        }
+
+        with patch.object(generic_workspace_auto_loop, "prepare_workspace_coding_handoff", return_value=handoff):
+            with patch.object(
+                generic_workspace_auto_loop, "prepare_workspace_trial_plan", return_value={"status": "planned"}
+            ) as replanner:
+                with patch.object(
+                    generic_workspace_auto_loop, "run_workspace_code_writer", side_effect=code_writer_results
+                ) as writer:
+                    with patch.object(generic_workspace_auto_loop, "run_workspace_after_coding", return_value=after_coding):
+                        result = generic_workspace_auto_loop.run_code_writer_trial(
+                            "demo",
+                            "trial_027",
+                            model="gpt-5",
+                            provider="openai",
+                            allow_api=True,
+                            trial_llm_calls=None,
+                            strategy_calls_today=None,
+                        )
+
+        self.assertEqual("completed", result["status"])
+        self.assertEqual(1, replanner.call_count)
+        self.assertTrue(replanner.call_args.kwargs["force_replan"])
+        self.assertEqual(2, writer.call_count)
+
+    def test_run_code_writer_replans_when_block_reason_is_a_structured_dict_mismatch(self):
+        # Regression: the code writer LLM does not always phrase a plan/code
+        # mismatch as one of the known marker strings -- this real example
+        # returned a structured dict describing a "Model mismatch between
+        # delta plan and authoritative code" instead. The catch-all must
+        # still recognize this as a plan problem worth replanning, without
+        # needing this exact phrasing enumerated anywhere.
+        handoff = {"status": "ready", "snapshot_mode": "standard", "source_trial_id": "trial_026"}
+        code_writer_results = [
+            {
+                "status": "blocked",
+                "changed_files": [],
+                "blocking_issues": [
+                    {
+                        "issue": "Model mismatch between delta plan and authoritative code",
+                        "details": (
+                            "The delta_plan targets train_step.py to set Ridge(alpha=1.0), but the "
+                            "authoritative base snapshot for trial_014 shows the pipeline uses "
+                            "HistGradientBoostingRegressor with poisson loss and no Ridge step."
+                        ),
+                        "evidence": "(\"model\", HistGradientBoostingRegressor(loss='poisson', ...))",
+                        "request": "Please adjust the delta plan to target the current estimator.",
+                    }
+                ],
+            },
+            {"status": "accepted", "changed_files": ["train_step.py"]},
+        ]
+        after_coding = {
+            "status": "execution_completed",
+            "workspace_run": {"status": "completed"},
+            "metrics_collection": {"status": "collected"},
+        }
+
+        with patch.object(generic_workspace_auto_loop, "prepare_workspace_coding_handoff", return_value=handoff):
+            with patch.object(
+                generic_workspace_auto_loop, "prepare_workspace_trial_plan", return_value={"status": "planned"}
+            ) as replanner:
+                with patch.object(
+                    generic_workspace_auto_loop, "run_workspace_code_writer", side_effect=code_writer_results
+                ) as writer:
+                    with patch.object(generic_workspace_auto_loop, "run_workspace_after_coding", return_value=after_coding):
+                        result = generic_workspace_auto_loop.run_code_writer_trial(
+                            "demo",
+                            "trial_027",
+                            model="gpt-5",
+                            provider="openai",
+                            allow_api=True,
+                            trial_llm_calls=None,
+                            strategy_calls_today=None,
+                        )
+
+        self.assertEqual("completed", result["status"])
+        self.assertEqual(1, replanner.call_count)
+        self.assertTrue(replanner.call_args.kwargs["force_replan"])
+        self.assertEqual(2, writer.call_count)
+
+    def test_should_replan_after_code_writer_mismatch_skips_when_files_were_changed(self):
+        result = {
+            "status": "code_writer_blocked",
+            "code_writer": {"changed_files": ["train_step.py"], "blocking_issues": ["some validation issue"]},
+        }
+        self.assertFalse(generic_workspace_auto_loop._should_replan_after_code_writer_mismatch(result))
+
+    def test_should_replan_after_code_writer_mismatch_skips_non_recoverable_token_block(self):
+        result = {
+            "status": "code_writer_blocked",
+            "code_writer": {"changed_files": [], "blocking_issues": ["token_policy_blocked"]},
+        }
+        self.assertFalse(generic_workspace_auto_loop._should_replan_after_code_writer_mismatch(result))
+
+    def test_should_replan_after_code_writer_mismatch_skips_known_missing_context_case(self):
+        # Missing-context blocks already have a dedicated, more targeted
+        # recovery path (retry the same plan with an expanded snapshot); the
+        # catch-all should defer to that instead of also firing.
+        result = {
+            "status": "code_writer_blocked",
+            "code_writer": {"changed_files": [], "blocking_issues": ["missing full code context"]},
+        }
+        self.assertFalse(generic_workspace_auto_loop._should_replan_after_code_writer_mismatch(result))
+
     def test_code_writer_retry_detects_truncated_context_blocks(self):
         result = {
             "status": "code_writer_blocked",
@@ -197,6 +549,100 @@ class GenericWorkspaceAutoLoopTest(unittest.TestCase):
         }
 
         self.assertTrue(generic_workspace_auto_loop._should_retry_code_writer_block(result))
+
+    def test_code_writer_retry_detects_missing_explicit_target_in_base_snapshot(self):
+        result = {
+            "status": "code_writer_blocked",
+            "code_writer": {
+                "blocking_issues": [
+                    "The authoritative base snapshot does not include train_step.py."
+                ]
+            },
+        }
+
+        self.assertTrue(generic_workspace_auto_loop._should_retry_code_writer_block(result))
+
+    def test_code_writer_retry_detects_missing_authoritative_source_phrasing(self):
+        result = {
+            "status": "code_writer_blocked",
+            "code_writer": {
+                "blocking_issues": [
+                    "Missing authoritative source for train_step.py from trial_005 to locate "
+                    "train_validate/run_experiment. Exact find/replace text is required for "
+                    "patch-only mode."
+                ]
+            },
+        }
+
+        self.assertTrue(generic_workspace_auto_loop._should_retry_code_writer_block(result))
+
+    def test_run_code_writer_repairs_runtime_failure_once_in_same_trial(self):
+        handoffs = [
+            {"status": "ready", "snapshot_mode": "standard"},
+            {"status": "ready", "snapshot_mode": "expanded_runtime_repair"},
+        ]
+        failed = {
+            "status": "workspace_run_failed",
+            "issues": ["workspace_run_not_completed:failed"],
+            "workspace_run": {
+                "status": "failed",
+                "failure": {
+                    "failure_type": "artifact_serialization",
+                    "matched_pattern": "is not JSON serializable",
+                },
+                "command_results": [
+                    {
+                        "stage": "train",
+                        "command": "python train_step.py",
+                        "returncode": 1,
+                        "log_path": "",
+                    }
+                ],
+            },
+        }
+        completed = {
+            "status": "execution_completed",
+            "workspace_run": {"status": "completed"},
+            "metrics_collection": {"status": "collected"},
+        }
+
+        with patch.object(
+            generic_workspace_auto_loop,
+            "prepare_workspace_coding_handoff",
+            side_effect=handoffs,
+        ) as handoff:
+            with patch.object(
+                generic_workspace_auto_loop,
+                "run_workspace_code_writer",
+                side_effect=[
+                    {"status": "accepted", "changed_files": ["train_step.py"]},
+                    {"status": "accepted", "changed_files": ["train_step.py"]},
+                ],
+            ) as writer:
+                with patch.object(
+                    generic_workspace_auto_loop,
+                    "run_workspace_after_coding",
+                    side_effect=[failed, completed],
+                ):
+                    result = generic_workspace_auto_loop.run_code_writer_trial(
+                        "demo",
+                        "trial_005",
+                        model="gpt-5",
+                        provider="openai",
+                        allow_api=True,
+                        trial_llm_calls=None,
+                        strategy_calls_today=None,
+                    )
+
+        self.assertEqual("completed", result["status"])
+        self.assertEqual(2, writer.call_count)
+        repair_call = handoff.call_args_list[1]
+        self.assertEqual("workspace_runtime_failure", repair_call.kwargs["retry_reason"])
+        self.assertEqual(
+            "artifact_serialization",
+            repair_call.kwargs["runtime_failure_context"]["failure_type"],
+        )
+        self.assertEqual(2, result["code_writer_attempt"])
 
     def test_run_loop_plans_start_trial_before_code_writer_when_plan_is_missing(self):
         args = argparse.Namespace(
@@ -292,6 +738,96 @@ class GenericWorkspaceAutoLoopTest(unittest.TestCase):
         self.assertEqual("planned", state["phase"])
         planner.assert_called_once_with("demo", "trial_006", "trial_007", allow_api=True)
 
+    def test_run_loop_starts_fresh_thread_when_saved_thread_already_finished(self):
+        # Regression: after a run failed, the state kept
+        # resume_from_status="running" plus that run's graph_thread_id. Every
+        # relaunch then "resumed" a thread whose graph had already reached
+        # END, so LangGraph replayed the terminal result without executing a
+        # single node -- no work, no state write, instant exit, and the
+        # launcher's running state reconciled into "process_not_running".
+        # The loop could never move forward again.
+        def make_args():
+            return argparse.Namespace(
+                competition="demo",
+                start_trial="trial_028",
+                max_trials=1,
+                submit=False,
+                kaggle_slug=None,
+                poll_attempts=1,
+                poll_interval_seconds=0,
+                code_writer=True,
+                model="gpt-5",
+                provider="openai",
+                allow_api=True,
+                trial_llm_calls=None,
+                strategy_calls_today=None,
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp)
+            state_path = runtime / "auto_loop_state.json"
+            patches = lambda: (  # noqa: E731
+                patch.object(generic_workspace_auto_loop, "RUNTIME_DIR", runtime),
+                patch.object(generic_workspace_auto_loop, "STATE_PATH", state_path),
+                patch.object(generic_workspace_auto_loop, "LOCK_PATH", runtime / "auto_loop.lock"),
+                patch.object(generic_workspace_auto_loop, "PAUSE_REQUEST_PATH", runtime / "pause.request"),
+                patch.object(generic_workspace_auto_loop, "has_coding_plan", return_value=True),
+                patch.object(generic_workspace_auto_loop, "sync_state_db"),
+            )
+
+            with contextlib.ExitStack() as stack:
+                for item in patches():
+                    stack.enter_context(item)
+                stack.enter_context(
+                    patch.object(
+                        generic_workspace_auto_loop,
+                        "run_one_trial",
+                        return_value={"status": "code_writer_blocked"},
+                    )
+                )
+                first = generic_workspace_auto_loop.run_loop(make_args())
+
+            self.assertEqual("failed", first["status"])
+            first_thread = json.loads(state_path.read_text(encoding="utf-8"))["graph_thread_id"]
+
+            # The loop lock is normally released by atexit when the launcher
+            # process ends; both runs share one process here, so release it
+            # explicitly to model two separate launches.
+            with patch.object(generic_workspace_auto_loop, "LOCK_PATH", runtime / "auto_loop.lock"):
+                generic_workspace_auto_loop.release_loop_lock()
+
+            # Reproduce the stuck state the dead-process reconciler leaves behind.
+            stuck = json.loads(state_path.read_text(encoding="utf-8"))
+            stuck["resume_from_status"] = "running"
+            state_path.write_text(json.dumps(stuck), encoding="utf-8")
+
+            with contextlib.ExitStack() as stack:
+                for item in patches():
+                    stack.enter_context(item)
+                runner = stack.enter_context(
+                    patch.object(
+                        generic_workspace_auto_loop,
+                        "run_one_trial",
+                        return_value={"status": "completed"},
+                    )
+                )
+                stack.enter_context(
+                    patch.object(
+                        generic_workspace_auto_loop,
+                        "plan_next_workspace_trial",
+                        return_value={"status": "planned"},
+                    )
+                )
+                second = generic_workspace_auto_loop.run_loop(make_args())
+
+            second_thread = json.loads(state_path.read_text(encoding="utf-8"))["graph_thread_id"]
+
+        # The second launch must do real work on a fresh thread, not replay
+        # the finished one.
+        self.assertEqual(1, runner.call_count)
+        self.assertEqual("completed", second["status"])
+        self.assertNotEqual(first_thread, second_thread)
+
     def test_trial_001_gets_initial_plan_before_code_and_trial_002_plan_after_completion(self):
         args = argparse.Namespace(
             competition="demo",
@@ -334,8 +870,18 @@ class GenericWorkspaceAutoLoopTest(unittest.TestCase):
                                                 result = generic_workspace_auto_loop.run_loop(args)
 
         self.assertEqual("completed", result["status"])
-        initial_planner.assert_called_once()
-        self.assertEqual("trial_001", initial_planner.call_args.args[1])
+        # prepare_workspace_trial_plan is now called for both the first trial
+        # (no source) and again for trial_002 (via plan_following_trial, which
+        # always asks the LLM-driven planner for a concrete plan even without an
+        # active user insight).
+        self.assertEqual(2, initial_planner.call_count)
+        self.assertEqual("trial_001", initial_planner.call_args_list[0].args[1])
+        self.assertEqual("trial_002", initial_planner.call_args_list[1].args[1])
+        self.assertEqual(
+            "trial_001", initial_planner.call_args_list[1].kwargs["source_trial_id"]
+        )
+        self.assertIsNone(initial_planner.call_args_list[1].kwargs["user_insight_override"])
+        self.assertTrue(initial_planner.call_args_list[1].kwargs["force_replan"])
         next_planner.assert_called_once_with("demo", "trial_001", "trial_002", allow_api=True)
 
     def test_pending_insight_revises_existing_planned_trial_before_code(self):
@@ -396,6 +942,131 @@ class GenericWorkspaceAutoLoopTest(unittest.TestCase):
             user_insight_override=override,
             force_replan=True,
         )
+
+    def test_plan_following_trial_asks_llm_planner_even_without_active_insight(self):
+        args = argparse.Namespace(
+            competition="demo",
+            model="gpt-5",
+            provider="openai",
+            allow_api=True,
+            trial_llm_calls=None,
+            strategy_calls_today=None,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp) / "runtime"
+            with patch.object(generic_workspace_auto_loop, "RUNTIME_DIR", runtime):
+                with patch.object(generic_workspace_auto_loop, "STATE_PATH", runtime / "auto_loop_state.json"):
+                    with patch.object(
+                        generic_workspace_auto_loop,
+                        "plan_next_workspace_trial",
+                        return_value={
+                            "status": "planned",
+                            "next_experiment": {"user_insight_override": None},
+                        },
+                    ):
+                        with patch.object(
+                            generic_workspace_auto_loop,
+                            "prepare_workspace_trial_plan",
+                            return_value={"status": "planned", "trial_id": "trial_009"},
+                        ) as planner:
+                            result = generic_workspace_auto_loop.plan_following_trial(
+                                args, "trial_008", "trial_009"
+                            )
+
+        self.assertEqual("planned", result["status"])
+        planner.assert_called_once_with(
+            "demo",
+            "trial_009",
+            source_trial_id="trial_008",
+            model="gpt-5",
+            provider="openai",
+            allow_api=True,
+            trial_llm_calls=None,
+            strategy_calls_today=None,
+            user_insight_override=None,
+            force_replan=True,
+        )
+
+    def test_plan_following_trial_falls_back_to_rule_based_plan_when_llm_blocked(self):
+        # If the LLM-driven planner is unavailable (budget/API), the rule-based
+        # plan that plan_next_workspace_trial already wrote must remain the final
+        # result instead of the whole planning step failing.
+        args = argparse.Namespace(
+            competition="demo",
+            model="gpt-5",
+            provider="openai",
+            allow_api=True,
+            trial_llm_calls=None,
+            strategy_calls_today=None,
+        )
+        rule_based_result = {
+            "status": "planned",
+            "trial_id": "trial_009",
+            "next_experiment": {"user_insight_override": None, "strategy": "hyperparameter_tuning"},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp) / "runtime"
+            with patch.object(generic_workspace_auto_loop, "RUNTIME_DIR", runtime):
+                with patch.object(generic_workspace_auto_loop, "STATE_PATH", runtime / "auto_loop_state.json"):
+                    with patch.object(
+                        generic_workspace_auto_loop,
+                        "plan_next_workspace_trial",
+                        return_value=rule_based_result,
+                    ):
+                        with patch.object(
+                            generic_workspace_auto_loop,
+                            "prepare_workspace_trial_plan",
+                            return_value={"status": "blocked_planning", "issues": ["token_policy_blocked"]},
+                        ):
+                            result = generic_workspace_auto_loop.plan_following_trial(
+                                args, "trial_008", "trial_009"
+                            )
+
+        self.assertEqual(rule_based_result, result)
+
+    def test_plan_following_trial_surfaces_duplicate_candidate_block_instead_of_rule_based_fallback(self):
+        # Unlike a budget/API block, duplicate_candidate_blocked means the LLM
+        # planner actually produced a plan -- one that repeats a candidate
+        # already rejected for the same axis, even after one forced retry.
+        # Falling back to the rule-based plan here would silently bypass the
+        # duplicate check (the rule-based planner is never checked against
+        # rejected_candidates_by_axis), so this must be surfaced as a block.
+        args = argparse.Namespace(
+            competition="demo",
+            model="gpt-5",
+            provider="openai",
+            allow_api=True,
+            trial_llm_calls=None,
+            strategy_calls_today=None,
+        )
+        rule_based_result = {
+            "status": "planned",
+            "trial_id": "trial_009",
+            "next_experiment": {"user_insight_override": None, "strategy": "validation_review"},
+        }
+        duplicate_blocked_result = {
+            "status": "duplicate_candidate_blocked",
+            "issues": ["Repeated already-rejected candidate: validation_review: method=time_series_cv"],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp) / "runtime"
+            with patch.object(generic_workspace_auto_loop, "RUNTIME_DIR", runtime):
+                with patch.object(generic_workspace_auto_loop, "STATE_PATH", runtime / "auto_loop_state.json"):
+                    with patch.object(
+                        generic_workspace_auto_loop,
+                        "plan_next_workspace_trial",
+                        return_value=rule_based_result,
+                    ):
+                        with patch.object(
+                            generic_workspace_auto_loop,
+                            "prepare_workspace_trial_plan",
+                            return_value=duplicate_blocked_result,
+                        ):
+                            result = generic_workspace_auto_loop.plan_following_trial(
+                                args, "trial_008", "trial_009"
+                            )
+
+        self.assertEqual(duplicate_blocked_result, result)
 
     @staticmethod
     def _write_csv(path: Path, rows: list[dict[str, str]]) -> None:

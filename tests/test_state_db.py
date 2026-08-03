@@ -6,13 +6,18 @@ from pathlib import Path
 from unittest.mock import patch
 
 from kaggle_research_agent.state_db import (
+    create_chat_session,
     create_pending_action,
+    get_active_chat_session,
     get_best_trial,
     get_trial_summary,
     initialize_state_db,
+    list_chat_messages,
+    list_chat_sessions,
     list_competitions,
     list_pending_actions,
     list_trials,
+    record_chat_exchange,
     record_token_usage,
     resolve_pending_action,
     upsert_competition,
@@ -46,6 +51,8 @@ class StateDbTest(unittest.TestCase):
             self.assertIn("trial_decisions", tables)
             self.assertIn("trial_artifacts", tables)
             self.assertIn("pending_actions", tables)
+            self.assertIn("chat_sessions", tables)
+            self.assertIn("chat_messages", tables)
 
     def test_upserts_trial_state_and_queries_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -206,6 +213,56 @@ class StateDbTest(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 upsert_trial({"competition_id": "demo"}, db_path)
+
+    def test_chat_history_is_scoped_by_experiment_and_preserves_archived_sessions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "state.sqlite3"
+            initialize_state_db(db_path)
+
+            first = record_chat_exchange(
+                "demo",
+                trial_id="trial_001",
+                question="첫 번째 점수는?",
+                answer="[로컬 근거 모드]\n0.81입니다.",
+                assistant_metadata={"mode": "local_evidence", "sources": ["scores.md"]},
+                db_path=db_path,
+            )
+            first_session_id = first["session"]["session_id"]
+            second_session = create_chat_session("demo", db_path)
+            record_chat_exchange(
+                "demo",
+                trial_id="trial_002",
+                question="다음 개선축은?",
+                answer="[로컬 근거 모드]\n모델 계열입니다.",
+                session_id=second_session["session_id"],
+                db_path=db_path,
+            )
+            record_chat_exchange(
+                "other",
+                trial_id="trial_001",
+                question="다른 실험 질문",
+                answer="[로컬 근거 모드]\n다른 실험 답변",
+                db_path=db_path,
+            )
+
+            sessions = list_chat_sessions("demo", db_path)
+            first_messages = list_chat_messages("demo", first_session_id, db_path)
+            second_messages = list_chat_messages("demo", second_session["session_id"], db_path)
+            active = get_active_chat_session("demo", db_path)
+
+            self.assertEqual(2, len(sessions))
+            self.assertEqual(second_session["session_id"], active["session_id"])
+            self.assertEqual(["user", "assistant"], [row["role"] for row in first_messages])
+            self.assertEqual("trial_001", first_messages[1]["trial_id"])
+            self.assertEqual(["user", "assistant"], [row["role"] for row in second_messages])
+            self.assertEqual(
+                {"mode": "local_evidence", "sources": ["scores.md"]},
+                first_messages[1]["metadata"],
+            )
+            self.assertNotIn(
+                "다른 실험 질문",
+                [row["content"] for row in first_messages + second_messages],
+            )
 
 
 if __name__ == "__main__":

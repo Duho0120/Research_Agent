@@ -10,7 +10,10 @@ _INTERACTION_CONTRACTS: dict[str, dict[str, Any]] = {
         "access": "read_only",
         "scope": "selected_experiment",
         "research_state_mutations": [],
-        "operational_side_effects": ["token_usage_telemetry_when_llm_used"],
+        "operational_side_effects": [
+            "token_usage_telemetry_when_llm_used",
+            "read_only_chat_history_persistence",
+        ],
         "requires_explicit_submit": False,
         "description": "Reads experiment evidence and cannot change plans, code, scores, or research decisions.",
     },

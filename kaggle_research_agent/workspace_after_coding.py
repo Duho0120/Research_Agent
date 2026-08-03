@@ -18,6 +18,7 @@ def run_workspace_after_coding(
     trial_id: str,
     *,
     run_now: bool = False,
+    finalize_result: bool = True,
 ) -> dict[str, Any]:
     out_dir = trial_dir(competition, trial_id)
     validation = _load_coding_validation(out_dir)
@@ -91,6 +92,24 @@ def run_workspace_after_coding(
             },
         )
 
+    if not finalize_result:
+        return _finish(
+            out_dir,
+            {
+                "competition": competition,
+                "trial_id": trial_id,
+                "status": "execution_completed",
+                "run_now": run_now,
+                "issues": [],
+                "coding_result_validation": validation,
+                "workspace_run": workspace_run,
+                "metrics_collection": metrics_collection,
+                "workspace_result_cycle": None,
+                "next_action": "submit-or-finalize-result",
+            },
+            organize=False,
+        )
+
     workspace_result_cycle = process_workspace_result(competition, trial_id)
     status = "completed" if workspace_result_cycle.get("status") != "blocked" else "result_cycle_blocked"
     return _finish(
@@ -115,9 +134,9 @@ def _load_coding_validation(out_dir: Path) -> dict[str, Any] | None:
     return value or None
 
 
-def _finish(out_dir: Path, result: dict[str, Any]) -> dict[str, Any]:
+def _finish(out_dir: Path, result: dict[str, Any], *, organize: bool = True) -> dict[str, Any]:
     artifact_summary = None
-    if result.get("status") in {"completed", "completed_review_deferred", "awaiting_human_review"}:
+    if organize and result.get("status") in {"completed", "completed_review_deferred", "awaiting_human_review"}:
         artifact_summary = organize_trial_artifacts(result["competition"], result["trial_id"])
         result["artifact_summary"] = artifact_summary
     write_text(out_dir / "workspace_after_coding_cycle.json", json.dumps(result, ensure_ascii=False, indent=2) + "\n")

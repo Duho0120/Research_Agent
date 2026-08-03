@@ -126,6 +126,18 @@ class PolicyGateTest(unittest.TestCase):
 
             self.assertEqual(result["failure_type"], "missing_dependency")
 
+    def test_classify_local_failure_detects_artifact_serialization(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "train.log"
+            path.write_text(
+                "returncode: 1\nTypeError: Object of type ufunc is not JSON serializable\n",
+                encoding="utf-8",
+            )
+
+            result = classify_local_failure(path, use_artifact=False)
+
+            self.assertEqual("artifact_serialization", result["failure_type"])
+
     def test_decide_human_review_requests_review_pack_from_diagnosis(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -274,18 +286,37 @@ class PolicyGateTest(unittest.TestCase):
 
     def test_should_call_llm_respects_reason_and_budget(self):
         allowed = should_call_llm("human_review_needed", trial_llm_calls=0, strategy_calls_today=0)
-        blocked = should_call_llm("human_review_needed", trial_llm_calls=4, strategy_calls_today=0)
+        blocked = should_call_llm("human_review_needed", trial_llm_calls=10, strategy_calls_today=0)
         unnecessary = should_call_llm("parse_metrics", trial_llm_calls=0, strategy_calls_today=0)
 
         self.assertEqual(allowed["decision"], "call_llm")
         self.assertEqual(blocked["decision"], "skip_llm")
         self.assertEqual(unnecessary["decision"], "skip_llm")
 
+    def test_should_call_llm_allows_unlimited_daily_calls_when_daily_cap_is_null(self):
+        # max_strategy_calls_per_day: null in token_policy.yaml means no daily
+        # cap at all -- only the per-trial cap still applies.
+        policy = {
+            "max_llm_calls_per_trial": 6,
+            "max_strategy_calls_per_day": None,
+            "call_llm_when": ["human_review_needed"],
+        }
+        with patch("kaggle_research_agent.agents.policy_gate.load_policy", return_value=policy):
+            far_over_old_cap = should_call_llm(
+                "human_review_needed", trial_llm_calls=0, strategy_calls_today=10_000
+            )
+            still_capped_per_trial = should_call_llm(
+                "human_review_needed", trial_llm_calls=10, strategy_calls_today=10_000
+            )
+
+        self.assertEqual(far_over_old_cap["decision"], "call_llm")
+        self.assertEqual(still_capped_per_trial["decision"], "skip_llm")
+
     def test_should_call_llm_counts_existing_decision_log_when_counts_omitted(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                for _ in range(4):
+                for _ in range(10):
                     log_decision(
                         "demo",
                         "trial_001",
@@ -297,7 +328,7 @@ class PolicyGateTest(unittest.TestCase):
                 result = should_call_llm("human_review_needed", competition="demo", trial_id="trial_001")
 
         self.assertEqual(result["decision"], "skip_llm")
-        self.assertEqual(result["trial_llm_calls"], 4)
+        self.assertEqual(result["trial_llm_calls"], 10)
         self.assertEqual(result["counts_source"], "decision_log")
 
     def test_should_call_llm_manual_counts_override_decision_log_counts(self):
@@ -350,6 +381,40 @@ class PolicyGateTest(unittest.TestCase):
 
         self.assertEqual(counts["trial_llm_calls"], 1)
         self.assertGreaterEqual(counts["strategy_calls_today"], 1)
+
+    def test_count_llm_calls_deduplicates_preflight_and_repeated_result_logs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                log_decision(
+                    "demo",
+                    "trial_001",
+                    decision_type="llm_call",
+                    decision="call_llm",
+                    reason="Planning preflight.",
+                    evidence={"llm_reason": "experiment_planning"},
+                )
+                result_evidence = {
+                    "token_decision": {"decision": "call_llm"},
+                    "token_usage": {
+                        "request_id": "resp_same_call",
+                        "call_type": "experiment_planning",
+                    },
+                }
+                for _ in range(2):
+                    log_decision(
+                        "demo",
+                        "trial_001",
+                        decision_type="demo_experiment_planning",
+                        decision="ready",
+                        reason="Planning completed.",
+                        evidence=result_evidence,
+                    )
+
+                counts = count_llm_calls_from_decision_log("demo", "trial_001")
+
+        self.assertEqual(counts["trial_llm_calls"], 1)
+        self.assertEqual(counts["strategy_calls_today"], 1)
 
     def test_log_llm_decision_records_token_policy_result(self):
         with tempfile.TemporaryDirectory() as tmp:

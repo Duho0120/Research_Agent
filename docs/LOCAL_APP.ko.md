@@ -73,6 +73,21 @@ scripts\web_demo.cmd
 SQLite에서 직접 답하고, 계획·파이프라인 질문은 로컬 문서 검색 근거를 보여줍니다.
 일반 채팅과 마찬가지로 실험 계획이나 코드를 변경하지 않는 읽기 전용 기능입니다.
 
+## 대화 기록
+
+웹과 CLI의 에이전트 질문은 `memory/research_agent.sqlite3`의 `chat_sessions`,
+`chat_messages` 테이블에 실험별로 저장됩니다.
+
+- 실험을 바꾸면 해당 실험의 대화 기록으로 전환됩니다.
+- 웹 채팅의 대화 선택 목록에서 이전 대화를 다시 열 수 있습니다.
+- `+` 버튼으로 새 대화를 시작해도 기존 대화는 삭제되지 않습니다.
+- 각 메시지는 질문 당시 참조한 trial과 답변 모드, 근거 경로를 함께 기록합니다.
+- LLM 입력에는 현재 대화의 최근 메시지 6개만 포함되어 대화 누적에 따른 토큰 증가를 제한합니다.
+- 채팅은 읽기 전용이며 실험 계획·코드·점수·연구 판단을 변경하지 않습니다.
+
+로컬 SQLite 파일은 앱 재시작 후에도 유지됩니다. 컨테이너를 재배포한 뒤에도 기록을
+유지하려면 외부 DB 또는 영구 볼륨에 `memory` 경로를 연결해야 합니다.
+
 ## 저비용 모델 설정
 
 저비용 모델의 기본값은 `configs/policies/model_policy.yaml`에서 관리합니다. 배포 환경에서는
@@ -84,3 +99,37 @@ SQLite에서 직접 답하고, 계획·파이프라인 질문은 로컬 문서 �
 - `RESEARCH_AGENT_INSIGHT_MODEL`: 인사이트 해석만 재정의
 
 기능별 환경변수가 공통 저비용 모델 환경변수보다 우선합니다.
+
+## LangGraph 실험 런타임
+
+CLI와 웹에서 시작하는 자동 실험은 기본적으로 LangGraph 운영 그래프를 사용합니다.
+기존 계획, 코드 작성, 로컬 실행, 제출, 산출물 함수는 그대로 사용하고 실행 순서와
+중단·재개 상태만 LangGraph가 관리합니다.
+
+기본 trial 흐름:
+
+```text
+현재 trial 계획 확인·인사이트 반영
+→ 코드 작성 및 기존 재시도 정책
+→ 로컬 실행·점수 수집
+→ Kaggle 제출 및 제출 점수 기록
+→ 산출물·SQLite 동기화
+→ 다음 trial 계획 생성
+→ 중단 요청 확인
+```
+
+체크포인트는 기본적으로 아래 별도 SQLite 파일에 저장됩니다.
+
+```text
+demo_workspaces/_runtime/langgraph_checkpoints.sqlite3
+```
+
+`RESEARCH_AGENT_GRAPH_CHECKPOINT_DB`로 위치를 변경할 수 있습니다. 프로세스가 강제로
+종료되어 실행 상태가 `running`으로 남은 경우에는 같은 graph thread의 미완료 노드부터
+재개합니다. 정상 실패나 정책 차단은 기존과 동일하게 해당 trial부터 다시 시작합니다.
+
+비상 호환 확인에만 기존 Python 루프를 사용할 수 있습니다.
+
+```bat
+python scripts\generic_workspace_auto_loop.py ... --legacy-runtime
+```

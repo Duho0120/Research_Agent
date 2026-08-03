@@ -1,5 +1,5 @@
-max_llm_calls_per_trial: 4
-max_strategy_calls_per_day: 20
+max_llm_calls_per_trial: 10
+max_strategy_calls_per_day: null
 summarize_logs_before_llm: true
 use_rules_before_llm: true
 avoid_raw_training_logs_in_prompt: true

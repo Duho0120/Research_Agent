@@ -153,15 +153,76 @@ def latest_completed_submission(
     description: str | None = None,
     file_name: str | None = None,
 ) -> dict[str, Any] | None:
+    rows = matching_submissions(text, description=description, file_name=file_name)
+    for row in rows:
+        if "complete" in str(row.get("status", "")).casefold() and row.get("public_score") is not None:
+            return row
+    return rows[0] if rows else None
+
+
+def matching_submissions(
+    text: str,
+    *,
+    description: str | None = None,
+    file_name: str | None = None,
+) -> list[dict[str, Any]]:
     rows = parse_submissions(text)
     if description:
         rows = [row for row in rows if row.get("description") == description]
     if file_name:
         rows = [row for row in rows if row.get("file_name") == file_name]
-    for row in rows:
-        if "complete" in str(row.get("status", "")).casefold() and row.get("public_score") is not None:
-            return row
-    return rows[0] if rows else None
+    return rows
+
+
+def poll_submission(
+    competition_slug: str,
+    *,
+    description: str,
+    file_name: str,
+    cwd: Path,
+    attempts: int = 5,
+    sleep_seconds: float = 30.0,
+    runner: CommandRunner = run_args,
+) -> dict[str, Any]:
+    last_submission: dict[str, Any] | None = None
+    last_result: dict[str, Any] | None = None
+    for attempt in range(1, max(1, attempts) + 1):
+        command_result = fetch_submissions(
+            competition_slug=competition_slug,
+            cwd=cwd,
+            page_size=20,
+            runner=runner,
+        )
+        last_result = command_result
+        matches = (
+            matching_submissions(
+                command_result.get("stdout", ""),
+                description=description,
+                file_name=file_name,
+            )
+            if command_result.get("ok")
+            else []
+        )
+        if matches:
+            last_submission = matches[0]
+            if (
+                "complete" in str(last_submission.get("status", "")).casefold()
+                and last_submission.get("public_score") is not None
+            ):
+                return {
+                    "status": "found",
+                    "submission": last_submission,
+                    "attempts": attempt,
+                    "command_result": command_result,
+                }
+        if attempt < max(1, attempts) and sleep_seconds:
+            time.sleep(sleep_seconds)
+    return {
+        "status": "pending" if last_submission else "not_found",
+        "submission": last_submission,
+        "attempts": max(1, attempts),
+        "command_result": last_result,
+    }
 
 
 def parse_competition_files(text: str) -> list[dict[str, Any]]:

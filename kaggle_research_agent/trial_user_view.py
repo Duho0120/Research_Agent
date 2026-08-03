@@ -6,35 +6,57 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from . import paths
+from .plan_translation import render_plan_ko
 from .store import write_text
-from .trial_user_view_effective import render_effective_pipeline_structure, render_effective_user_plan
+from .trial_user_view_effective import render_effective_pipeline_structure
 
 
-def render_user_view_files(out_dir: Path, summary: dict[str, Any], copied_files: list[str]) -> dict[str, str]:
+def render_user_view_files(
+    out_dir: Path,
+    summary: dict[str, Any],
+    copied_files: list[str],
+    *,
+    allow_api: bool = False,
+    plan_translation_client: Any | None = None,
+) -> dict[str, str]:
     return {
-        "01_plan.ko.md": render_effective_user_plan(out_dir, summary),
+        "01_plan.ko.md": render_plan_ko(
+            out_dir, summary, allow_api=allow_api, client=plan_translation_client
+        ),
         "02_pipeline_structure.ko.md": render_effective_pipeline_structure(out_dir, summary),
         "03_scores.ko.md": render_user_scores(summary),
     }
 
 
-def render_user_scores(summary: dict[str, Any]) -> str:
-    return "\n".join(
-        [
-            f"# {summary['trial_id']} 점수",
-            "",
-            "| 항목 | 값 |",
-            "|---|---|",
-            f"| 상태 | {_display_value(summary.get('status'))} |",
-            f"| 지표 | {_display_value(summary.get('metric'))} |",
-            f"| 목표 방향 | {_display_value(summary.get('objective'))} |",
-            f"| 로컬 점수 | {_display_value(summary.get('local_score'))} |",
-            f"| 제출 LB 점수 | {_display_value(summary.get('submitted_lb_score') or summary.get('lb_score'))} |",
-            f"| 제출 순위 | {_display_value(summary.get('submitted_rank') or summary.get('rank'))} |",
-            f"| 제출 파일 | {_display_value(summary.get('submission_file'))} |",
-            "",
-        ]
-    )
+def write_proposed_plan_preview(
+    competition: str,
+    trial_id: str,
+    plan: dict[str, Any],
+    *,
+    metric: str | None = None,
+    objective: str | None = None,
+    allow_api: bool = False,
+) -> Path:
+    """Write a pre-execution Korean plan preview from the proposed plan.
+
+    Unlike render_effective_user_plan (which waits for resolve_trial_plan's
+    post-execution facts), this renders directly from the plan the planner just
+    produced, so the dashboard has a Korean document even before code
+    writing/execution happens. It is overwritten with the effective (executed)
+    version once the trial actually runs.
+    """
+    out_dir = paths.trial_dir(competition, trial_id)
+    summary = {
+        "competition": competition,
+        "trial_id": trial_id,
+        "metric": metric or "-",
+        "objective": objective or plan.get("objective") or "-",
+        "plan_title": plan.get("plan_title"),
+    }
+    content = render_plan_ko(out_dir, summary, plan=plan, allow_api=allow_api)
+    preview_path = out_dir / "user_view" / "01_plan.ko.md"
+    write_text(preview_path, content)
+    return preview_path
 
 
 def render_user_readme(summary: dict[str, Any]) -> str:
@@ -65,42 +87,6 @@ def render_user_readme(summary: dict[str, Any]) -> str:
             "",
         ]
     )
-
-
-def render_user_plan(out_dir: Path, summary: dict[str, Any]) -> str:
-    plan = _read_plan_json(out_dir)
-    objective = _compact_block(_read_markdown_section(out_dir / "demo_experiment_plan.md", "Objective"))
-    rationale = _compact_block(_read_markdown_section(out_dir / "demo_experiment_plan.md", "Rationale"))
-    if not objective:
-        objective = _compact_block(str(plan.get("objective") or ""))
-    if not rationale:
-        rationale = _compact_block(str(plan.get("rationale") or ""))
-    purpose_text = _user_plan_purpose(plan, objective, source, axis)
-    rationale_text = _user_plan_rationale(plan, rationale, source, axis)
-    lines = [
-        f"# {summary['trial_id']} 실험 계획 요약",
-        "",
-        "## 기본 정보",
-        "",
-        f"- 대회/주제: `{summary['competition']}`",
-        f"- 평가 지표: `{_display_value(summary.get('metric'))}`",
-        f"- 목표 방향: `{_display_value(summary.get('objective'))}`",
-        f"- 계획명: {_display_value(summary.get('plan_title'))}",
-        "",
-    ]
-    lines.extend(_render_plan_detail_sections(plan, objective=objective, rationale=rationale, summary=summary))
-    lines.extend(
-        [
-            "",
-            "## 다음 확인",
-            "",
-            "- `02_pipeline_structure.ko.md`: 이번 계획이 실제 코드에 어떻게 적용됐는지 확인",
-            "- `03_code_pipeline.ko.md`: 생성/수정된 코드 파일 확인",
-            "- `04_result.ko.md`: 실행 결과와 점수 확인",
-            "",
-        ]
-    )
-    return "\n".join(lines)
 
 
 def _render_plan_detail_sections(
@@ -398,7 +384,7 @@ def _koreanize_success_criterion(text: str) -> str:
     if "metrics.json" in lowered and ("accuracy" in lowered or "score" in lowered):
         return "`outputs/metrics.json`에 로컬 검증 점수와 split 정보가 기록됩니다."
     if "submission.csv" in lowered and "passengerid" in lowered and "survived" in lowered:
-        return "`outputs/submission.csv`가 `PassengerId`, `Survived` 컬럼 형식으로 생성됩니다."
+        return "`outputs/submission.csv`가 계획에 명시된 ID와 예측 컬럼 형식으로 생성됩니다."
     if "row count" in lowered and "test.csv" in lowered:
         return "제출 파일의 행 수와 ID 순서가 `test.csv`와 일치합니다."
     if "binary" in lowered or "0/1" in lowered:
@@ -433,7 +419,7 @@ def _koreanize_continuation_item(text: str) -> str:
     if lowered.startswith("data files:"):
         return "데이터 파일은 기존 train/test 사용 방식을 유지합니다."
     if lowered.startswith("target/id/output columns:"):
-        return "타깃, ID, 출력 컬럼은 기존 `Survived`, `PassengerId` 구성을 유지합니다."
+        return "타깃, ID, 출력 컬럼은 기준 trial의 구성을 유지합니다."
     if lowered.startswith("features:"):
         return "입력 피처 목록은 기준 trial과 동일하게 유지합니다."
     if lowered.startswith("deferred/excluded:"):
@@ -1171,7 +1157,7 @@ def _koreanize_plan_text(label: str | None, text: str) -> str:
         return _shorten(text, 180)
     if key in {"검증_분리", "validation_split", "split"} or "validation" in key or "split" in key:
         if "strat" in lowered:
-            return "`Survived` 타깃 분포를 유지하는 고정 holdout 검증 분리를 사용합니다."
+            return "타깃 분포를 유지하는 고정 holdout 검증 분리를 사용합니다."
         if "holdout" in lowered or "train/validation" in lowered:
             return "고정 train/validation holdout 분리로 로컬 검증 점수를 계산합니다."
         return _shorten(text, 180)
@@ -1218,7 +1204,7 @@ def _koreanize_expected_output(text: str) -> str:
     if "metrics.json" in lowered:
         return "`outputs/metrics.json`: 로컬 검증 점수와 파이프라인 메타데이터를 기록합니다."
     if "submission.csv" in lowered:
-        return "`outputs/submission.csv`: `PassengerId`, `Survived` 형식의 예측 파일을 생성합니다."
+        return "`outputs/submission.csv`: 계획에 명시된 ID와 예측 컬럼 형식의 파일을 생성합니다."
     if "pipeline summary" in lowered or "pipeline_summary.json" in lowered:
         return "파이프라인 요약: 데이터 가정, split, 전처리, 모델, 출력 형식을 기록합니다."
     if "code snapshot" in lowered:
@@ -1534,77 +1520,15 @@ def render_user_plan(out_dir: Path, summary: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def render_user_pipeline_structure(out_dir: Path, summary: dict[str, Any]) -> str:
-    structure = _read_json(out_dir / "internal" / "pipeline_structure.json")
-    metrics = _read_json(out_dir / "metrics.json")
-    stages = structure.get("stages", []) if isinstance(structure, dict) else []
-    stage_names = [_clean_stage_name(stage.get("name") or stage.get("id")) for stage in stages if stage.get("included")]
-    if not stage_names:
-        stage_names = [
-            "데이터 로드",
-            "전처리",
-            "검증 분리",
-            "피처 구성",
-            "모델 학습",
-            "로컬 평가",
-            "제출 파일 생성",
-        ]
-
-    numeric = metrics.get("numeric_features") or _summary_list_from_structure(stages, "numeric_features")
-    categorical = metrics.get("categorical_features") or _summary_list_from_structure(stages, "categorical_features")
-    model = metrics.get("model_type") or metrics.get("model") or _model_from_structure(stages)
-    submission_file = summary.get("submission_file") or "outputs/submission.csv"
-
-    lines = [
-        f"# {summary['trial_id']} 파이프라인 구조",
-        "",
-        "| 항목 | 값 |",
-        "|---|---|",
-        f"| workspace | `{_display_value(summary.get('project_root'))}` |",
-        f"| 평가 지표 | `{_display_value(summary.get('metric'))}` |",
-        f"| 로컬 점수 | `{_display_value(summary.get('local_score'))}` |",
-        f"| 모델 | `{_display_value(model)}` |",
-        f"| 제출 파일 | `{_display_value(submission_file)}` |",
-        "",
-        "## 실행 흐름",
-        "",
-    ]
-    for index, stage_name in enumerate(stage_names[:10], 1):
-        lines.append(f"{index}. {stage_name}")
-    lines.extend(
-        [
-            "",
-            "## 핵심 구성",
-            "",
-            f"- 수치형 피처: {_inline_user_list(numeric)}",
-            f"- 범주형 피처: {_inline_user_list(categorical)}",
-            "- 검증 방식: `train_test_split`, stratify target, fixed seed",
-            "- 제출 형식: `PassengerId`, `Survived`",
-            "",
-            "## 재현 명령",
-            "",
-            "```bat",
-            "python test_step.py",
-            "python train_step.py",
-            "python predict_step.py",
-            "```",
-            "",
-            "세부 JSON과 코드 스냅샷은 내부 기록에 보존됩니다. 사용자 화면에서는 위 구조만 확인하면 됩니다.",
-            "",
-        ]
-    )
-    return "\n".join(lines)
-
-
 def render_user_scores(summary: dict[str, Any]) -> str:
-    lb_score = summary.get("submitted_lb_score") or summary.get("lb_score")
-    rank = summary.get("submitted_rank") or summary.get("rank")
+    lb_score = summary.get("submitted_lb_score")
+    if lb_score is None:
+        lb_score = summary.get("lb_score")
+    rank = summary.get("submitted_rank")
+    if rank is None:
+        rank = summary.get("rank")
     submitted = "기록됨" if lb_score is not None or rank is not None else "미기록"
-    best_flags = []
-    if summary.get("is_best_local"):
-        best_flags.append("local best")
-    if summary.get("is_best_lb"):
-        best_flags.append("LB best")
+    best_label = "Best" if summary.get("is_best_lb") else ("제출 점수 기록 후 판단" if lb_score is None else "-")
     return "\n".join(
         [
             f"# {summary['trial_id']} 점수",
@@ -1618,60 +1542,11 @@ def render_user_scores(summary: dict[str, Any]) -> str:
             f"| 제출 상태 | {submitted} |",
             f"| 제출 LB 점수 | {_display_value(lb_score)} |",
             f"| 제출 순위 | {_display_value(rank)} |",
-            f"| Best 표시 | {_display_value(', '.join(best_flags) or '앱 실험 목록에서 표시')} |",
+            f"| Best 표시 | {_display_value(best_label)} |",
             f"| 제출 파일 | {_display_value(summary.get('submission_file'))} |",
             "",
         ]
     )
-
-
-def _clean_stage_name(value: Any) -> str:
-    raw = str(value or "").strip()
-    mapping = {
-        "Imports & Setup": "준비",
-        "Data Load": "데이터 로드",
-        "Preprocessing": "전처리",
-        "Data Split": "검증 분리",
-        "Data Split / CV Strategy": "검증 분리",
-        "Feature Construction": "피처 구성",
-        "Feature / Representation Construction": "피처 구성",
-        "Model Definition": "모델 정의",
-        "Loss & Metric": "평가 기준",
-        "Loss Function / Objective": "평가 기준",
-        "Training": "학습",
-        "Evaluation": "로컬 평가",
-        "Validation / Evaluation": "로컬 평가",
-        "Test Inference & Output": "제출 파일 생성",
-        "Test Inference / Output": "제출 파일 생성",
-        "Submission / Prediction Output": "제출 파일 생성",
-    }
-    return mapping.get(raw, raw or "-")
-
-
-def _summary_list_from_structure(stages: list[dict[str, Any]], key: str) -> list[str]:
-    for stage in stages:
-        details = stage.get("structured_details")
-        if isinstance(details, dict) and isinstance(details.get(key), list):
-            return [str(item) for item in details[key]]
-    return []
-
-
-def _model_from_structure(stages: list[dict[str, Any]]) -> str:
-    for stage in stages:
-        details = stage.get("structured_details")
-        if isinstance(details, dict):
-            for key in ["model", "model_type", "family"]:
-                if details.get(key):
-                    return str(details[key])
-    return "-"
-
-
-def _inline_user_list(values: Any) -> str:
-    if not values:
-        return "-"
-    if isinstance(values, str):
-        return f"`{values}`"
-    return ", ".join(f"`{item}`" for item in values)
 
 
 def _user_plan_purpose(plan: dict[str, Any], objective: str, source: str, axis: str) -> str:

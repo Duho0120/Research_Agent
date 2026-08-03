@@ -110,6 +110,34 @@ class IncrementalTrialTest(unittest.TestCase):
             self.assertEqual("model_family", effective["change_history"][-1]["primary_change_axis"])
             self.assertEqual("model_definition", delta["changes"][0]["stage_id"])
 
+    def test_delta_plan_carries_forward_code_change_targets(self):
+        # workspace_coding_handoff.py prioritizes which base-trial file gets embedded in the
+        # (size-limited) coding context by reading code_change_targets from delta_plan.json.
+        # If this field is dropped when the delta plan is derived from the full plan, the
+        # actually-targeted file can be silently excluded from the code writer's context.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / "experiments" / "demo" / "trial_001"
+            current = root / "experiments" / "demo" / "trial_002"
+            (base / "internal").mkdir(parents=True)
+            (current / "internal").mkdir(parents=True)
+            (current / "demo_experiment_plan.json").write_text(
+                json.dumps(
+                    {
+                        "source_trial_id": "trial_001",
+                        "primary_change_axis": "validation_review",
+                        "code_change_targets": ["train_step.py"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                write_effective_trial_artifacts("demo", "trial_002", pipeline_structure={"stages": []})
+
+            delta = json.loads((current / "delta_plan.json").read_text(encoding="utf-8-sig"))
+            self.assertEqual(["train_step.py"], delta["code_change_targets"])
+
     def test_pipeline_view_shows_ensemble_members_and_stage_details(self):
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp)

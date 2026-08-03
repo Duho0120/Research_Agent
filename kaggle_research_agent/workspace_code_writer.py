@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -9,6 +10,10 @@ from .agents.code_writer_adapter import CodeWriterClient, create_llm_client, pro
 from .agents.memory import log_decision, log_token_usage
 from .agents.policy_gate import should_call_llm
 from .code_snapshot import load_trial_code_snapshot, save_trial_code_snapshot
+from .execution_plan_snapshot import (
+    ensure_pending_execution_plan_snapshot,
+    finalize_execution_plan_snapshot,
+)
 from .paths import trial_dir
 from .store import read_text, write_text
 from .trial_artifacts import trial_artifact_path
@@ -46,6 +51,11 @@ def run_workspace_code_writer(
             return _write_blocked_result(competition, trial_id, handoff, ["api_call_not_enabled"], token_decision)
         client = create_llm_client(provider)
 
+    ensure_pending_execution_plan_snapshot(
+        competition,
+        trial_id,
+        request_id=handoff.get("request_id"),
+    )
     payload = build_workspace_code_writer_payload(handoff, model=model)
     write_text(out_dir / "workspace_coding_api_request.json", json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     try:
@@ -103,6 +113,8 @@ def validate_workspace_coding_result(competition: str, trial_id: str) -> dict[st
     issues.extend(_validate_changed_files(coding_result, handoff))
     issues.extend(_validate_file_updates(coding_result, handoff))
     issues.extend(_validate_patch_updates(coding_result, handoff))
+    issues.extend(_validate_no_fabricated_data_fallback(coding_result))
+    issues.extend(_validate_predict_test_sync(coding_result, handoff))
     issues.extend(validate_user_insight_code_result(competition, trial_id, coding_result))
     result = {
         "competition": competition,
@@ -119,6 +131,8 @@ def validate_workspace_coding_result(competition: str, trial_id: str) -> dict[st
     }
     write_text(out_dir / "workspace_coding_result_validation.json", json.dumps(result, ensure_ascii=False, indent=2) + "\n")
     write_text(out_dir / "workspace_coding_result_validation.md", render_workspace_coding_result_validation(result))
+    if result["status"] == "accepted":
+        finalize_execution_plan_snapshot(competition, trial_id)
     log_decision(
         competition,
         trial_id,
@@ -190,6 +204,17 @@ def render_workspace_coding_result_validation(result: dict[str, Any]) -> str:
 def _build_prompt(handoff: dict[str, Any]) -> str:
     if _is_delta_patch_handoff(handoff):
         return _build_delta_patch_prompt(handoff)
+    runtime_failure = handoff.get("runtime_failure_context")
+    repair_lines = []
+    if isinstance(runtime_failure, dict) and runtime_failure:
+        repair_lines = [
+            "",
+            "Runtime repair mode:",
+            "- The planned experiment change is already present in the current workspace code.",
+            "- Fix only the execution failure below while preserving that experiment change.",
+            "- Use the Current Workspace Code as the authoritative exact patch source.",
+            json.dumps(runtime_failure, ensure_ascii=False, indent=2),
+        ]
     return "\n".join(
         [
             "Implement the next workspace experiment within the declared project write scope.",
@@ -207,13 +232,16 @@ def _build_prompt(handoff: dict[str, Any]) -> str:
             "You are not expected to access the filesystem or run tools directly.",
             "Use only the provided handoff, context files, retrieved evidence, and workspace snapshot excerpts.",
             "Return code changes in patch_updates when edit_policy.mode is patch_only; this local agent will apply those updates and run validation.",
-            "In patch_only mode, do not return whole-file file_updates. Use exact find text from the provided code snapshot.",
+            "In patch_only mode, do not rewrite an existing file via file_updates. Use exact find text from the provided code snapshot.",
+            "In patch_only mode you may still add a brand-new file via file_updates when the plan needs one; that is allowed because nothing existing is overwritten.",
             "If edit_policy.base_code_source is present, use the Recommended Base Trial Code Snapshot as the authoritative code for patch_updates.find.",
             "For patch_updates.find, copy the complete existing line or block from the authoritative code snapshot, including all existing arguments and whitespace.",
             "Do not invent a shorter find pattern from the plan; if the exact current code is not visible, return status=blocked.",
             "If edit_policy.mode is full_file_allowed, file_updates are allowed for new baselines or missing files.",
+            "The code you write is Python, not JSON: use None/True/False, never the JSON literals null/true/false.",
             "Do not block merely because this API response environment has no file read/write tools.",
             "Block only when the provided context is insufficient to produce a safe allowed-path update.",
+            *repair_lines,
             "",
             "Output budget for continuation/patch-only coding:",
             f"- Return at most {_patch_budget(handoff)} patch_updates. Prefer 1 patch_update when the change is local.",
@@ -234,6 +262,13 @@ def _build_prompt(handoff: dict[str, Any]) -> str:
             "If the next experiment is a continuation_delta_plan, modify the existing pipeline incrementally.",
             "For continuation trials, implement the declared primary_change_axis and keep the keep_unchanged items fixed unless the plan explicitly says otherwise.",
             "When delta_plan.expected_metadata_changes names model, features, split, trial_id, or source_trial_id, update the runtime-produced metadata in the same patch set or derive it from the executed estimator instead of leaving stale literals.",
+            "Write structured runtime metadata instead of relying on later code-text reconstruction.",
+            "The metrics artifact must identify metric, objective, validation score, model_type, validation_method, and final feature columns whenever they are known.",
+            "Before writing metrics or pipeline JSON, convert numpy scalars, callables, estimator objects, paths, and nested parameter values to JSON-serializable primitive values or stable strings.",
+            "The pipeline summary must identify target/id columns, final feature columns, derived features, preprocessing, estimator parameters, validation split, checkpoint path when used, and submission columns.",
+            "When a model wrapper changes the prediction scale or inverse transformation, update both training validation predictions and the separate prediction/submission path in the same patch set.",
+            "Before saving a submission, reject non-finite predictions instead of silently writing NaN or infinity.",
+            "Never list a feature as a model input when it is unavailable in test data unless the code explicitly derives it at prediction time.",
             "Do not hard-code an old trial_id or source_trial_id into newly changed experiment metadata.",
             "If continuation_context.decision_context lists rejected_axes or planner_constraints, do not preserve rejected changes from the latest trial; start from the recommended base evidence and apply only the new primary axis.",
             "When edit_policy.restore_base_before_patch is true, the local agent will restore the saved base trial code before applying your patch.",
@@ -263,6 +298,17 @@ def _build_prompt(handoff: dict[str, Any]) -> str:
 
 
 def _build_delta_patch_prompt(handoff: dict[str, Any]) -> str:
+    runtime_failure = handoff.get("runtime_failure_context")
+    repair_lines = []
+    if isinstance(runtime_failure, dict) and runtime_failure:
+        repair_lines = [
+            "",
+            "Runtime repair mode:",
+            "- The planned delta is already present in the current workspace code.",
+            "- Fix only the execution failure below while preserving that delta.",
+            "- Use the Current Workspace Code as the authoritative exact patch source.",
+            json.dumps(runtime_failure, ensure_ascii=False, indent=2),
+        ]
     return "\n".join(
         [
             "Implement one small delta patch for the next ML trial.",
@@ -278,12 +324,17 @@ def _build_delta_patch_prompt(handoff: dict[str, Any]) -> str:
             "- blocking_issues",
             "",
             "Patch rules:",
-            "- Use patch_updates only; do not return whole-file updates.",
+            "- Use patch_updates for existing files; do not rewrite an existing file wholesale.",
+            "- A brand-new file the plan requires may be added via file_updates; nothing existing is overwritten so it is allowed.",
             "- Copy exact find text from the authoritative code snapshot.",
             "- Change only the delta_plan candidate.",
             "- Do not repeat rejected candidates listed in delta_plan.",
             "- Keep model, split, preprocessing, and unrelated features unchanged unless delta_plan explicitly targets them.",
             "- Keep runtime metadata synchronized with the changed estimator, features, split, and current trial context listed in expected_metadata_changes.",
+            "- Every metrics and pipeline-summary value must be JSON serializable; normalize numpy values, callables, estimators, paths, and nested parameter objects before json.dumps.",
+            "- If the delta changes target transformation or prediction scale, update the separate prediction/submission path in the same patch set.",
+            "- Reject non-finite submission predictions before writing CSV.",
+            "- The code you write is Python, not JSON: use None/True/False, never the JSON literals null/true/false.",
             f"- Return at most {_patch_budget(handoff)} patch_updates.",
             "- If exact target code is not visible, return blocked with a precise blocking issue.",
             "",
@@ -294,6 +345,7 @@ def _build_delta_patch_prompt(handoff: dict[str, Any]) -> str:
             f"Forbidden paths: {handoff.get('forbidden_paths', [])}",
             "Edit policy:",
             json.dumps(handoff.get("edit_policy", {}), ensure_ascii=False, indent=2),
+            *repair_lines,
             "",
             "Context files:",
             _read_context(handoff.get("context_files", []), handoff=handoff),
@@ -477,6 +529,7 @@ def _normalize_coding_result(
     normalized.setdefault("blocking_issues", [])
     normalized.setdefault("next_action", "validate-workspace-code-change")
     normalized["validation_results"] = _normalize_validation_results(normalized.get("validation_results"))
+    normalized["blocking_issues"] = _normalize_blocking_issues(normalized.get("blocking_issues"))
     return normalized
 
 
@@ -489,6 +542,16 @@ def _normalize_validation_results(value: Any) -> Any:
             return commands
         return [value]
     return value
+
+
+def _normalize_blocking_issues(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [str(value).strip()] if str(value).strip() else []
 
 
 def _apply_code_updates(coding_result: dict[str, Any], handoff: dict[str, Any]) -> list[str]:
@@ -512,6 +575,12 @@ def _apply_patch_updates(coding_result: dict[str, Any], handoff: dict[str, Any])
         return [f"too_many_patch_updates_for_budget:{len(updates)}"]
     issues: list[str] = []
     project_root = Path(str(handoff.get("project_root", "")))
+    # Validate every patch against an in-memory copy first and only write to
+    # disk once the whole batch checks out. Writing as each patch validates
+    # (the previous behavior) left already-applied patches on disk even when
+    # a later patch in the same batch failed, so a blocked attempt could
+    # leave the workspace in a state that matched no trial at all.
+    pending_content: dict[Path, str] = {}
     for update in updates:
         if not isinstance(update, dict):
             issues.append("invalid_patch_update")
@@ -533,45 +602,97 @@ def _apply_patch_updates(coding_result: dict[str, Any], handoff: dict[str, Any])
         if not target.exists() or not target.is_file():
             issues.append(f"patch_target_missing:{path}")
             continue
-        original = read_text(target, default="")
-        count = original.count(find)
+        current = pending_content.get(target)
+        if current is None:
+            current = read_text(target, default="")
+        count = current.count(find)
         if count == 0:
             issues.append(f"patch_find_not_found:{path}")
             continue
         if count > 1:
             issues.append(f"patch_find_not_unique:{path}")
             continue
-        write_text(target, original.replace(find, replace, 1))
-    return issues
+        pending_content[target] = current.replace(find, replace, 1)
+    if issues:
+        return issues
+    for target, content in pending_content.items():
+        syntax_issue = _python_syntax_issue(target, content)
+        if syntax_issue:
+            issues.append(syntax_issue)
+    if issues:
+        return issues
+    for target, content in pending_content.items():
+        write_text(target, content)
+    return []
 
 
 def _apply_file_updates(coding_result: dict[str, Any], handoff: dict[str, Any]) -> list[str]:
     updates = coding_result.get("file_updates", [])
     if not isinstance(updates, list):
         return ["invalid_type:file_updates"]
-    if updates and not _allow_full_file_updates(handoff):
-        if coding_result.get("patch_updates"):
-            return []
-        return [
-            f"full_file_update_not_allowed_in_patch_only:{update.get('path') if isinstance(update, dict) else 'unknown'}"
-            for update in updates
-        ]
     issues: list[str] = []
     project_root = Path(str(handoff.get("project_root", "")))
+    # Same all-or-nothing rule as _apply_patch_updates: validate every update
+    # (including syntax) before writing any of them, so a batch that fails
+    # partway through never leaves some files written and others not.
+    pending_content: dict[Path, str] = {}
     for update in updates:
         path = update.get("path") if isinstance(update, dict) else None
         content = update.get("content") if isinstance(update, dict) else None
         if not isinstance(path, str) or not isinstance(content, str):
             issues.append("invalid_file_update")
             continue
+        if _patch_only_blocks_file_update(path, handoff):
+            if not coding_result.get("patch_updates"):
+                issues.append(f"full_file_update_not_allowed_in_patch_only:{path}")
+            continue
         path_issues = _path_scope_issues(path, handoff, update_label="file_update")
         if path_issues:
             issues.extend(path_issues)
             continue
         target = project_root / path.replace("\\", "/")
+        syntax_issue = _python_syntax_issue(target, content)
+        if syntax_issue:
+            issues.append(syntax_issue)
+            continue
+        pending_content[target] = content
+    if issues:
+        return issues
+    for target, content in pending_content.items():
         target.parent.mkdir(parents=True, exist_ok=True)
         write_text(target, content)
-    return issues
+    return []
+
+
+_JSON_LITERAL_NAMES = {"null": "None", "true": "True", "false": "False"}
+
+
+def _python_syntax_issue(path: Path, content: str) -> str | None:
+    """Catch invalid Python before it ever gets written and run.
+
+    A recurring real failure: the code writer LLM writes JSON literals
+    (null/true/false) into Python code instead of None/True/False. ast.parse
+    alone does NOT catch this -- "null" parses as an ordinary (if undefined)
+    identifier, not a syntax error -- it only fails minutes later mid-
+    execution with a bare NameError, after train_step.py already ran partway
+    and burned the attempt. So this checks two things: real syntax errors
+    via ast.parse, and a targeted scan for null/true/false referenced as a
+    bare name, which is effectively never intentional in real Python code.
+    """
+    if path.suffix != ".py":
+        return None
+    try:
+        tree = ast.parse(content, filename=path.name)
+    except SyntaxError as exc:
+        return f"invalid_python_syntax:{path.name}:line {exc.lineno}: {exc.msg}"
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in _JSON_LITERAL_NAMES:
+            correct = _JSON_LITERAL_NAMES[node.id]
+            return (
+                f"invalid_python_syntax:{path.name}:line {node.lineno}: "
+                f"'{node.id}' is not a Python name (use '{correct}' instead of the JSON literal)"
+            )
+    return None
 
 
 def _restore_base_code_snapshot(handoff: dict[str, Any]) -> list[str]:
@@ -692,24 +813,157 @@ def _validate_changed_files(coding_result: dict[str, Any], handoff: dict[str, An
     return issues
 
 
+# Identifiers commonly used by a code writer that silently fabricates
+# placeholder train/test data instead of reading the real files under data/
+# (or failing loudly) when an expected conventional filename is missing.
+# This is deliberately competition-agnostic -- it is a pattern seen across
+# any dataset shape, not something specific to one trial's file layout.
+_FABRICATED_DATA_MARKERS = (
+    "synthesize_train",
+    "synthesize_test",
+    "synthetic_train",
+    "synthetic_test",
+    "synthetic_data",
+    "generate_synthetic",
+    "fallback to synthetic",
+    "fabricate_data",
+    "fabricated_data",
+    "fake_data",
+    "dummy_data",
+    "placeholder_data",
+    "mock_data",
+    "generate_dummy",
+    "generate_fake",
+    # Real incident: code that writes its actual output under a name other
+    # than the one declared in the Execution Profile's artifacts (e.g.
+    # "metrics_local.json" / "submission_local.csv" instead of
+    # "metrics.json" / "submission.csv"), reasoning that the declared name is
+    # somehow off-limits. The declared path is the contract the rest of the
+    # pipeline reads from -- writing elsewhere silently leaves it stale.
+    "reserved filename",
+)
+
+
+def _validate_no_fabricated_data_fallback(coding_result: dict[str, Any]) -> list[str]:
+    """Reject code that fabricates synthetic train/test data as a silent
+    fallback when an expected data file is missing, instead of failing
+    loudly or reading the real data the workspace's Data Card Summary
+    already told it about. A trial that raises a clear error is always
+    preferable to one that silently substitutes made-up data to produce a
+    plausible-looking metric or submission -- the fabricated result hides
+    the real problem instead of surfacing it.
+    """
+    texts: list[str] = []
+    for update in coding_result.get("file_updates", []) or []:
+        if isinstance(update, dict) and isinstance(update.get("content"), str):
+            texts.append(update["content"])
+    for update in coding_result.get("patch_updates", []) or []:
+        if isinstance(update, dict) and isinstance(update.get("replace"), str):
+            texts.append(update["replace"])
+    issues: list[str] = []
+    for text in texts:
+        lowered = text.casefold()
+        for marker in _FABRICATED_DATA_MARKERS:
+            if marker in lowered:
+                issues.append(f"possible_fabricated_data_fallback:{marker}")
+    return _unique(issues)
+
+
+def _validate_predict_test_sync(coding_result: dict[str, Any], handoff: dict[str, Any]) -> list[str]:
+    """Reject a change to the predict-stage script that leaves the
+    test-stage (local validation) script untouched, with no shared module
+    touched either.
+
+    Real incident: the code writer changed predict_step.py's prediction
+    algorithm without updating test_step.py's own separate copy of that same
+    formula. Local CV kept scoring the OLD algorithm (identical to the prior
+    trial's score) while the real submission used the NEW one -- the local
+    score no longer meant anything, and the actual leaderboard score dropped
+    hard on a change that looked, locally, like a safe no-op. A prompt
+    instruction alone was tested against this exact scenario twice and only
+    caught it once, so this mechanical check is the actual backstop, not the
+    prompt wording in workspace_coding_handoff.py.
+
+    This does not by itself prove nothing else diverged (the shared-module
+    exemption below is a heuristic, not a semantic diff) -- it only catches
+    the one-file-changed-in-isolation shape that caused the real incident.
+    """
+    predict_script = _first_script_name(handoff.get("predict_commands"))
+    test_script = _first_script_name(handoff.get("validation_commands"))
+    if not predict_script or not test_script or predict_script == test_script:
+        return []
+    changed = _changed_paths(coding_result)
+    if predict_script not in changed:
+        return []
+    if test_script in changed:
+        return []
+    if any(path.startswith("src/") for path in changed):
+        # A refactor into a shared module (e.g. src/baseline.py) that both
+        # scripts already call is the intended way to keep them in sync --
+        # only flag when the predict script changed in isolation.
+        return []
+    return [f"predict_script_changed_without_test_script_sync:{predict_script}"]
+
+
+def _first_script_name(commands: Any) -> str | None:
+    if not isinstance(commands, list):
+        return None
+    for command in commands:
+        if not isinstance(command, str):
+            continue
+        for token in command.split():
+            if token.endswith(".py"):
+                return Path(token.replace("\\", "/")).name
+    return None
+
+
+def _changed_paths(coding_result: dict[str, Any]) -> set[str]:
+    paths: set[str] = set()
+    for item in coding_result.get("changed_files", []) or []:
+        if isinstance(item, str):
+            paths.add(item.replace("\\", "/"))
+    for key in ("file_updates", "patch_updates"):
+        for update in coding_result.get(key, []) or []:
+            path = update.get("path") if isinstance(update, dict) else None
+            if isinstance(path, str):
+                paths.add(path.replace("\\", "/"))
+    return paths
+
+
+def _patch_only_blocks_file_update(path: str, handoff: dict[str, Any]) -> bool:
+    """Decide whether patch-only mode must reject this whole-file update.
+
+    patch_only exists to stop whole-file rewrites from silently discarding
+    the base pipeline -- but a file that does not exist yet has nothing to
+    discard. Rejecting those too made any plan that legitimately adds a new
+    module impossible to implement: the planner kept proposing the module,
+    the code writer kept refusing, and the retry/re-plan cycle burned the
+    trial's entire LLM budget without ever writing a line of code.
+    """
+    if _allow_full_file_updates(handoff):
+        return False
+    target = Path(str(handoff.get("project_root", ""))) / path.replace("\\", "/")
+    return target.exists()
+
+
 def _validate_file_updates(coding_result: dict[str, Any], handoff: dict[str, Any]) -> list[str]:
     updates = coding_result.get("file_updates", [])
     if not updates:
         return []
     if not isinstance(updates, list):
         return ["invalid_type:file_updates"]
-    if not _allow_full_file_updates(handoff):
-        if coding_result.get("patch_updates"):
-            return []
-        return [
-            f"full_file_update_not_allowed_in_patch_only:{update.get('path') if isinstance(update, dict) else 'unknown'}"
-            for update in updates
-        ]
     issues: list[str] = []
     for update in updates:
         path = update.get("path") if isinstance(update, dict) else None
         if not isinstance(path, str):
             issues.append("invalid_file_update")
+            continue
+        if _patch_only_blocks_file_update(path, handoff):
+            # A whole-file rewrite emitted next to real patches is a
+            # redundant fallback some models add; ignore it rather than
+            # failing the trial over it.
+            if not coding_result.get("patch_updates"):
+                issues.append(f"full_file_update_not_allowed_in_patch_only:{path}")
             continue
         issues.extend(_path_scope_issues(path, handoff, update_label="file_update"))
     return issues

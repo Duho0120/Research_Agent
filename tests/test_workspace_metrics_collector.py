@@ -68,6 +68,40 @@ class WorkspaceMetricsCollectorTest(unittest.TestCase):
             self.assertEqual("accuracy", metrics["metric"])
             self.assertEqual(5, metrics["epoch"])
 
+    def test_falls_back_past_a_stale_configured_source_key(self):
+        # metrics_contract.source_key is set from a previous trial's metrics
+        # shape. A later trial's code writer can reasonably name its score
+        # field differently, so a missing configured key must not fail
+        # outright -- it should fall through to metric-name-based detection
+        # instead of forcing another config edit every time a new trial uses
+        # a different (but still reasonable) key.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            project = Path(tmp) / "project"
+            root.mkdir()
+            project.mkdir()
+            source = project / "outputs" / "metrics.json"
+            source.parent.mkdir()
+            source.write_text(
+                json.dumps({"metric": "accuracy", "value": 0.83, "epoch": 5}),
+                encoding="utf-8",
+            )
+            self._write_workspace(
+                root,
+                project,
+                "trial_003",
+                status="completed",
+                metrics_contract={"source_key": "cv_mean_accuracy"},
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = collect_workspace_metrics("demo", "trial_003")
+
+            self.assertEqual("collected", result["status"])
+            self.assertEqual("value", result["score_source"])
+            metrics = json.loads((root / "experiments" / "demo" / "trial_003" / "metrics.json").read_text())
+            self.assertEqual(0.83, metrics["cv_score"])
+
     def test_collects_validation_metric_key_from_competition_metric(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "agent"
@@ -115,6 +149,47 @@ class WorkspaceMetricsCollectorTest(unittest.TestCase):
             metrics = json.loads((root / "experiments" / "demo" / "trial_direct_metric" / "metrics.json").read_text())
             self.assertEqual(0.91, metrics["cv_score"])
             self.assertEqual(0.91, metrics["accuracy"])
+
+    def test_collects_value_when_reported_metric_matches_competition_metric(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            project = Path(tmp) / "project"
+            root.mkdir()
+            project.mkdir()
+            source = project / "outputs" / "metrics.json"
+            source.parent.mkdir()
+            source.write_text(
+                json.dumps({"metric": "accuracy", "value": 0.88, "split": "validation"}),
+                encoding="utf-8",
+            )
+            self._write_workspace(root, project, "trial_metric_value", status="completed")
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = collect_workspace_metrics("demo", "trial_metric_value")
+
+            self.assertEqual("collected", result["status"])
+            self.assertEqual("value", result["score_source"])
+            self.assertEqual(0.88, result["cv_score"])
+
+    def test_does_not_collect_value_when_reported_metric_does_not_match(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            project = Path(tmp) / "project"
+            root.mkdir()
+            project.mkdir()
+            source = project / "outputs" / "metrics.json"
+            source.parent.mkdir()
+            source.write_text(
+                json.dumps({"metric": "loss", "value": 0.12}),
+                encoding="utf-8",
+            )
+            self._write_workspace(root, project, "trial_mismatched_metric_value", status="completed")
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = collect_workspace_metrics("demo", "trial_mismatched_metric_value")
+
+            self.assertEqual("needs_review", result["status"])
+            self.assertIsNone(result["cv_score"])
 
     def test_missing_score_mapping_requests_review_without_writing_metrics(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -212,6 +287,81 @@ class WorkspaceMetricsCollectorTest(unittest.TestCase):
             self.assertEqual(0, code)
             self.assertTrue((root / "experiments" / "demo" / "trial_006" / "metrics.json").exists())
 
+    def test_matches_metric_key_despite_case_and_punctuation_differences(self):
+        # The code writer names the score key after the metric using whatever
+        # spelling it picks that run. "R-Hit@1cm" in state.yaml previously
+        # only matched a literal "r-hit@1cm" key, so a metrics.json written
+        # as "R-Hit@1cm" was reported as missing_or_invalid_primary_score and
+        # required a hand-configured metrics_contract.source_key.
+        for written_key in ("R-Hit@1cm", "r_hit_at_1cm", "val_RHit1cm"):
+            with self.subTest(written_key=written_key):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp) / "agent"
+                    project = Path(tmp) / "project"
+                    root.mkdir()
+                    project.mkdir()
+                    source = project / "outputs" / "metrics.json"
+                    source.parent.mkdir()
+                    source.write_text(
+                        json.dumps({written_key: 0.591, "n_ids": 1000, "model_type": "rule"}),
+                        encoding="utf-8",
+                    )
+                    self._write_workspace(root, project, "trial_001", status="completed", metric="R-Hit@1cm")
+
+                    with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                        result = collect_workspace_metrics("demo", "trial_001")
+
+                    self.assertEqual("collected", result["status"])
+                    self.assertEqual(0.591, result["cv_score"])
+                    self.assertEqual(written_key, result["score_source"])
+
+    def test_ignores_non_numeric_keys_when_matching_metric_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            project = Path(tmp) / "project"
+            root.mkdir()
+            project.mkdir()
+            source = project / "outputs" / "metrics.json"
+            source.parent.mkdir()
+            # "metric" holds the metric's *name*, not its value -- matching on
+            # it would otherwise pick up a string and crash the collector.
+            source.write_text(
+                json.dumps({"metric": "R-Hit@1cm", "R-Hit@1cm": 0.42}),
+                encoding="utf-8",
+            )
+            self._write_workspace(root, project, "trial_001", status="completed", metric="R-Hit@1cm")
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = collect_workspace_metrics("demo", "trial_001")
+
+            self.assertEqual("collected", result["status"])
+            self.assertEqual(0.42, result["cv_score"])
+
+    def test_stale_source_key_falls_back_to_normalized_metric_match(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            project = Path(tmp) / "project"
+            root.mkdir()
+            project.mkdir()
+            source = project / "outputs" / "metrics.json"
+            source.parent.mkdir()
+            source.write_text(json.dumps({"R-Hit@1cm": 0.7}), encoding="utf-8")
+            self._write_workspace(
+                root,
+                project,
+                "trial_001",
+                status="completed",
+                metric="R-Hit@1cm",
+                metrics_contract={"source_key": "r_hit_at_1cm"},
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = collect_workspace_metrics("demo", "trial_001")
+
+            self.assertEqual("collected", result["status"])
+            self.assertEqual(0.7, result["cv_score"])
+            self.assertEqual("R-Hit@1cm", result["score_source"])
+
     def _write_workspace(
         self,
         root: Path,
@@ -220,12 +370,13 @@ class WorkspaceMetricsCollectorTest(unittest.TestCase):
         *,
         status: str,
         metrics_contract: dict | None = None,
+        metric: str = "accuracy",
     ) -> None:
         competition = root / "competitions" / "demo"
         competition.mkdir(parents=True)
         simple_yaml.dump(
             {
-                "competition": {"name": "demo", "metric": "accuracy", "objective": "maximize"},
+                "competition": {"name": "demo", "metric": metric, "objective": "maximize"},
                 "current_state": {},
             },
             competition / "state.yaml",

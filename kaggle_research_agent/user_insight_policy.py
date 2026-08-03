@@ -22,6 +22,30 @@ class InsightClient(Protocol):
         ...
 
 
+# Once an insight reaches one of these statuses, its lifecycle is over and it must
+# never be matched again by trial-id lookups. A stale target_trial otherwise left
+# on an already-finished insight could get "resurrected" and misapplied to an
+# unrelated later trial that happens to reuse the same trial id or axis.
+_TERMINAL_INSIGHT_STATUSES = {"superseded", "completed", "exhausted"}
+
+# Markers for "this really is an ensemble meta-estimator". Listing only
+# voting/stacking rejected legitimate implementations -- a BaggingRegressor
+# wrapping the base model is a textbook ensemble, but failed verification and
+# blocked the trial. Deliberately excludes plain boosting/forest names
+# (GradientBoosting, HistGradientBoosting, RandomForest, ExtraTrees): those are
+# internally ensembles, so accepting them would let an unchanged base model
+# trivially satisfy "the user's ensemble idea was implemented".
+ENSEMBLE_ESTIMATOR_MARKERS = [
+    "voting",
+    "stacking",
+    "bagging",
+    "adaboost",
+    "ada_boost",
+    "blend",
+    "ensemble",
+]
+
+
 AXIS_KEYWORDS = {
     "model_ensemble": ["ensemble", "앙상블", "blend", "stack", "voting", "soft vote", "hard vote"],
     "validation_review": ["validation", "cv", "split", "leak", "overfit", "검증", "누수", "과적합"],
@@ -183,7 +207,7 @@ def latest_user_insight_record(competition: str, source_trial_id: str | None = N
     rows = [
         row
         for row in _read_jsonl(competition_memory_dir(competition) / "user_insights.jsonl")
-        if row.get("status") not in {"superseded", "completed", "exhausted"}
+        if row.get("status") not in _TERMINAL_INSIGHT_STATUSES
     ]
     if source_trial_id:
         exact = [row for row in rows if row.get("source_trial_id") == source_trial_id]
@@ -516,10 +540,17 @@ def mark_user_insight_applied(competition: str, trial_id: str, facts: dict[str, 
     applied_trials = list(record.get("applied_trials") or [])
     if trial_id not in applied_trials and applied:
         applied_trials.append(trial_id)
+    # evaluate_user_insight_submission runs before this in the real pipeline and
+    # may already have moved the record to a terminal status ("completed" /
+    # "exhausted") for this same trial. Record the execution-level check as
+    # supplementary evidence without downgrading that terminal status back to
+    # "applied"/"application_mismatch".
+    already_terminal = record.get("status") in _TERMINAL_INSIGHT_STATUSES
+    status = record.get("status") if already_terminal else ("applied" if applied else "application_mismatch")
     return update_user_insight_record(
         competition,
         str(record["insight_id"]),
-        status="applied" if applied else "application_mismatch",
+        status=status,
         applied_trials=applied_trials,
         application_check={
             "trial_id": trial_id,
@@ -572,6 +603,8 @@ def validate_user_insight_code_result(
     trial_id: str,
     coding_result: dict[str, Any],
 ) -> list[str]:
+    if coding_result.get("status") != "completed":
+        return []
     record = _insight_for_target_trial(competition, trial_id)
     if not record:
         return []
@@ -594,8 +627,29 @@ def validate_user_insight_code_result(
 
 def _insight_for_target_trial(competition: str, trial_id: str) -> dict[str, Any] | None:
     rows = _read_jsonl(competition_memory_dir(competition) / "user_insights.jsonl")
-    matches = [row for row in rows if row.get("target_trial") == trial_id and row.get("status") != "superseded"]
+    matches = [
+        row
+        for row in rows
+        if row.get("target_trial") == trial_id and _is_open_for_trial(row, trial_id)
+    ]
     return matches[-1] if matches else None
+
+
+def _is_open_for_trial(row: dict[str, Any], trial_id: str) -> bool:
+    """Whether this insight record should still be matched for `trial_id`.
+
+    A non-terminal record is always open. A terminal one (completed/exhausted)
+    is only open here if `trial_id` is the very trial whose submission just
+    closed it out (evaluate_user_insight_submission runs before
+    mark_user_insight_applied in the real pipeline, so the record can already
+    be terminal by the time the execution-level check looks it up for that
+    same trial). Any other terminal record is a finished, unrelated insight
+    whose stale target_trial must not be resurrected for a later trial.
+    """
+    if row.get("status") not in _TERMINAL_INSIGHT_STATUSES:
+        return True
+    result = row.get("result") if isinstance(row.get("result"), dict) else {}
+    return result.get("trial_id") == trial_id
 
 
 def user_insight_target_trial_ids(competition: str) -> set[str]:
@@ -629,14 +683,7 @@ def _default_verification_contract(axis: str) -> dict[str, Any]:
                     "phase": "code",
                     "field": "serialized",
                     "operator": "contains_any",
-                    "values": [
-                        "votingclassifier",
-                        "stackingclassifier",
-                        "votingregressor",
-                        "stackingregressor",
-                        "voting=",
-                        "blend",
-                    ],
+                    "values": ENSEMBLE_ESTIMATOR_MARKERS,
                 },
                 common_axis_rule,
                 {
@@ -644,13 +691,13 @@ def _default_verification_contract(axis: str) -> dict[str, Any]:
                     "phase": "execution",
                     "field": "model.estimator",
                     "operator": "contains_any",
-                    "values": ["voting", "stacking", "ensemble", "blend"],
+                    "values": ENSEMBLE_ESTIMATOR_MARKERS,
                 },
                 {
                     "id": "ensemble_has_multiple_members",
                     "phase": "execution",
-                    "field": "model.members",
-                    "operator": "min_items",
+                    "field": "model",
+                    "operator": "min_ensemble_size",
                     "value": 2,
                 },
             ],
@@ -786,9 +833,42 @@ def _default_verification_contract(axis: str) -> dict[str, Any]:
 
 def _verification_contract(interpretation: dict[str, Any], axis: str) -> dict[str, Any]:
     contract = interpretation.get("verification_contract")
+    default = _default_verification_contract(axis)
     if not isinstance(contract, dict) or not isinstance(contract.get("rules"), list):
-        return _default_verification_contract(axis)
-    return contract
+        return default
+    return _refresh_builtin_rule_values(contract, default)
+
+
+def _refresh_builtin_rule_values(contract: dict[str, Any], default: dict[str, Any]) -> dict[str, Any]:
+    """Re-sync a stored contract's built-in rules with the current defaults.
+
+    Contracts are snapshotted onto the insight record when it is created, so
+    an insight written before a rule was improved keeps verifying against the
+    old rule forever. That is how a valid BaggingRegressor ensemble kept
+    failing verification even after the marker list was fixed. Recognized
+    rules (matched by id) get their current values/operator back; anything the
+    interpretation added or customized beyond that is preserved as-is.
+    """
+    default_rules = {
+        str(rule.get("id")): rule
+        for rule in default.get("rules", [])
+        if isinstance(rule, dict) and rule.get("id")
+    }
+    refreshed: list[Any] = []
+    for rule in contract.get("rules", []):
+        current = default_rules.get(str(rule.get("id"))) if isinstance(rule, dict) else None
+        if current is None:
+            refreshed.append(rule)
+            continue
+        merged = dict(rule)
+        merged["operator"] = current.get("operator", merged.get("operator"))
+        merged["field"] = current.get("field", merged.get("field"))
+        for key in ("values", "value"):
+            merged.pop(key, None)
+            if key in current:
+                merged[key] = current[key]
+        refreshed.append(merged)
+    return {**contract, "rules": refreshed}
 
 
 def _evaluate_verification_contract(
@@ -863,17 +943,57 @@ def _evaluate_verification_contract(
 def _evaluate_rule(rule: dict[str, Any], actual: Any, reference: Any) -> bool:
     operator = str(rule.get("operator") or "")
     if operator == "equals":
+        if rule.get("field") == "primary_change_axis":
+            return _canonical_axis_name(actual) == _canonical_axis_name(rule.get("value"))
         return actual == rule.get("value")
     if operator == "contains_any":
         text = json.dumps(actual, ensure_ascii=False).casefold()
         return any(str(value).casefold() in text for value in rule.get("values", []))
     if operator == "min_items":
         return isinstance(actual, (list, tuple, set, dict)) and len(actual) >= int(rule.get("value") or 0)
+    if operator == "min_ensemble_size":
+        return _ensemble_size(actual) >= int(rule.get("value") or 0)
     if operator == "changed_from_base":
         return actual not in (None, "", [], {}) and reference not in (None, "", [], {}) and actual != reference
     if operator == "recorded":
         return actual not in (None, "", [], {})
     return False
+
+
+def _ensemble_size(model: Any) -> int:
+    """Count ensemble members across the two shapes sklearn ensembles take.
+
+    Heterogeneous ensembles (Voting/Stacking) list their members explicitly,
+    while homogeneous ones (Bagging/AdaBoost) express the same thing as an
+    n_estimators count. Checking only for a members list rejected the latter,
+    so a valid BaggingRegressor(n_estimators=15) looked like a 0-member
+    ensemble.
+    """
+    if not isinstance(model, dict):
+        return 0
+    members = model.get("members")
+    if isinstance(members, (list, tuple, set, dict)) and members:
+        return len(members)
+    parameters = model.get("parameters") if isinstance(model.get("parameters"), dict) else {}
+    for key in ("n_estimators", "n_members"):
+        for source in (model, parameters):
+            raw = source.get(key)
+            if raw is None:
+                continue
+            try:
+                return int(str(raw).strip().strip("'\""))
+            except (TypeError, ValueError):
+                continue
+    return 0
+
+
+def _canonical_axis_name(value: Any) -> str:
+    name = str(value or "").strip()
+    strategy_aliases = {
+        strategy_for_axis(axis): axis
+        for axis in [*AXIS_KEYWORDS, "user_insight"]
+    }
+    return strategy_aliases.get(name, name)
 
 
 def _nested_value(value: dict[str, Any], dotted_path: str) -> Any:

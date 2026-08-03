@@ -6,7 +6,7 @@ from typing import Any
 from .. import simple_yaml
 from ..paths import competition_configs_dir, competition_dir, trial_dir
 from ..policies import load_policy
-from ..store import load_state, write_text
+from ..store import load_state, load_trial_index, write_text
 from .result_analyst import diagnose_trial
 
 
@@ -32,11 +32,12 @@ def build_research_protocol(
     objective = metrics.get("objective") or state.get("competition", {}).get("objective", "maximize")
     best = state.get("current_state", {}).get("best_trial", {})
     score = metrics.get("cv_score")
-    best_score = _best_score_before_trial(best, trial_id, "cv_score")
+    best_score = _best_score_before_trial(competition, best, trial_id, "cv_score", objective)
     issues = list(diagnosis.get("issues", []))
     optional_evidence: dict[str, Any] = {}
 
     leaderboard_conflict = _apply_optional_leaderboard_check(
+        competition,
         metrics,
         best,
         objective,
@@ -158,6 +159,7 @@ def _load_competition_policy(competition: str) -> dict[str, Any]:
 
 
 def _apply_optional_leaderboard_check(
+    competition: str,
     metrics: dict[str, Any],
     best: dict[str, Any],
     objective: str,
@@ -172,11 +174,12 @@ def _apply_optional_leaderboard_check(
         return False
     leaderboard_score = metrics.get(settings.get("score_field", "lb_score"))
     score_field = settings.get("score_field", "lb_score")
-    best_leaderboard_score = _best_score_before_trial(best, current_trial_id, score_field)
+    best_leaderboard_score = _best_score_before_trial(competition, best, current_trial_id, score_field, objective)
+    best_cv_score = _best_score_before_trial(competition, best, current_trial_id, "cv_score", objective)
     optional_evidence["leaderboard_score"] = leaderboard_score
     optional_evidence["best_leaderboard_score"] = best_leaderboard_score
     conflict = (
-        _improved(metrics.get("cv_score"), _best_score_before_trial(best, current_trial_id, "cv_score"), objective)
+        _improved(metrics.get("cv_score"), best_cv_score, objective)
         and leaderboard_score is not None
         and best_leaderboard_score is not None
         and not _improved(leaderboard_score, best_leaderboard_score, objective)
@@ -267,13 +270,42 @@ def _improved(score: float | None, best: float | None, objective: str) -> bool:
     return score < best if objective == "minimize" else score > best
 
 
-def _best_score_before_trial(best: Any, trial_id: str, score_key: str) -> float | None:
-    if not isinstance(best, dict):
+def _best_score_before_trial(
+    competition: str,
+    best: Any,
+    trial_id: str,
+    score_key: str,
+    objective: str,
+) -> float | None:
+    if isinstance(best, dict) and best.get("trial_id") != trial_id:
+        value = best.get(score_key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return value
+    if not (isinstance(best, dict) and trial_id and best.get("trial_id") == trial_id):
         return None
-    if trial_id and best.get("trial_id") == trial_id:
+    # `state.current_state.best_trial` already points at this same trial (it just
+    # became the new best, e.g. via agents/memory.py:remember_trial, which runs
+    # before this protocol is built for it). Recompute the best score among all
+    # OTHER recorded trials instead of returning None here, or a CV/LB conflict
+    # can never be detected for the exact trial where it matters most.
+    return _best_other_trial_score(competition, trial_id, score_key, objective)
+
+
+def _best_other_trial_score(
+    competition: str,
+    trial_id: str,
+    score_key: str,
+    objective: str,
+) -> float | None:
+    values = [
+        row.get(score_key)
+        for row in load_trial_index(competition)
+        if row.get("trial_id") != trial_id
+    ]
+    values = [value for value in values if isinstance(value, (int, float)) and not isinstance(value, bool)]
+    if not values:
         return None
-    value = best.get(score_key)
-    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+    return min(values) if objective == "minimize" else max(values)
 
 
 def _strategy_reason(strategy: str, issues: list[str]) -> str:

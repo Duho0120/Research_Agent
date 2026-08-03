@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from kaggle_research_agent import simple_yaml
 from kaggle_research_agent.cli import main
-from kaggle_research_agent.workspace_preparer import prepare_workspace
+from kaggle_research_agent.workspace_preparer import prepare_workspace, refresh_workspace_inventory
 
 
 class WorkspacePreparerTest(unittest.TestCase):
@@ -145,6 +145,52 @@ class WorkspacePreparerTest(unittest.TestCase):
             self.assertEqual("accuracy", metrics["metric"])
             self.assertIn("PassengerId,Survived", submission)
 
+    def test_scaffolded_workspace_supports_regression_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            root.mkdir()
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = prepare_workspace(
+                    "bike_demo",
+                    topic="Bike sharing demand",
+                    platform="kaggle",
+                    metric="rmsle",
+                    objective="minimize",
+                    create_workspace=True,
+                    target_column="count",
+                    id_column="datetime",
+                    required_data_files=["train.csv", "test.csv"],
+                )
+            source = Path(result["source_path"])
+            (source / "data" / "train.csv").write_text(
+                "datetime,count,temp\n"
+                "2020-01-01 00:00:00,2,10\n"
+                "2020-01-01 01:00:00,4,11\n"
+                "2020-01-01 02:00:00,8,12\n"
+                "2020-01-01 03:00:00,16,13\n"
+                "2020-01-01 04:00:00,32,14\n",
+                encoding="utf-8",
+            )
+            (source / "data" / "test.csv").write_text(
+                "datetime,temp\n2020-01-02 00:00:00,15\n",
+                encoding="utf-8",
+            )
+
+            for command in [["test_step.py"], ["train_step.py"], ["predict_step.py"]]:
+                completed = subprocess.run(
+                    [sys.executable, *command],
+                    cwd=source,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(0, completed.returncode, completed.stderr)
+
+            metrics = json.loads((source / "outputs" / "metrics.json").read_text(encoding="utf-8"))
+            self.assertEqual("rmsle", metrics["metric"])
+            self.assertEqual("mean_regression", metrics["strategy"])
+            self.assertGreaterEqual(metrics["cv_score"], 0)
+
     def test_prepare_workspace_cli(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "agent"
@@ -199,6 +245,35 @@ class WorkspacePreparerTest(unittest.TestCase):
 
             self.assertEqual(0, code)
             self.assertTrue((root / "demo_workspaces" / "titanic_demo" / "workspace_config.json").exists())
+
+
+class RefreshWorkspaceInventoryTest(unittest.TestCase):
+    def test_refresh_picks_up_files_added_after_initial_registration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            source = Path(tmp) / "source"
+            source.mkdir(parents=True)
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.workspace_preparer.paths.project_root", return_value=root):
+                    prepare_workspace(
+                        "demo",
+                        source_path=str(source),
+                        topic="Demo",
+                        create_workspace=True,
+                    )
+                    inventory_path = root / "competitions" / "demo" / "workspace_inventory.json"
+                    before = json.loads(inventory_path.read_text(encoding="utf-8"))
+                    self.assertNotIn("train_labels.csv", [f["name"] for f in before["files"]])
+
+                    # Data uploaded after registration (this is exactly what
+                    # web_app.py's /api/upload-data endpoint writes into).
+                    (source / "data" / "train_labels.csv").write_text("id,x\n1,0.5\n", encoding="utf-8")
+
+                    refresh_workspace_inventory("demo", source)
+                    after = json.loads(inventory_path.read_text(encoding="utf-8"))
+
+        self.assertIn("train_labels.csv", [f["name"] for f in after["files"]])
 
 
 if __name__ == "__main__":

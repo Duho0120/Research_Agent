@@ -487,7 +487,12 @@ def _competition_record(competition: str) -> dict[str, Any]:
     return {
         "competition_id": competition,
         "platform": profile.get("platform") or workspace_config.get("platform") or competition_state.get("platform"),
-        "topic": workspace_config.get("topic") or competition_state.get("name") or competition,
+        "topic": (
+            workspace_config.get("topic")
+            or competition_state.get("topic")
+            or competition_state.get("name")
+            or competition
+        ),
         "metric": workspace_config.get("metric") or competition_state.get("metric"),
         "objective": workspace_config.get("objective") or competition_state.get("objective"),
         "status": _competition_status(competition),

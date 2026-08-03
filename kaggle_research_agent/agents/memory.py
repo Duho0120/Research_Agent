@@ -20,7 +20,11 @@ def remember_trial(competition: str, trial_id: str) -> dict[str, Any]:
     objective = state.get("competition", {}).get("objective", metrics.get("objective", "maximize"))
 
     current_best = state.get("current_state", {}).get("best_trial")
-    is_best = _is_best(metrics.get("cv_score"), current_best, objective)
+    lb_score = metrics.get("lb_score")
+    if lb_score is not None:
+        is_best = bool(metrics.get("is_best_submission"))
+    else:
+        is_best = _is_best(metrics.get("cv_score"), current_best, objective)
     recommendation = _extract_recommendation(evaluation)
 
     row = {
@@ -28,7 +32,7 @@ def remember_trial(competition: str, trial_id: str) -> dict[str, Any]:
         "competition": competition,
         "trial_id": trial_id,
         "cv_score": metrics.get("cv_score"),
-        "lb_score": metrics.get("lb_score"),
+        "lb_score": lb_score,
         "objective": objective,
         "recommendation": recommendation,
         "is_best": is_best,
@@ -40,7 +44,7 @@ def remember_trial(competition: str, trial_id: str) -> dict[str, Any]:
         state["current_state"]["best_trial"] = {
             "trial_id": trial_id,
             "cv_score": metrics.get("cv_score"),
-            "lb_score": metrics.get("lb_score"),
+            "lb_score": lb_score,
         }
         state["current_state"]["consecutive_failures"] = 0
     else:

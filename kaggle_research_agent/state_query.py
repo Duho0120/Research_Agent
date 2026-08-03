@@ -44,7 +44,7 @@ def list_experiment_statuses(db_path: Path | None = None) -> dict[str, Any]:
     experiments = []
     for row in rows:
         item = _decode_row(dict(row))
-        best = get_best_trial(item["competition_id"], target_db)
+        best = _best_for_competition(item["competition_id"], item, target_db)
         item["best_trial"] = _compact_trial(best)
         experiments.append(item)
     return {
@@ -95,10 +95,11 @@ def get_experiment_status(competition_id: str, db_path: Path | None = None) -> d
             [competition_id],
         ).fetchone()[0]
 
+    competition_row = _decode_row(dict(competition)) if competition else None
     return {
         "db_path": str(target_db),
-        "competition": _decode_row(dict(competition)) if competition else None,
-        "best_trial": _compact_trial(get_best_trial(competition_id, target_db)),
+        "competition": competition_row,
+        "best_trial": _compact_trial(_best_for_competition(competition_id, competition_row, target_db)),
         "trial_count": len(trials),
         "trials": [_compact_trial(_decode_row(dict(row))) for row in trials],
         "pending_actions": list_pending_actions(competition_id, target_db),
@@ -167,7 +168,8 @@ def render_experiment_statuses(status: dict[str, Any]) -> str:
         best = item.get("best_trial") or {}
         best_text = "-"
         if best:
-            best_text = f"{best.get('trial_id')} / {best.get('local_score')}"
+            best_score = best.get("lb_score") if _uses_submission_best(item) else best.get("local_score")
+            best_text = f"{best.get('trial_id')} / {best_score}"
         lines.append(
             f"{index}. {item['competition_id']} | status={item.get('status') or '-'} "
             f"| trials={item.get('trial_count') or 0} | best={best_text} "
@@ -181,13 +183,18 @@ def render_experiment_status(status: dict[str, Any]) -> str:
     if not competition:
         return "실험을 찾을 수 없습니다."
     best = status.get("best_trial") or {}
+    best_score = (
+        best.get("lb_score")
+        if _uses_submission_best(competition)
+        else best.get("local_score")
+    )
     lines = [
         f"실험 현황: {competition['competition_id']}",
         f"- 주제: {competition.get('topic') or '-'}",
         f"- 플랫폼: {competition.get('platform') or '-'}",
         f"- 평가: {competition.get('metric') or '-'} / {competition.get('objective') or '-'}",
         f"- Trial 수: {status['trial_count']}",
-        f"- 현재 best: {best.get('trial_id') or '-'} / {best.get('local_score')}",
+        f"- 현재 best: {best.get('trial_id') or '-'} / {best_score}",
         f"- 총 토큰: {status['total_tokens']}",
         f"- 산출물 기록: {status['artifact_count']}개",
         f"- 제출 기록: {status['submission_count']}개",
@@ -259,6 +266,24 @@ def _compact_trial(row: dict[str, Any] | None) -> dict[str, Any] | None:
         "axis_attempt_limit": row.get("axis_attempt_limit"),
         "decision": row.get("decision"),
     }
+
+
+def _uses_submission_best(competition: dict[str, Any] | None) -> bool:
+    if not isinstance(competition, dict):
+        return False
+    return str(competition.get("platform") or "").strip().lower() in {"kaggle", "dacon"}
+
+
+def _best_for_competition(
+    competition_id: str,
+    competition: dict[str, Any] | None,
+    db_path: Path,
+) -> dict[str, Any] | None:
+    if _uses_submission_best(competition):
+        leaderboard_best = get_best_trial(competition_id, db_path, prefer_lb=True)
+        if leaderboard_best is not None:
+            return leaderboard_best
+    return get_best_trial(competition_id, db_path, prefer_lb=False)
 
 
 def _sort_user_artifacts(artifacts: list[dict[str, Any]]) -> list[dict[str, Any]]:

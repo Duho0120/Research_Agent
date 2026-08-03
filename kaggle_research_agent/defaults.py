@@ -6,7 +6,7 @@ DEFAULT_STATE = {
         "name": "",
         "metric": "unknown",
         "objective": "maximize",
-        "submission_limit_per_day": 5,
+        "submission_limit_per_day": None,
     },
     "current_state": {
         "active_trial": None,

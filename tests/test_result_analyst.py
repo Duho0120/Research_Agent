@@ -55,6 +55,8 @@ class ResultAnalystTest(unittest.TestCase):
             self.assertTrue(result["needs_user_review"])
             self.assertIn("CV/LB", " ".join(result["issues"]))
             self.assertIn("\uc0ac\uc6a9\uc790", " ".join(result["user_questions"]))
+            self.assertEqual({"fold_3": 0.31}, result["segment_errors"])
+            self.assertEqual(2, result["consecutive_failures"])
             diagnosis_path = trial / "diagnosis.md"
             self.assertTrue(diagnosis_path.exists())
             text = diagnosis_path.read_text(encoding="utf-8")
@@ -125,6 +127,57 @@ class ResultAnalystTest(unittest.TestCase):
             self.assertIsNone(result["best_cv_before"])
             self.assertTrue(result["cv_improved"])
             self.assertNotIn("CV did not improve", " ".join(result["issues"]))
+
+    def test_submission_updated_current_best_still_compares_prior_trial_history(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trial = root / "experiments" / "demo" / "trial_002"
+            trial.mkdir(parents=True)
+            (trial / "metrics.json").write_text(
+                json.dumps({"cv_score": 0.82, "lb_score": 0.78, "objective": "maximize"}),
+                encoding="utf-8",
+            )
+            state_dir = root / "competitions" / "demo"
+            state_dir.mkdir(parents=True)
+            (state_dir / "state.yaml").write_text(
+                "competition:\n"
+                "  objective: maximize\n"
+                "current_state:\n"
+                "  consecutive_failures: 0\n"
+                "  best_trial:\n"
+                "    trial_id: trial_002\n"
+                "    cv_score: 0.82\n"
+                "    lb_score: 0.78\n",
+                encoding="utf-8",
+            )
+            memory_dir = root / "memory" / "demo"
+            memory_dir.mkdir(parents=True)
+            (memory_dir / "trial_index.jsonl").write_text(
+                json.dumps(
+                    {
+                        "competition": "demo",
+                        "trial_id": "trial_001",
+                        "cv_score": 0.80,
+                        "lb_score": 0.79,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            config_dir = root / "configs" / "demo"
+            config_dir.mkdir(parents=True)
+            (config_dir / "research_policy.yaml").write_text(
+                "leaderboard_tracking:\n  enabled: true\n",
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = diagnose_trial("demo", "trial_002")
+
+            self.assertEqual(0.80, result["best_cv_before"])
+            self.assertEqual(0.79, result["best_lb_before"])
+            self.assertFalse(result["cv_improved"])
+            self.assertIn("CV/LB", " ".join(result["issues"]))
 
 
 if __name__ == "__main__":

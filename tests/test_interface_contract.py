@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -116,6 +117,9 @@ class InterfaceContractTest(unittest.TestCase):
             self.assertEqual("Feature review", request["title"])
             self.assertEqual("feature_review", request["topic"])
             self.assertEqual("runs/demo/trial_002/02_pipeline_structure.ko.md", request["context_files"][0]["path"])
+            self.assertEqual("The feature has not improved the target segment.", request["problem"])
+            self.assertEqual("Switch the axis.", request["recommendation"])
+            self.assertEqual("switch_axis", request["options"][1]["value"])
 
             detail = get_pending_request("review_001", db_path=db_path)
 
@@ -170,6 +174,41 @@ class InterfaceContractTest(unittest.TestCase):
             self.assertEqual("human_review_response", result["data"]["interaction"]["channel"])
             self.assertFalse((root / "memory" / "demo" / "user_feedback.jsonl").exists())
             self.assertEqual([], list_pending_actions("demo", db_path, status="resolved"))
+
+    def test_response_unblocks_source_cycle_before_resolving_request(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "state.sqlite3"
+            _write_contract_fixture(db_path)
+            _write_pending_request_fixture(db_path)
+            trial = root / "experiments" / "demo" / "trial_002"
+            trial.mkdir(parents=True, exist_ok=True)
+            (trial / "workspace_result_cycle.json").write_text(
+                json.dumps(
+                    {
+                        "competition": "demo",
+                        "trial_id": "trial_002",
+                        "status": "awaiting_human_review",
+                        "next_action": "request-user-review",
+                        "human_review": {"status": "pending"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = respond_to_request(
+                    "review_001",
+                    answers={"decision": "switch_axis"},
+                    db_path=db_path,
+                )
+
+            cycle = json.loads((trial / "workspace_result_cycle.json").read_text(encoding="utf-8"))
+            self.assertTrue(result["ok"])
+            self.assertEqual("completed_feedback_applied", cycle["status"])
+            self.assertEqual("resolved", cycle["human_review"]["status"])
+            self.assertEqual("applied", result["data"]["application"]["status"])
+            self.assertEqual([], list_pending_actions("demo", db_path))
 
     def test_submit_human_insight_records_feedback_without_pending_request(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -303,6 +342,35 @@ def _write_pending_request_fixture(db_path: Path) -> None:
                         "required": True,
                     }
                 ],
+                "problem": "The feature has not improved the target segment.",
+                "evidence_snapshot": [
+                    {
+                        "label": "Segment error",
+                        "value": "24%",
+                        "meaning": "The target segment error remained unchanged.",
+                    }
+                ],
+                "interpretation": "The current feature does not explain the repeated error.",
+                "recommendation": "Switch the axis.",
+                "why_user_needed": "Only the user can confirm whether the feature has domain meaning.",
+                "options": [
+                    {
+                        "value": "continue_axis",
+                        "label": "Continue",
+                        "impact": "Try one smaller feature variant.",
+                        "follow_up_action": "consider_in_next_plan",
+                    },
+                    {
+                        "value": "switch_axis",
+                        "label": "Switch",
+                        "impact": "Pause feature engineering.",
+                        "follow_up_action": "change_validation",
+                    },
+                ],
+                "default_if_no_response": "Keep the current best.",
+                "interaction_type": "domain_question",
+                "interaction_label": "Domain question",
+                "execution_supported": True,
             },
         },
         db_path,

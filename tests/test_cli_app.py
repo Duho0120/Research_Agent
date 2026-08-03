@@ -17,6 +17,185 @@ from kaggle_research_agent.state_db import (
 
 
 class CliAppTest(unittest.TestCase):
+    def test_current_loop_state_repairs_dead_process_without_losing_failure_origin(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime = Path(tmp)
+            with patch.dict("os.environ", {"RESEARCH_AGENT_RUNTIME_DIR": str(runtime)}):
+                cli_app.save_json_atomic(
+                    cli_app.loop_state_path(),
+                    {
+                        "competition": "demo",
+                        "status": "running",
+                        "pid": 999999,
+                        "next_trial": "trial_001",
+                        "error": "recoverable_after_metrics_collection",
+                    },
+                )
+                with patch("kaggle_research_agent.cli_app.os.kill", side_effect=OSError):
+                    state = cli_app._current_loop_state("demo")
+
+                saved = cli_app.load_json(cli_app.loop_state_path())
+
+        self.assertEqual("failed", state["status"])
+        self.assertIsNone(state["pid"])
+        self.assertEqual("failed", state["resume_from_status"])
+        self.assertEqual("recoverable_after_metrics_collection", state["error"])
+        self.assertEqual(state, saved)
+
+    def test_snapshot_prefers_human_readable_filesystem_topic_over_slug(self):
+        response = {
+            "ok": True,
+            "data": {
+                "experiment": {
+                    "competition": "bike-sharing-demand",
+                    "topic": "bike-sharing-demand",
+                    "objective": "minimize",
+                    "state": "ready_next_trial",
+                },
+                "trials": [],
+            },
+        }
+        with patch("kaggle_research_agent.cli_app.get_experiment", return_value=response):
+            with patch("kaggle_research_agent.cli_app._filesystem_topic", return_value="Bike Sharing Demand"):
+                with patch("kaggle_research_agent.cli_app._manual_trial_rows", return_value=[]):
+                    snapshot = cli_app.experiment_snapshot("bike-sharing-demand", sync=False)
+
+        self.assertEqual("Bike Sharing Demand", snapshot["topic"])
+
+    def test_snapshot_labels_post_metrics_failure_as_recovery_pending(self):
+        with patch(
+            "kaggle_research_agent.cli_app.get_experiment",
+            return_value={
+                "ok": True,
+                "data": {
+                    "experiment": {
+                        "competition": "demo",
+                        "topic": "Demo",
+                        "state": "ready_next_trial",
+                    },
+                    "trials": [],
+                },
+            },
+        ):
+            with patch(
+                "kaggle_research_agent.cli_app._current_loop_state",
+                return_value={
+                    "competition": "demo",
+                    "status": "failed",
+                    "next_trial": "trial_001",
+                    "error": "recoverable_after_metrics_collection",
+                },
+            ):
+                with patch("kaggle_research_agent.cli_app._manual_trial_rows", return_value=[]):
+                    snapshot = cli_app.experiment_snapshot("demo", sync=False)
+
+        self.assertEqual("후처리 복구 대기", snapshot["state"])
+
+    def test_running_snapshot_separates_current_next_and_last_completed_trials(self):
+        response = {
+            "ok": True,
+            "data": {
+                "experiment": {
+                    "competition": "demo",
+                    "topic": "Demo",
+                    "objective": "maximize",
+                    "state": "ready_next_trial",
+                },
+                "trials": [
+                    {
+                        "trial_id": "trial_001",
+                        "status": "completed",
+                        "local_score": 0.8,
+                        "lb_score": None,
+                    }
+                ],
+            },
+        }
+        with patch("kaggle_research_agent.cli_app.get_experiment", return_value=response):
+            with patch(
+                "kaggle_research_agent.cli_app._current_loop_state",
+                return_value={
+                    "competition": "demo",
+                    "status": "running",
+                    "phase": "coding",
+                    "current_trial": "trial_001",
+                    "next_trial": "trial_001",
+                },
+            ):
+                with patch("kaggle_research_agent.cli_app._manual_trial_rows", return_value=[]):
+                    snapshot = cli_app.experiment_snapshot("demo", sync=False)
+
+        self.assertEqual("trial_001", snapshot["current_trial"])
+        self.assertEqual("trial_002", snapshot["next_trial"])
+        self.assertIsNone(snapshot["last_completed_trial"])
+        self.assertIsNone(snapshot["latest"])
+
+    def test_running_later_trial_keeps_previous_trial_as_latest_completed(self):
+        response = {
+            "ok": True,
+            "data": {
+                "experiment": {
+                    "competition": "demo",
+                    "topic": "Demo",
+                    "objective": "maximize",
+                    "state": "ready_next_trial",
+                },
+                "trials": [
+                    {"trial_id": "trial_001", "status": "completed", "local_score": 0.8, "lb_score": 0.7},
+                    {"trial_id": "trial_002", "status": "completed", "local_score": 0.81, "lb_score": None},
+                ],
+            },
+        }
+        with patch("kaggle_research_agent.cli_app.get_experiment", return_value=response):
+            with patch(
+                "kaggle_research_agent.cli_app._current_loop_state",
+                return_value={
+                    "competition": "demo",
+                    "status": "running",
+                    "phase": "coding",
+                    "current_trial": "trial_002",
+                    "next_trial": "trial_002",
+                    "last_completed_trial": "trial_001",
+                },
+            ):
+                with patch("kaggle_research_agent.cli_app._manual_trial_rows", return_value=[]):
+                    snapshot = cli_app.experiment_snapshot("demo", sync=False)
+
+        self.assertEqual("trial_002", snapshot["current_trial"])
+        self.assertEqual("trial_003", snapshot["next_trial"])
+        self.assertEqual("trial_001", snapshot["last_completed_trial"])
+        self.assertEqual("trial_001", snapshot["latest"]["trial_id"])
+
+    def test_feedback_request_lines_explain_problem_recommendation_and_execution_boundary(self):
+        lines = cli_app._feedback_request_lines(
+            {
+                "interaction_label": "외부 계산 자원 승인",
+                "problem": "현재 환경의 메모리가 부족합니다.",
+                "evidence_snapshot": [
+                    {"label": "최대 메모리", "value": "11.6GB", "meaning": "실행 중 사용량"}
+                ],
+                "interpretation": "외부 자원 또는 경량화가 필요합니다.",
+                "recommendation": "로컬 경량화를 기본값으로 둡니다.",
+                "why_user_needed": "외부 비용은 사용자 승인이 필요합니다.",
+                "question": "외부 환경 사용을 검토할까요?",
+                "options": [
+                    {
+                        "value": "estimate_first",
+                        "label": "비용 추정 후 결정",
+                        "impact": "실행 없이 비용만 추정합니다.",
+                    }
+                ],
+                "default_if_no_response": "로컬 경량화를 적용합니다.",
+                "execution_supported": False,
+                "execution_note": "현재 버전에서는 외부 환경을 자동 실행하지 않습니다.",
+            }
+        )
+        rendered = "\n".join(lines)
+        self.assertIn("11.6GB", rendered)
+        self.assertIn("로컬 경량화", rendered)
+        self.assertIn("비용 추정 후 결정", rendered)
+        self.assertIn("자동 실행하지 않습니다", rendered)
+
     def test_snapshot_uses_manual_submission_scores_and_infers_next_trial(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -62,6 +241,63 @@ class CliAppTest(unittest.TestCase):
             self.assertEqual("trial_007", snapshot["next_trial"])
             self.assertEqual("trial_006", snapshot["last_completed_trial"])
             self.assertEqual("trial_006", snapshot["latest"]["trial_id"])
+
+    def test_snapshot_uses_lowest_submission_score_for_minimize_objective(self):
+        response = {
+            "ok": True,
+            "data": {
+                "experiment": {
+                    "competition": "bike-sharing-demand",
+                    "topic": "Bike Sharing Demand",
+                    "objective": "minimize",
+                    "state": "completed",
+                },
+                "trials": [
+                    {"trial_id": "trial_001", "status": "completed", "lb_score": 1.01},
+                    {"trial_id": "trial_002", "status": "completed", "lb_score": 0.92},
+                ],
+            },
+        }
+        with patch("kaggle_research_agent.cli_app.get_experiment", return_value=response):
+            with patch("kaggle_research_agent.cli_app._current_loop_state", return_value={}):
+                with patch("kaggle_research_agent.cli_app._manual_trial_rows", return_value=[]):
+                    snapshot = cli_app.experiment_snapshot("bike-sharing-demand", sync=False)
+
+        self.assertEqual("trial_002", snapshot["best"]["trial_id"])
+
+    def test_empty_install_does_not_inject_titanic_experiment(self):
+        with patch("kaggle_research_agent.cli_app.list_experiments", return_value={"ok": True, "data": {"experiments": []}}):
+            with patch("kaggle_research_agent.cli_app._filesystem_experiments", return_value=[]):
+                self.assertEqual([], cli_app.load_experiments(sync=False))
+
+    def test_snapshot_does_not_treat_discovered_scaffold_as_completed(self):
+        response = {
+            "ok": True,
+            "data": {
+                "experiment": {
+                    "competition": "bike-sharing-demand",
+                    "topic": "Bike Sharing Demand",
+                    "state": "ready_first_trial",
+                    "next_trial_id": "trial_001",
+                },
+                "trials": [
+                    {
+                        "trial_id": "trial_001",
+                        "status": "discovered",
+                        "local_score": None,
+                        "lb_score": None,
+                    }
+                ],
+            },
+        }
+        with patch("kaggle_research_agent.cli_app.get_experiment", return_value=response):
+            with patch("kaggle_research_agent.cli_app._current_loop_state", return_value={}):
+                with patch("kaggle_research_agent.cli_app._manual_trial_rows", return_value=[]):
+                    snapshot = cli_app.experiment_snapshot("bike-sharing-demand", sync=False)
+
+        self.assertIsNone(snapshot["last_completed_trial"])
+        self.assertEqual("trial_001", snapshot["next_trial"])
+        self.assertIsNone(snapshot["latest"])
 
     def test_snapshot_renders_progress_status_and_recent_logs(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -131,6 +367,32 @@ class CliAppTest(unittest.TestCase):
             self.assertNotIn("trials: [", rendered)
             self.assertNotIn("trial_id: trial_006", rendered)
 
+    def test_recent_logs_only_show_selected_competition(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "auto_loop.log"
+            log.write_text(
+                "\n".join(
+                    [
+                        "=== titanic / trial_007 ===",
+                        '{"status":"code_writer_blocked"}',
+                        "=== bike-sharing-demand / trial_001 ===",
+                        "Planning baseline...",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            lines = cli_app._recent_log_lines(
+                log,
+                limit=4,
+                competition="bike-sharing-demand",
+            )
+
+        self.assertIn("bike-sharing-demand / trial_001", "\n".join(lines))
+        self.assertIn("Planning baseline", "\n".join(lines))
+        self.assertNotIn("titanic", "\n".join(lines))
+        self.assertNotIn("code_writer_blocked", "\n".join(lines))
+
     def test_render_snapshot_shows_next_base_trial(self):
         snapshot = {
             "competition": "titanic",
@@ -159,6 +421,44 @@ class CliAppTest(unittest.TestCase):
             self.assertIn("이미 자동 실험이 실행 중입니다.", message)
             self.assertIn("trial_004", message)
             popen.assert_not_called()
+
+    def test_resolve_start_trial_ignores_failed_loop_pointing_at_missing_trial(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.ROOT", root):
+                with patch("kaggle_research_agent.cli_app._infer_start_trial", return_value="trial_006"):
+                    start_trial = cli_app._resolve_start_trial(
+                        "bike-sharing-demand",
+                        {"status": "failed", "next_trial": "trial_009", "error": "blocked_missing_result_cycle"},
+                    )
+        self.assertEqual("trial_006", start_trial)
+
+    def test_resolve_start_trial_keeps_failed_loop_when_trial_still_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "experiments" / "bike-sharing-demand" / "trial_002").mkdir(parents=True)
+            with patch("kaggle_research_agent.paths.ROOT", root):
+                with patch("kaggle_research_agent.cli_app._infer_start_trial", return_value="trial_099"):
+                    start_trial = cli_app._resolve_start_trial(
+                        "bike-sharing-demand",
+                        {
+                            "status": "failed",
+                            "next_trial": "trial_002",
+                            "error": "recoverable_after_metrics_collection",
+                        },
+                    )
+        self.assertEqual("trial_002", start_trial)
+
+    def test_resolve_start_trial_trusts_non_failed_loop_regardless_of_disk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.ROOT", root):
+                with patch("kaggle_research_agent.cli_app._infer_start_trial", return_value="trial_006"):
+                    start_trial = cli_app._resolve_start_trial(
+                        "bike-sharing-demand",
+                        {"status": "paused", "next_trial": "trial_009"},
+                    )
+        self.assertEqual("trial_009", start_trial)
 
     def test_start_uses_first_trial_without_recorded_lb(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -330,6 +630,146 @@ class CliAppTest(unittest.TestCase):
             self.assertEqual("starting", state["status"])
             self.assertEqual(654, state["pid"])
             self.assertIn("trial_001", message)
+
+    def _write_dacon_profile(self, root: Path, *, team_name: str | None) -> None:
+        workspace = root / "demo_workspaces" / "236716"
+        workspace.mkdir(parents=True)
+        competition_dir = root / "competitions" / "236716"
+        competition_dir.mkdir(parents=True)
+        lines = [
+            "schema_version: '1.0'",
+            "competition: '236716'",
+            "platform: dacon",
+            "dacon_competition_id: '236716'",
+        ]
+        if team_name is not None:
+            lines.append(f"dacon_team_name: {team_name}")
+        lines.extend(
+            [
+                f"project_root: {workspace}",
+                f"python: {Path(sys.executable)}",
+                "commands:",
+                "  test:",
+                "    - '{python} test_step.py'",
+                "  train:",
+                "    - '{python} train_step.py'",
+                "artifacts:",
+                "  metrics:",
+                "    - outputs/metrics.json",
+                "  submission:",
+                "    - outputs/submission.csv",
+                "write_scope:",
+                "  allowed:",
+                "    - src/",
+                "  forbidden:",
+                "    - data/",
+            ]
+        )
+        (competition_dir / "execution_profile.yaml").write_text("\n".join(lines), encoding="utf-8")
+
+    def test_start_dacon_experiment_passes_dacon_submit_flags(self):
+        # Until this was wired, only platform == kaggle got --submit, so a
+        # DACON competition could finish every trial locally and never reach
+        # the submission adapter that already existed.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runtime = root / "runtime"
+            self._write_dacon_profile(root, team_name="뚜로")
+            process = Mock(pid=321)
+            with patch.dict("os.environ", {"RESEARCH_AGENT_RUNTIME_DIR": str(runtime)}):
+                with patch("kaggle_research_agent.paths.ROOT", root):
+                    with patch("kaggle_research_agent.cli_app.get_experiment", return_value={"ok": False}):
+                        with patch("kaggle_research_agent.cli_app.subprocess.Popen", return_value=process) as popen:
+                            cli_app.start_experiment("236716")
+
+            command = popen.call_args.args[0]
+            self.assertIn("--submit", command)
+            self.assertIn("--dacon-competition-id", command)
+            self.assertEqual("236716", command[command.index("--dacon-competition-id") + 1])
+            self.assertIn("--dacon-team-name", command)
+            self.assertEqual("뚜로", command[command.index("--dacon-team-name") + 1])
+            self.assertNotIn("--kaggle-slug", command)
+
+    def test_start_dacon_experiment_without_team_name_runs_without_submitting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runtime = root / "runtime"
+            self._write_dacon_profile(root, team_name=None)
+            process = Mock(pid=322)
+            with patch.dict("os.environ", {"RESEARCH_AGENT_RUNTIME_DIR": str(runtime)}):
+                with patch("kaggle_research_agent.paths.ROOT", root):
+                    with patch("kaggle_research_agent.cli_app.get_experiment", return_value={"ok": False}):
+                        with patch("kaggle_research_agent.cli_app.subprocess.Popen", return_value=process) as popen:
+                            cli_app.start_experiment("236716")
+
+            command = popen.call_args.args[0]
+            self.assertNotIn("--submit", command)
+            self.assertNotIn("--dacon-team-name", command)
+
+    def test_current_loop_state_drops_a_failure_the_trial_has_since_recovered_from(self):
+        # auto_loop_state.json keeps the previous run's outcome until some
+        # later run overwrites it. Once the trial it failed on completed,
+        # the dashboard kept surfacing that stale error and its stale
+        # next_trial instead of the real, recovered state.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trial = root / "experiments" / "demo" / "trial_001"
+            trial.mkdir(parents=True)
+            (trial / "workspace_result_cycle.json").write_text(
+                json.dumps({"competition": "demo", "trial_id": "trial_001", "status": "completed"}),
+                encoding="utf-8",
+            )
+            with patch.dict("os.environ", {"RESEARCH_AGENT_RUNTIME_DIR": str(root / "runtime")}):
+                with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                    cli_app.save_json_atomic(
+                        cli_app.loop_state_path(),
+                        {
+                            "competition": "demo",
+                            "status": "failed",
+                            "next_trial": "trial_001",
+                            "error": "after_coding_metrics_needs_review",
+                        },
+                    )
+                    self.assertEqual({}, cli_app._current_loop_state("demo"))
+
+    def test_current_loop_state_keeps_a_failure_that_was_never_resolved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "experiments" / "demo" / "trial_001").mkdir(parents=True)
+            with patch.dict("os.environ", {"RESEARCH_AGENT_RUNTIME_DIR": str(root / "runtime")}):
+                with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                    cli_app.save_json_atomic(
+                        cli_app.loop_state_path(),
+                        {
+                            "competition": "demo",
+                            "status": "failed",
+                            "next_trial": "trial_001",
+                            "error": "blocked_context",
+                        },
+                    )
+                    loop = cli_app._current_loop_state("demo")
+
+            self.assertEqual("failed", loop["status"])
+            self.assertEqual("blocked_context", loop["error"])
+
+    def test_current_loop_state_keeps_a_failure_when_the_trial_is_still_blocked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trial = root / "experiments" / "demo" / "trial_001"
+            trial.mkdir(parents=True)
+            (trial / "workspace_result_cycle.json").write_text(
+                json.dumps({"competition": "demo", "trial_id": "trial_001", "status": "blocked"}),
+                encoding="utf-8",
+            )
+            with patch.dict("os.environ", {"RESEARCH_AGENT_RUNTIME_DIR": str(root / "runtime")}):
+                with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                    cli_app.save_json_atomic(
+                        cli_app.loop_state_path(),
+                        {"competition": "demo", "status": "failed", "next_trial": "trial_001"},
+                    )
+                    loop = cli_app._current_loop_state("demo")
+
+            self.assertEqual("failed", loop["status"])
 
     def test_stop_request_is_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -882,6 +1322,26 @@ class CliAppTest(unittest.TestCase):
         self.assertEqual("accuracy", settings["metric"])
         self.assertEqual(["train.csv", "test.csv", "sample_submission.csv"], settings["required_data_files"])
 
+    def test_new_experiment_settings_accepts_camel_case_sample_submission(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "workspace"
+            data = project / "data"
+            data.mkdir(parents=True)
+            (data / "train.csv").write_text("datetime,count,temp\n2020-01-01,1,10\n", encoding="utf-8")
+            (data / "test.csv").write_text("datetime,temp\n2020-01-02,11\n", encoding="utf-8")
+            (data / "sampleSubmission.csv").write_text("datetime,count\n2020-01-02,0\n", encoding="utf-8")
+
+            settings = cli_app._propose_new_experiment_settings(
+                "Bike sharing demand RMSLE regression",
+                "",
+                str(project),
+            )
+
+        self.assertEqual("count", settings["target_column"])
+        self.assertEqual("datetime", settings["id_column"])
+        self.assertEqual("rmsle", settings["metric"])
+        self.assertIn("sampleSubmission.csv", settings["required_data_files"])
+
     def test_new_experiment_settings_normalizes_direct_data_folder_path(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp) / "workspace"
@@ -915,6 +1375,34 @@ class CliAppTest(unittest.TestCase):
         self.assertEqual("Id", settings["id_column"])
         self.assertEqual("rmsle", settings["metric"])
         self.assertEqual("minimize", settings["objective"])
+
+    def test_new_experiment_settings_infers_competition_id_and_platform_from_dacon_url(self):
+        settings = cli_app._propose_new_experiment_settings(
+            "https://dacon.io/competitions/official/236716/overview/description",
+            "",
+            None,
+        )
+
+        self.assertEqual("236716", settings["competition"])
+        self.assertEqual("dacon", settings["platform"])
+
+    def test_new_experiment_settings_defaults_to_kaggle_platform_for_kaggle_url(self):
+        settings = cli_app._propose_new_experiment_settings(
+            "https://www.kaggle.com/competitions/titanic",
+            "",
+            None,
+        )
+
+        self.assertEqual("kaggle", settings["platform"])
+
+    def test_new_experiment_settings_defaults_to_kaggle_platform_without_a_url(self):
+        settings = cli_app._propose_new_experiment_settings(
+            "고객 이탈 예측 실험을 하고 싶어",
+            "",
+            None,
+        )
+
+        self.assertEqual("kaggle", settings["platform"])
 
     def test_new_experiment_settings_extracts_description_column_hints(self):
         settings = cli_app._propose_new_experiment_settings(
@@ -1050,6 +1538,211 @@ class CliAppTest(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+
+
+class DeleteExperimentTest(unittest.TestCase):
+    def test_delete_experiment_removes_db_row_and_created_workspace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+                    with patch.dict("os.environ", {"RESEARCH_AGENT_RUNTIME_DIR": str(root / "_runtime")}):
+                        db_path = initialize_state_db()
+                        upsert_competition({"competition_id": "demo-delete", "platform": "dacon"}, db_path)
+                        cli_app.prepare_workspace(
+                            "demo-delete",
+                            topic="Demo Delete",
+                            platform="dacon",
+                            create_workspace=True,
+                        )
+                        cli_app.select_competition("demo-delete")
+                        self.assertTrue((root / "demo_workspaces" / "demo-delete").is_dir())
+                        self.assertTrue((root / "competitions" / "demo-delete").is_dir())
+
+                        result = cli_app.delete_experiment("demo-delete")
+
+                        self.assertTrue(result["ok"])
+                        self.assertFalse((root / "demo_workspaces" / "demo-delete").exists())
+                        self.assertFalse((root / "competitions" / "demo-delete").exists())
+                        from kaggle_research_agent.state_db import list_competitions
+
+                        remaining_ids = [row["competition_id"] for row in list_competitions(db_path)]
+                        self.assertNotIn("demo-delete", remaining_ids)
+                        self.assertNotEqual("demo-delete", cli_app.selected_competition())
+
+    def test_delete_experiment_keeps_external_source_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            external = Path(tmp) / "outside_project"
+            external.mkdir()
+            (external / "keep.txt").write_text("keep me", encoding="utf-8")
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+                    with patch.dict("os.environ", {"RESEARCH_AGENT_RUNTIME_DIR": str(root / "_runtime")}):
+                        db_path = initialize_state_db()
+                        upsert_competition({"competition_id": "demo-external", "platform": "kaggle"}, db_path)
+                        cli_app.prepare_workspace(
+                            "demo-external",
+                            topic="Demo External",
+                            platform="kaggle",
+                            source_path=str(external),
+                            create_workspace=False,
+                        )
+
+                        cli_app.delete_experiment("demo-external")
+
+            self.assertTrue(external.is_dir())
+            self.assertTrue((external / "keep.txt").exists())
+
+    def test_delete_experiment_clears_matching_stale_loop_state(self):
+        # Real bug: auto_loop_state.json is a single global file, not
+        # namespaced per competition. Deleting and re-registering an
+        # experiment under the same id (numeric DACON ids are especially
+        # prone to reuse) left the old run's failure status/next_trial
+        # showing up immediately on the freshly re-registered experiment.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+                    with patch.dict("os.environ", {"RESEARCH_AGENT_RUNTIME_DIR": str(root / "_runtime")}):
+                        db_path = initialize_state_db()
+                        upsert_competition({"competition_id": "236716", "platform": "dacon"}, db_path)
+                        cli_app.prepare_workspace(
+                            "236716",
+                            topic="Demo",
+                            platform="dacon",
+                            create_workspace=True,
+                        )
+                        cli_app.save_json_atomic(
+                            cli_app.loop_state_path(),
+                            {
+                                "competition": "236716",
+                                "status": "failed",
+                                "error": "blocked_missing_result_cycle",
+                                "next_trial": "trial_002",
+                            },
+                        )
+                        cli_app.pause_request_path().parent.mkdir(parents=True, exist_ok=True)
+                        cli_app.pause_request_path().write_text("requested\n", encoding="utf-8")
+
+                        cli_app.delete_experiment("236716")
+
+                        self.assertFalse(cli_app.loop_state_path().exists())
+                        self.assertFalse(cli_app.pause_request_path().exists())
+
+    def test_delete_experiment_keeps_unrelated_loop_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+                    with patch.dict("os.environ", {"RESEARCH_AGENT_RUNTIME_DIR": str(root / "_runtime")}):
+                        db_path = initialize_state_db()
+                        upsert_competition({"competition_id": "demo-delete", "platform": "dacon"}, db_path)
+                        cli_app.prepare_workspace(
+                            "demo-delete",
+                            topic="Demo Delete",
+                            platform="dacon",
+                            create_workspace=True,
+                        )
+                        cli_app.save_json_atomic(
+                            cli_app.loop_state_path(),
+                            {"competition": "some-other-experiment", "status": "running"},
+                        )
+
+                        cli_app.delete_experiment("demo-delete")
+
+                        self.assertTrue(cli_app.loop_state_path().exists())
+                        self.assertEqual(
+                            "some-other-experiment",
+                            cli_app.load_json(cli_app.loop_state_path()).get("competition"),
+                        )
+
+
+class DaconSubmissionLimitTest(unittest.TestCase):
+    def test_check_uses_manual_override_without_hitting_the_network(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+                    from kaggle_research_agent import simple_yaml
+
+                    profile_path = root / "competitions" / "demo" / "execution_profile.yaml"
+                    profile_path.parent.mkdir(parents=True)
+                    simple_yaml.dump(
+                        {"dacon_competition_id": "236716", "dacon_daily_submission_limit": 3},
+                        profile_path,
+                    )
+
+                    with patch(
+                        "kaggle_research_agent.cli_app.dacon_api.fetch_daily_submission_limit",
+                        side_effect=AssertionError("should not fetch when a manual override is set"),
+                    ):
+                        result = cli_app.check_dacon_submission_limit("demo")
+
+            self.assertEqual("manual_override", result["status"])
+            self.assertEqual(3, result["daily_submission_limit"])
+
+    def test_check_falls_back_to_live_fetch_without_an_override(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+                    from kaggle_research_agent import simple_yaml
+
+                    profile_path = root / "competitions" / "demo" / "execution_profile.yaml"
+                    profile_path.parent.mkdir(parents=True)
+                    simple_yaml.dump({"dacon_competition_id": "236716"}, profile_path)
+
+                    with patch(
+                        "kaggle_research_agent.cli_app.dacon_api.fetch_daily_submission_limit",
+                        return_value={"ok": True, "status": "found", "daily_submission_limit": 5},
+                    ):
+                        result = cli_app.check_dacon_submission_limit("demo")
+
+            self.assertEqual("auto_detected", result["status"])
+            self.assertEqual(5, result["daily_submission_limit"])
+
+    def test_check_reports_unknown_when_rules_page_has_no_stated_limit(self):
+        # A miss must surface as "unknown", not silently be treated as "no
+        # limit" -- that distinction is what tells the user a manual
+        # override is worth setting.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+                    from kaggle_research_agent import simple_yaml
+
+                    profile_path = root / "competitions" / "demo" / "execution_profile.yaml"
+                    profile_path.parent.mkdir(parents=True)
+                    simple_yaml.dump({"dacon_competition_id": "236716"}, profile_path)
+
+                    with patch(
+                        "kaggle_research_agent.cli_app.dacon_api.fetch_daily_submission_limit",
+                        return_value={"ok": False, "status": "not_found", "error": "..."},
+                    ):
+                        result = cli_app.check_dacon_submission_limit("demo")
+
+            self.assertEqual("unknown", result["status"])
+            self.assertIsNone(result["daily_submission_limit"])
+
+    def test_set_override_writes_and_clear_removes_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+                    from kaggle_research_agent import simple_yaml
+
+                    profile_path = root / "competitions" / "demo" / "execution_profile.yaml"
+                    profile_path.parent.mkdir(parents=True)
+                    simple_yaml.dump({"dacon_competition_id": "236716"}, profile_path)
+
+                    cli_app.set_dacon_submission_limit_override("demo", 7)
+                    written = simple_yaml.load(profile_path, default={})
+                    self.assertEqual(7, written["dacon_daily_submission_limit"])
+
+                    cli_app.set_dacon_submission_limit_override("demo", None)
+                    cleared = simple_yaml.load(profile_path, default={})
+                    self.assertNotIn("dacon_daily_submission_limit", cleared)
 
 
 if __name__ == "__main__":

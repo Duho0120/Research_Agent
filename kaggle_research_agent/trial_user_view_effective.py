@@ -4,14 +4,23 @@ import json
 from pathlib import Path
 from typing import Any
 
+from .execution_facts import resolve_trial_plan
 
-def render_effective_user_plan(out_dir: Path, summary: dict[str, Any]) -> str:
-    plan = _read_trial_json(out_dir, "demo_experiment_plan.json")
-    delta = _read_json(out_dir / "delta_plan.json")
+
+def render_effective_user_plan(
+    out_dir: Path,
+    summary: dict[str, Any],
+    *,
+    plan: dict[str, Any] | None = None,
+) -> str:
+    if plan is None:
+        plan = resolve_trial_plan(str(summary["competition"]), str(summary["trial_id"]))
+    delta = plan if plan.get("source_trial_id") else {}
     source = plan.get("source_trial_id") or delta.get("source_trial_id")
     axis = plan.get("primary_change_axis") or delta.get("primary_change_axis") or "baseline"
     delta_candidate = delta.get("candidate") if isinstance(delta.get("candidate"), dict) else {}
-    title = plan.get("plan_title") or summary.get("plan_title") or delta_candidate.get("description") or delta_candidate.get("name") or "-"
+    raw_title = plan.get("plan_title") or summary.get("plan_title") or delta_candidate.get("name") or "-"
+    title = _user_plan_title(axis, source, raw_title)
     lines = [
         f"# {summary['trial_id']} 실험 계획",
         "",
@@ -50,7 +59,7 @@ def render_effective_user_plan(out_dir: Path, summary: dict[str, Any]) -> str:
         candidate = delta.get("candidate") if isinstance(delta.get("candidate"), dict) else {}
         lines.extend(["## 이번 회차 변경", "", f"- 후보: `{candidate.get('name') or title}`"])
         if candidate.get("description"):
-            lines.append(f"- 설명: {candidate['description']}")
+            lines.append(f"- 구현 메모: {candidate['description']}")
         lines.extend(f"- {item}" for item in _items(delta.get("change_details") or plan.get("change_details")))
         lines.extend(["", "## 그대로 유지", ""])
         lines.extend(
@@ -125,19 +134,37 @@ def render_effective_pipeline_structure(out_dir: Path, summary: dict[str, Any]) 
         if locations:
             lines.append("- 관련 코드: " + ", ".join(f"`{item}`" for item in locations))
         lines.append("")
-    lines.extend(
-        [
-            "## 재현 명령",
-            "",
-            "```bat",
-            "python test_step.py",
-            "python train_step.py",
-            "python predict_step.py",
-            "```",
-            "",
-        ]
-    )
+    lines.extend(["## 재현 명령", "", "```bat"])
+    lines.extend(_execution_commands(summary) or ["재현 명령을 execution profile에서 확인하지 못했습니다."])
+    lines.extend(["```", ""])
     return "\n".join(lines)
+
+
+def _user_plan_title(axis: str, source: Any, raw_title: Any) -> str:
+    if source:
+        return f"{axis or '단일 개선축'} 개선 실험"
+    if axis and axis != "baseline":
+        return f"{axis} 초기 실험"
+    return "재현 가능한 초기 baseline 구축"
+
+
+def _execution_commands(summary: dict[str, Any]) -> list[str]:
+    commands = summary.get("execution_commands")
+    if not isinstance(commands, dict):
+        return []
+    python = str(summary.get("python") or "python")
+    result: list[str] = []
+    for stage in ("test", "train", "predict"):
+        values = commands.get(stage)
+        if isinstance(values, str):
+            values = [values]
+        if not isinstance(values, list):
+            continue
+        for value in values:
+            command = str(value).replace("{python}", f'"{python}"' if " " in python else python)
+            if command and command not in result:
+                result.append(command)
+    return result
 
 
 def _stage_name(stage_id: str) -> str:
@@ -268,7 +295,7 @@ def _success_text(value: str) -> str:
     if "validation accuracy" in lowered and "accuracy key" in lowered:
         return "검증 정확도가 `accuracy` 계열 키로 기록됩니다."
     if "submission.csv" in lowered and "passengerid" in lowered and "survived" in lowered:
-        return "`submission.csv`에 `PassengerId`, `Survived` 컬럼과 테스트 데이터와 같은 행 수가 기록됩니다."
+        return "`submission.csv`에 설정된 ID·예측 컬럼과 테스트 데이터와 같은 행 수가 기록됩니다."
     if "pipeline_summary.json" in lowered:
         return "`outputs/pipeline_summary.json`에 피처, 전처리, 모델, 분할과 seed가 기록됩니다."
     return value

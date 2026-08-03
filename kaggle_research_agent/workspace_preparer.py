@@ -113,6 +113,23 @@ def prepare_workspace(
     }
 
 
+def refresh_workspace_inventory(competition: str, source: Path) -> dict[str, Any]:
+    """Recompute and persist workspace_inventory.json for an existing
+    registered experiment.
+
+    prepare_workspace() only builds this inventory once, at registration
+    time -- if data files are uploaded afterward (e.g. via the data-upload
+    endpoint), the cached inventory still shows the pre-upload, data-less
+    workspace unless this is called to refresh it. Planning/coding context
+    (demo_one_cycle.load_demo_context) reads the cached file, not a live
+    scan, so a stale inventory here silently hides uploaded data from the
+    agent.
+    """
+    inventory = _inspect_source(source)
+    _write_inventory(competition, inventory)
+    return inventory
+
+
 def _workspace_scaffold_path(competition: str, *, source_path: str | None, workspace_root: str | None) -> Path:
     if source_path:
         return Path(source_path).expanduser().resolve()
@@ -512,6 +529,7 @@ def _baseline_script() -> str:
 
 import csv
 import json
+import math
 from collections import Counter
 from pathlib import Path
 
@@ -534,6 +552,42 @@ def check_required_data() -> None:
         raise FileNotFoundError("Missing data files in data/: " + ", ".join(missing))
 
 
+def _to_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _task_kind(config: dict, labels: list[str]) -> str:
+    metric = str(config.get("metric") or "").strip().casefold().replace("-", "_")
+    if metric in {"rmse", "rmsle", "mae", "mse", "mean_squared_error", "mean_absolute_error"}:
+        return "regression"
+    if metric in {"accuracy", "f1", "roc_auc", "auc", "log_loss", "logloss"}:
+        return "classification"
+    numeric = [_to_float(value) for value in labels]
+    if numeric and all(value is not None for value in numeric) and config.get("objective") == "minimize":
+        return "regression"
+    return "classification"
+
+
+def _regression_score(metric: str, actual: list[float], prediction: float) -> float:
+    if not actual:
+        return 0.0
+    errors = [value - prediction for value in actual]
+    normalized = metric.strip().casefold().replace("-", "_")
+    if normalized == "mae" or normalized == "mean_absolute_error":
+        return sum(abs(value) for value in errors) / len(errors)
+    if normalized == "mse" or normalized == "mean_squared_error":
+        return sum(value * value for value in errors) / len(errors)
+    if normalized == "rmsle":
+        predicted_log = math.log1p(max(0.0, prediction))
+        return math.sqrt(
+            sum((math.log1p(max(0.0, value)) - predicted_log) ** 2 for value in actual) / len(actual)
+        )
+    return math.sqrt(sum(value * value for value in errors) / len(errors))
+
+
 def train() -> dict:
     check_required_data()
     config = load_config()
@@ -553,14 +607,31 @@ def train() -> dict:
     labels = [row[target] for row in train_rows if row.get(target) not in {None, ""}]
     if not labels:
         raise ValueError(f"No labels found in target column {target!r}")
-    prediction = Counter(labels).most_common(1)[0][0]
-    correct = sum(1 for row in valid_rows if row.get(target) == prediction)
-    score = correct / len(valid_rows) if valid_rows else 0.0
+    task_kind = _task_kind(config, labels)
+    metric = str(config.get("metric") or "unknown")
+    if task_kind == "regression":
+        numeric_labels = [value for value in (_to_float(item) for item in labels) if value is not None]
+        if not numeric_labels:
+            raise ValueError(f"Regression target {target!r} does not contain numeric labels.")
+        prediction = sum(numeric_labels) / len(numeric_labels)
+        valid_labels = [
+            value
+            for value in (_to_float(row.get(target)) for row in valid_rows)
+            if value is not None
+        ]
+        score = _regression_score(metric, valid_labels, prediction)
+        strategy = "mean_regression"
+    else:
+        prediction = Counter(labels).most_common(1)[0][0]
+        correct = sum(1 for row in valid_rows if row.get(target) == prediction)
+        score = correct / len(valid_rows) if valid_rows else 0.0
+        strategy = "majority_class"
 
     outputs = ROOT / "outputs"
     outputs.mkdir(exist_ok=True)
     model = {
-        "strategy": "majority_class",
+        "strategy": strategy,
+        "task_kind": task_kind,
         "prediction": prediction,
         "target_column": target,
         "id_column": config.get("id_column"),
@@ -568,11 +639,12 @@ def train() -> dict:
     }
     metrics = {
         "cv_score": score,
-        "metric": config.get("metric", "accuracy"),
+        "metric": metric,
         "objective": config.get("objective", "maximize"),
         "train_rows": len(train_rows),
         "validation_rows": len(valid_rows),
-        "strategy": "majority_class",
+        "strategy": strategy,
+        "model_type": "MeanRegressor" if task_kind == "regression" else "MajorityClassClassifier",
     }
     (outputs / "model.json").write_text(json.dumps(model, indent=2) + "\n", encoding="utf-8")
     (outputs / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")

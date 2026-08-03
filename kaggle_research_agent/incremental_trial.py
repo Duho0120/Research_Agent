@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .code_snapshot import load_trial_code_snapshot
+from .execution_facts import resolve_trial_plan
 from .paths import trial_dir
 from .store import write_text
 
@@ -131,8 +132,8 @@ def write_effective_trial_artifacts(
     pipeline_structure: dict[str, Any],
 ) -> dict[str, str]:
     out_dir = trial_dir(competition, trial_id)
-    plan = _read_trial_json(out_dir, "demo_experiment_plan.json")
     handoff = _read_trial_json(out_dir, "workspace_coding_handoff.json")
+    plan = resolve_trial_plan(competition, trial_id)
     if not plan:
         plan = _legacy_plan_from_artifacts(out_dir, handoff)
     source_trial_id = str(
@@ -145,7 +146,7 @@ def write_effective_trial_artifacts(
     if source_trial_id and not plan.get("source_trial_id"):
         plan["source_trial_id"] = source_trial_id
     base_effective = _load_base_effective_plan(competition, source_trial_id)
-    delta = _read_json(out_dir / "delta_plan.json")
+    delta = _delta_from_plan(plan) if source_trial_id else {}
     if delta and not delta.get("schema_version"):
         delta = dict(delta)
         delta["affected_stages"] = []
@@ -293,6 +294,7 @@ def _delta_from_plan(plan: dict[str, Any]) -> dict[str, Any]:
             "candidate",
             "change_details",
             "keep_unchanged",
+            "code_change_targets",
             "affected_stages",
             "required_code_symbols",
             "expected_metadata_changes",

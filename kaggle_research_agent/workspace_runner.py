@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import csv
 import json
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -44,12 +46,21 @@ def run_workspace_pipeline(
         result["status"] = "blocked"
         result["next_action"] = "fix-execution-profile"
     elif run_now:
+        run_started_at = time.time()
         _execute_commands(result, profile)
         if result["status"] != "failed":
             result["artifacts"] = _inspect_artifacts(profile)
             if _all_artifacts_exist(result["artifacts"]):
-                result["status"] = "completed"
-                result["next_action"] = "collect-metrics"
+                artifact_issues = _validate_artifacts(result["artifacts"]) + _validate_artifact_freshness(
+                    result["artifacts"], run_started_at
+                )
+                if artifact_issues:
+                    result["status"] = "invalid_artifacts"
+                    result["artifact_issues"] = artifact_issues
+                    result["next_action"] = "fix-artifact-output"
+                else:
+                    result["status"] = "completed"
+                    result["next_action"] = "collect-metrics"
             else:
                 result["status"] = "incomplete_artifacts"
                 result["next_action"] = "fix-artifact-output"
@@ -143,6 +154,9 @@ def _inspect_artifacts(profile: dict[str, Any]) -> dict[str, list[dict[str, Any]
                 "size": (project_root / relative_path).stat().st_size
                 if (project_root / relative_path).is_file()
                 else None,
+                "mtime": (project_root / relative_path).stat().st_mtime
+                if (project_root / relative_path).is_file()
+                else None,
             }
             for relative_path in paths
         ]
@@ -156,6 +170,61 @@ def _all_artifacts_exist(artifacts: dict[str, list[dict[str, Any]]]) -> bool:
         for items in artifacts.values()
         for item in items
     )
+
+
+def _validate_artifacts(artifacts: dict[str, list[dict[str, Any]]]) -> list[str]:
+    issues: list[str] = []
+    invalid_numeric_tokens = {"nan", "+nan", "-nan", "inf", "+inf", "-inf", "infinity", "+infinity", "-infinity"}
+    for item in artifacts.get("submission", []):
+        path = Path(str(item.get("absolute_path") or ""))
+        if not path.is_file():
+            continue
+        try:
+            with path.open("r", encoding="utf-8-sig", newline="") as handle:
+                rows = csv.reader(handle)
+                header = next(rows, None)
+                if not header:
+                    issues.append(f"submission_missing_header:{path.name}")
+                    continue
+                for row_number, row in enumerate(rows, start=2):
+                    if len(row) != len(header):
+                        issues.append(f"submission_column_count_mismatch:{path.name}:row_{row_number}")
+                        break
+                    for column, value in zip(header, row):
+                        if str(value).strip().casefold() in invalid_numeric_tokens:
+                            issues.append(
+                                f"submission_non_finite_value:{path.name}:row_{row_number}:{column}"
+                            )
+                            break
+                    if issues:
+                        break
+        except (OSError, UnicodeError, csv.Error) as error:
+            issues.append(f"submission_unreadable:{path.name}:{type(error).__name__}")
+    return issues
+
+
+def _validate_artifact_freshness(
+    artifacts: dict[str, list[dict[str, Any]]], run_started_at: float
+) -> list[str]:
+    """Reject an artifact that predates this run's commands.
+
+    Real incident: predict/train/test scripts wrote their results under a
+    different file name (e.g. "outputs/metrics_local.json" instead of the
+    declared "outputs/metrics.json") while leaving the previously declared
+    artifact untouched. Every command reported returncode 0 and the file
+    existed and parsed fine -- it was just leftover from an earlier trial --
+    so the pipeline kept reporting that trial's stale score as if it were a
+    fresh result, run after run, with no error anywhere. A one-second buffer
+    absorbs filesystem mtime rounding, not clock drift between machines.
+    """
+    issues: list[str] = []
+    cutoff = run_started_at - 1.0
+    for items in artifacts.values():
+        for item in items:
+            mtime = item.get("mtime")
+            if item.get("exists") and isinstance(mtime, (int, float)) and mtime < cutoff:
+                issues.append(f"stale_artifact_not_regenerated_this_run:{Path(str(item.get('path'))).name}")
+    return issues
 
 
 def _write_result(result: dict[str, Any]) -> None:

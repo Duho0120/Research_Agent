@@ -1,5 +1,7 @@
+import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -146,6 +148,116 @@ class WorkspaceRunnerTest(unittest.TestCase):
             self.assertEqual("fix-artifact-output", result["next_action"])
             self.assertFalse(result["artifacts"]["metrics"][0]["exists"])
             self.assertFalse(result["artifacts"]["submission"][0]["exists"])
+
+    def test_non_finite_submission_is_rejected_before_submission_stage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            project = Path(tmp) / "project"
+            root.mkdir()
+            project.mkdir()
+            (project / "train.py").write_text(
+                "from pathlib import Path\n"
+                "Path('outputs').mkdir(exist_ok=True)\n"
+                "Path('outputs/metrics.json').write_text('{}\\n')\n",
+                encoding="utf-8",
+            )
+            (project / "predict.py").write_text(
+                "from pathlib import Path\n"
+                "Path('outputs/submission.csv').write_text('id,target\\n1,inf\\n')\n",
+                encoding="utf-8",
+            )
+            self._write_profile(
+                root,
+                project,
+                train_commands=["{python} train.py"],
+                predict_commands=["{python} predict.py"],
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = run_workspace_pipeline("demo", "trial_007", run_now=True)
+
+            self.assertEqual("invalid_artifacts", result["status"])
+            self.assertEqual("fix-artifact-output", result["next_action"])
+            self.assertIn("submission_non_finite_value", result["artifact_issues"][0])
+
+    def test_stale_leftover_artifact_is_rejected_even_though_commands_succeeded(self):
+        # Real incident: predict/train step wrote their real output under a
+        # different file name than the declared artifact, leaving the
+        # declared outputs/metrics.json and outputs/submission.csv untouched
+        # from an earlier trial. Every command returned 0 and the declared
+        # files existed and parsed fine, so nothing before this check caught
+        # it -- the trial kept reporting that earlier trial's stale score as
+        # if it were fresh, run after run.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            project = Path(tmp) / "project"
+            root.mkdir()
+            project.mkdir()
+            (project / "outputs").mkdir()
+            (project / "outputs" / "metrics.json").write_text('{"cv_score": 0.591}\n', encoding="utf-8")
+            (project / "outputs" / "submission.csv").write_text("id,x,y,z\n1,0,0,0\n", encoding="utf-8")
+            long_ago = time.time() - 3600
+            os.utime(project / "outputs" / "metrics.json", (long_ago, long_ago))
+            os.utime(project / "outputs" / "submission.csv", (long_ago, long_ago))
+            (project / "train_step.py").write_text(
+                # Writes real output under a different name, never touching
+                # the declared outputs/metrics.json.
+                "from pathlib import Path\nPath('outputs/metrics_local.json').write_text('{}\\n')\n",
+                encoding="utf-8",
+            )
+            (project / "predict_step.py").write_text(
+                "from pathlib import Path\nPath('outputs/submission_local.csv').write_text('id,x,y,z\\n')\n",
+                encoding="utf-8",
+            )
+            self._write_profile(
+                root,
+                project,
+                train_commands=["{python} train_step.py"],
+                predict_commands=["{python} predict_step.py"],
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = run_workspace_pipeline("demo", "trial_008", run_now=True)
+
+            self.assertEqual("invalid_artifacts", result["status"])
+            self.assertEqual("fix-artifact-output", result["next_action"])
+            self.assertTrue(
+                any("stale_artifact_not_regenerated_this_run:metrics.json" in issue for issue in result["artifact_issues"])
+            )
+            self.assertTrue(
+                any(
+                    "stale_artifact_not_regenerated_this_run:submission.csv" in issue
+                    for issue in result["artifact_issues"]
+                )
+            )
+
+    def test_freshly_regenerated_artifact_is_not_flagged_stale(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            project = Path(tmp) / "project"
+            root.mkdir()
+            project.mkdir()
+            (project / "train_step.py").write_text(
+                "from pathlib import Path\n"
+                "Path('outputs').mkdir(exist_ok=True)\n"
+                "Path('outputs/metrics.json').write_text('{}\\n')\n",
+                encoding="utf-8",
+            )
+            (project / "predict_step.py").write_text(
+                "from pathlib import Path\nPath('outputs/submission.csv').write_text('id,target\\n')\n",
+                encoding="utf-8",
+            )
+            self._write_profile(
+                root,
+                project,
+                train_commands=["{python} train_step.py"],
+                predict_commands=["{python} predict_step.py"],
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = run_workspace_pipeline("demo", "trial_009", run_now=True)
+
+            self.assertEqual("completed", result["status"])
 
     def test_cli_runs_workspace_pipeline_with_explicit_approval(self):
         with tempfile.TemporaryDirectory() as tmp:

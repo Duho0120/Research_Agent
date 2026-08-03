@@ -20,6 +20,7 @@ low_cost:
     - user_summary_card
     - experiment_question
     - user_insight_interpretation
+    - plan_translation
 fallback:
   provider: openai
   api: responses

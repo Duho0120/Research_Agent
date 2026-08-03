@@ -12,7 +12,12 @@ from .trial_decision import load_latest_decision_context
 from .user_insight_policy import build_next_trial_user_insight_override
 
 
-CONTINUABLE_STATUSES = {"completed", "completed_review_deferred", "already_processed"}
+CONTINUABLE_STATUSES = {
+    "completed",
+    "completed_feedback_applied",
+    "completed_review_deferred",
+    "already_processed",
+}
 
 
 def plan_next_workspace_trial(

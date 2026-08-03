@@ -20,6 +20,34 @@ from kaggle_research_agent.state_db_sync import sync_state_db
 
 
 class StateDbSyncTest(unittest.TestCase):
+    def test_sync_state_db_reads_topic_from_competition_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            db_path = root / "memory" / "research_agent.sqlite3"
+            _write_demo_competition_tree(root)
+            workspace_config = root / "demo_workspaces" / "demo" / "workspace_config.json"
+            config = json.loads(workspace_config.read_text(encoding="utf-8"))
+            config.pop("topic", None)
+            _write_json(workspace_config, config)
+            (root / "competitions" / "demo" / "state.yaml").write_text(
+                "\n".join(
+                    [
+                        "competition:",
+                        "  name: demo",
+                        "  topic: Bike Sharing Demand",
+                        "  metric: rmsle",
+                        "  objective: minimize",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                sync_state_db("demo", db_path=db_path)
+
+            self.assertEqual("Bike Sharing Demand", list_competitions(db_path)[0]["topic"])
+
     def test_sync_state_db_imports_file_based_trial_records(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

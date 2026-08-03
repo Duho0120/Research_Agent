@@ -126,6 +126,10 @@ def diagnose_trial(competition: str, trial_id: str) -> dict[str, Any]:
     best = state.get("current_state", {}).get("best_trial")
     best_score = _best_score_before_trial(best, trial_id, "cv_score")
     best_lb_score = _best_score_before_trial(best, trial_id, "lb_score")
+    if best_score is None:
+        best_score = _best_recent_score(recent, "cv_score", objective)
+    if best_lb_score is None:
+        best_lb_score = _best_recent_score(recent, "lb_score", objective)
     cv_score = metrics.get("cv_score")
     lb_score = metrics.get("lb_score")
     corr = metrics.get("prediction_correlation_with_best")
@@ -191,6 +195,16 @@ def diagnose_trial(competition: str, trial_id: str) -> dict[str, Any]:
         "user_questions": user_questions,
         "needs_user_review": needs_user_review,
         "strategy_recommendation": strategy_recommendation,
+        "consecutive_failures": consecutive_failures,
+        "segment_errors": metrics.get("segment_errors") or {},
+        "overall_error_rate": metrics.get("overall_error_rate"),
+        "leakage_warning": bool(metrics.get("leakage_warning")),
+        "leakage_features": (
+            metrics.get("leakage_features")
+            or metrics.get("suspected_leakage_features")
+            or []
+        ),
+        "representative_error_cases": metrics.get("representative_error_cases") or [],
         "recent_trial_count": len(recent),
     }
     write_text(out_dir / "diagnosis.md", render_diagnosis(result))
@@ -210,6 +224,19 @@ def _best_score_before_trial(best: Any, trial_id: str, score_key: str) -> float 
         return None
     value = best.get(score_key)
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _best_recent_score(recent: list[dict[str, Any]], score_key: str, objective: str) -> float | None:
+    values = [
+        row.get(score_key)
+        for row in recent
+        if isinstance(row, dict)
+        and isinstance(row.get(score_key), (int, float))
+        and not isinstance(row.get(score_key), bool)
+    ]
+    if not values:
+        return None
+    return min(values) if objective == "minimize" else max(values)
 
 
 def _direction_conflict(

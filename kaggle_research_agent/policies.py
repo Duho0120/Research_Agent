@@ -13,8 +13,8 @@ DEFAULT_LOW_COST_MODEL = "gpt-5.6-luna"
 
 DEFAULT_POLICIES: dict[str, dict[str, Any]] = {
     "token_policy": {
-        "max_llm_calls_per_trial": 4,
-        "max_strategy_calls_per_day": 20,
+        "max_llm_calls_per_trial": 10,
+        "max_strategy_calls_per_day": None,
         "summarize_logs_before_llm": True,
         "use_rules_before_llm": True,
         "avoid_raw_training_logs_in_prompt": True,
@@ -47,6 +47,7 @@ DEFAULT_POLICIES: dict[str, dict[str, Any]] = {
             "missing_file": ["No such file", "FileNotFoundError"],
             "missing_dependency": ["ModuleNotFoundError", "ImportError"],
             "permission_error": ["PermissionError", "Access is denied"],
+            "artifact_serialization": ["is not JSON serializable", "Object of type"],
         },
     },
     "human_review_policy": {

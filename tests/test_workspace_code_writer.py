@@ -7,7 +7,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from kaggle_research_agent.cli import main
-from kaggle_research_agent.workspace_code_writer import run_workspace_code_writer, validate_workspace_coding_result
+from kaggle_research_agent.workspace_code_writer import (
+    _normalize_coding_result,
+    _validate_predict_test_sync,
+    run_workspace_code_writer,
+    validate_workspace_coding_result,
+)
 
 
 class FakeWorkspaceCodeWriterClient:
@@ -21,6 +26,22 @@ class FakeWorkspaceCodeWriterClient:
 
 
 class WorkspaceCodeWriterTest(unittest.TestCase):
+    def test_normalize_coding_result_keeps_string_blocking_issue_as_one_item(self):
+        result = _normalize_coding_result(
+            {
+                "status": "blocked",
+                "blocking_issues": "authoritative base snapshot does not include train_step.py",
+            },
+            "demo",
+            "trial_002",
+            {"request_id": "demo:trial_002"},
+        )
+
+        self.assertEqual(
+            ["authoritative base snapshot does not include train_step.py"],
+            result["blocking_issues"],
+        )
+
     def test_run_workspace_code_writer_applies_allowed_external_update_and_validates(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -84,6 +105,12 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
             self.assertTrue((trial / "workspace_coding_api_request.json").exists())
             self.assertTrue((trial / "workspace_coding_api_response.json").exists())
             self.assertTrue((trial / "workspace_coding_result_validation.json").exists())
+            execution_plan = json.loads(
+                (trial / "internal" / "execution_plan_snapshot.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual("finalized", execution_plan["status"])
+            self.assertEqual("trial_002", execution_plan["plan"]["trial_id"])
+            self.assertIn("Improve model feature", execution_plan["plan_markdown"])
             usage = json.loads((root / "memory" / "demo" / "token_usage.jsonl").read_text(encoding="utf-8").strip())
             self.assertEqual("workspace_code_writing", usage["call_type"])
 
@@ -222,6 +249,226 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
             self.assertIn("changed_file_not_allowed:data/train.csv", result["issues"])
             self.assertIn("forbidden_path_touched:data/train.csv", result["issues"])
 
+    def test_validate_workspace_coding_result_blocks_fabricated_data_fallback_in_file_update(self):
+        # Real incident: a code writer, unable to find the conventional
+        # data/train.csv, silently invented a `_synthesize_train()` fallback
+        # instead of reading the real (differently-shaped) data the
+        # workspace actually had, producing a fake-but-plausible metric.
+        # This must be caught regardless of which competition/file layout
+        # triggered it -- the check is on the generated code text itself.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_handoff(root, project)
+            trial = root / "experiments" / "demo" / "trial_002"
+            (trial / "workspace_coding_result.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "summary": "Added training script.",
+                        "changed_files": ["train.py"],
+                        "file_updates": [
+                            {
+                                "path": "train.py",
+                                "content": (
+                                    "def _synthesize_train(n=64):\n"
+                                    "    return [{'id': f'syn_{i}'} for i in range(n)]\n"
+                                ),
+                            }
+                        ],
+                        "validation_results": [],
+                        "blocking_issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = validate_workspace_coding_result("demo", "trial_002")
+
+            self.assertEqual("blocked", result["status"])
+            self.assertIn("possible_fabricated_data_fallback:synthesize_train", result["issues"])
+
+    def test_validate_workspace_coding_result_blocks_fabricated_data_fallback_in_patch_update(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_handoff(root, project)
+            trial = root / "experiments" / "demo" / "trial_002"
+            (trial / "workspace_coding_result.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "summary": "Patched training script.",
+                        "changed_files": ["train.py"],
+                        "patch_updates": [
+                            {
+                                "path": "train.py",
+                                "find": "rows = read_csv(train_path)",
+                                "replace": "rows = generate_dummy_rows(64)",
+                            }
+                        ],
+                        "validation_results": [],
+                        "blocking_issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = validate_workspace_coding_result("demo", "trial_002")
+
+            self.assertEqual("blocked", result["status"])
+            self.assertIn("possible_fabricated_data_fallback:generate_dummy", result["issues"])
+
+    def test_validate_workspace_coding_result_blocks_generate_synthetic_data_fallback(self):
+        # Real incident (DACON competition 236716, per-sample-file dataset
+        # layout): unable to handle the more complex real data shape, the
+        # code writer generated a `_generate_synthetic()` fallback that
+        # trained/scored entirely on np.random noise, and separately wrote
+        # its output under a different file name than the declared artifact
+        # ("avoid reserved filename"), leaving the real declared metrics.json
+        # untouched. The original marker list only caught a handful of exact
+        # names (synthesize_train, fake_data, ...) and missed this shape
+        # entirely.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_handoff(root, project)
+            trial = root / "experiments" / "demo" / "trial_002"
+            (trial / "workspace_coding_result.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "summary": "Added training script.",
+                        "changed_files": ["train_step.py"],
+                        "file_updates": [
+                            {
+                                "path": "train_step.py",
+                                "content": (
+                                    "def _generate_synthetic(n_samples=800, seed=42):\n"
+                                    "    # Fallback to synthetic wide+targets for this demo baseline\n"
+                                    "    rng = np.random.default_rng(seed)\n"
+                                    "    return rng.normal(size=(n_samples, 3))\n"
+                                    "\n"
+                                    "# Save local metrics (avoid reserved filename)\n"
+                                    "(outputs / 'metrics_local.json').write_text(...)\n"
+                                ),
+                            }
+                        ],
+                        "validation_results": [],
+                        "blocking_issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = validate_workspace_coding_result("demo", "trial_002")
+
+            self.assertEqual("blocked", result["status"])
+            self.assertIn("possible_fabricated_data_fallback:generate_synthetic", result["issues"])
+            self.assertIn("possible_fabricated_data_fallback:reserved filename", result["issues"])
+
+    def test_validate_predict_test_sync_blocks_predict_change_left_alone(self):
+        # Real incident: predict_step.py's prediction algorithm changed but
+        # test_step.py (which independently reimplements the same formula
+        # for local validation) did not, so the local CV score kept
+        # reporting the OLD algorithm's result while the real submission
+        # used the NEW one. A prompt instruction alone missed this on a
+        # second isolated run of the same scenario, so this mechanical
+        # check is the actual backstop.
+        handoff = {
+            "predict_commands": ["{python} predict_step.py"],
+            "validation_commands": ["{python} test_step.py"],
+        }
+        coding_result = {"changed_files": ["predict_step.py"]}
+
+        issues = _validate_predict_test_sync(coding_result, handoff)
+
+        self.assertEqual(["predict_script_changed_without_test_script_sync:predict_step.py"], issues)
+
+    def test_validate_predict_test_sync_allows_both_scripts_changed_together(self):
+        handoff = {
+            "predict_commands": ["{python} predict_step.py"],
+            "validation_commands": ["{python} test_step.py"],
+        }
+        coding_result = {"changed_files": ["predict_step.py", "test_step.py"]}
+
+        self.assertEqual([], _validate_predict_test_sync(coding_result, handoff))
+
+    def test_validate_predict_test_sync_allows_shared_module_refactor(self):
+        # A refactor into a shared module (e.g. src/baseline.py) that both
+        # predict_step.py and test_step.py already call is the intended way
+        # to keep them in sync going forward -- it must not be blocked just
+        # because predict_step.py itself was not touched this trial.
+        handoff = {
+            "predict_commands": ["{python} predict_step.py"],
+            "validation_commands": ["{python} test_step.py"],
+        }
+        coding_result = {"changed_files": ["src/baseline.py"]}
+
+        self.assertEqual([], _validate_predict_test_sync(coding_result, handoff))
+
+    def test_validate_predict_test_sync_ignores_unrelated_changes(self):
+        handoff = {
+            "predict_commands": ["{python} predict_step.py"],
+            "validation_commands": ["{python} test_step.py"],
+        }
+        coding_result = {"changed_files": ["README.md"]}
+
+        self.assertEqual([], _validate_predict_test_sync(coding_result, handoff))
+
+    def test_validate_predict_test_sync_is_a_noop_without_declared_commands(self):
+        coding_result = {"changed_files": ["predict_step.py"]}
+
+        self.assertEqual([], _validate_predict_test_sync(coding_result, {}))
+
+    def test_validate_predict_test_sync_checks_patch_updates_too(self):
+        handoff = {
+            "predict_commands": ["{python} predict_step.py"],
+            "validation_commands": ["{python} test_step.py"],
+        }
+        coding_result = {
+            "patch_updates": [{"path": "predict_step.py", "find": "a", "replace": "b"}],
+        }
+
+        issues = _validate_predict_test_sync(coding_result, handoff)
+
+        self.assertEqual(["predict_script_changed_without_test_script_sync:predict_step.py"], issues)
+
+    def test_validate_workspace_coding_result_blocks_predict_change_without_test_sync(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_handoff(
+                root,
+                project,
+                allowed_write_paths=["src/", "tests/", "predict_step.py", "test_step.py"],
+                predict_commands=["{python} predict_step.py"],
+                validation_commands=["{python} test_step.py"],
+            )
+            trial = root / "experiments" / "demo" / "trial_002"
+            (trial / "workspace_coding_result.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "summary": "Improved prediction algorithm.",
+                        "changed_files": ["predict_step.py"],
+                        "file_updates": [{"path": "predict_step.py", "content": "def predict(): ...\n"}],
+                        "validation_results": [],
+                        "blocking_issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = validate_workspace_coding_result("demo", "trial_002")
+
+            self.assertEqual("blocked", result["status"])
+            self.assertIn("predict_script_changed_without_test_script_sync:predict_step.py", result["issues"])
+
     def test_validate_workspace_coding_result_accepts_validation_results_commands_object(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -290,6 +537,141 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
             self.assertEqual(0, code)
             self.assertEqual("print('updated')\n", (project / "train.py").read_text(encoding="utf-8"))
 
+    def test_patch_is_rejected_when_it_introduces_invalid_python_syntax(self):
+        # Regression: the code writer LLM wrote a JSON literal ("null")
+        # into Python code instead of None. That patch passed every
+        # scope/schema check that existed, got written to disk, ran
+        # partway through train_step.py, and only failed with a bare
+        # NameError mid-execution -- burning a full execution attempt on a
+        # mistake a syntax check would have caught for free.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_handoff(root, project, edit_policy={"mode": "patch_only", "allow_full_file_updates": False})
+            client = FakeWorkspaceCodeWriterClient(
+                {
+                    "output_text": json.dumps(
+                        {
+                            "status": "completed",
+                            "summary": "Add a weights field.",
+                            "changed_files": ["src/model.py"],
+                            "patch_updates": [
+                                {
+                                    "path": "src/model.py",
+                                    "find": "FEATURE_FLAG = False\n",
+                                    "replace": "FEATURE_FLAG = False\nWEIGHTS = null\n",
+                                    "reason": "Record default weights.",
+                                }
+                            ],
+                            "file_updates": [],
+                            "validation_results": [],
+                            "blocking_issues": [],
+                        }
+                    )
+                }
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
+
+            self.assertEqual("blocked", result["status"])
+            coding_result = json.loads(
+                (root / "experiments" / "demo" / "trial_002" / "workspace_coding_result.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertTrue(
+                any("invalid_python_syntax" in item for item in coding_result["blocking_issues"])
+            )
+            self.assertEqual(
+                "FEATURE_FLAG = False\n",
+                (project / "src" / "model.py").read_text(encoding="utf-8"),
+            )
+
+    def test_patch_is_rejected_when_it_introduces_a_real_syntax_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_handoff(root, project, edit_policy={"mode": "patch_only", "allow_full_file_updates": False})
+            client = FakeWorkspaceCodeWriterClient(
+                {
+                    "output_text": json.dumps(
+                        {
+                            "status": "completed",
+                            "summary": "Broken parenthesis.",
+                            "changed_files": ["src/model.py"],
+                            "patch_updates": [
+                                {
+                                    "path": "src/model.py",
+                                    "find": "FEATURE_FLAG = False\n",
+                                    "replace": "FEATURE_FLAG = (False\n",
+                                    "reason": "Oops.",
+                                }
+                            ],
+                            "file_updates": [],
+                            "validation_results": [],
+                            "blocking_issues": [],
+                        }
+                    )
+                }
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
+
+            self.assertEqual("blocked", result["status"])
+            coding_result = json.loads(
+                (root / "experiments" / "demo" / "trial_002" / "workspace_coding_result.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertTrue(
+                any("invalid_python_syntax" in item for item in coding_result["blocking_issues"])
+            )
+            self.assertEqual(
+                "FEATURE_FLAG = False\n",
+                (project / "src" / "model.py").read_text(encoding="utf-8"),
+            )
+
+    def test_full_file_update_is_rejected_when_it_contains_a_json_literal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_handoff(root, project)
+            client = FakeWorkspaceCodeWriterClient(
+                {
+                    "output_text": json.dumps(
+                        {
+                            "status": "completed",
+                            "summary": "Rewrite the model file.",
+                            "changed_files": ["src/model.py"],
+                            "file_updates": [
+                                {"path": "src/model.py", "content": "FEATURE_FLAG = False\nWEIGHTS = null\n"}
+                            ],
+                            "validation_results": [],
+                            "blocking_issues": [],
+                        }
+                    )
+                }
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
+
+            self.assertEqual("blocked", result["status"])
+            coding_result = json.loads(
+                (root / "experiments" / "demo" / "trial_002" / "workspace_coding_result.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertTrue(
+                any("invalid_python_syntax" in item for item in coding_result["blocking_issues"])
+            )
+            self.assertEqual(
+                "FEATURE_FLAG = False\n",
+                (project / "src" / "model.py").read_text(encoding="utf-8"),
+            )
+
     def test_run_workspace_code_writer_applies_patch_updates_in_patch_mode(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -335,6 +717,62 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                     / "src"
                     / "model.py"
                 ).read_text(encoding="utf-8"),
+            )
+
+    def test_patch_batch_is_all_or_nothing_when_one_patch_fails_to_find_its_target(self):
+        # Regression for trial_023: two patches targeted the same file. The
+        # first found its exact text and used to be written to disk
+        # immediately; the second had a whitespace/indentation mismatch and
+        # failed. The overall attempt was correctly marked blocked, but the
+        # first patch's write was never rolled back -- leaving the workspace
+        # file in a state that matched no trial's clean snapshot, so the next
+        # retry's patches (computed against a clean base) kept failing too.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_handoff(root, project, edit_policy={"mode": "patch_only", "allow_full_file_updates": False})
+            client = FakeWorkspaceCodeWriterClient(
+                {
+                    "output_text": json.dumps(
+                        {
+                            "status": "completed",
+                            "summary": "Two patches to the same file; second one has a bad find string.",
+                            "changed_files": ["src/model.py"],
+                            "patch_updates": [
+                                {
+                                    "path": "src/model.py",
+                                    "find": "FEATURE_FLAG = False\n",
+                                    "replace": "FEATURE_FLAG = True\n",
+                                    "reason": "First patch matches exactly.",
+                                },
+                                {
+                                    "path": "src/model.py",
+                                    "find": "    FEATURE_FLAG = True\n",
+                                    "replace": "    FEATURE_FLAG = True  # enabled\n",
+                                    "reason": "Second patch has an indentation mismatch and will not be found.",
+                                },
+                            ],
+                            "file_updates": [],
+                            "validation_results": [],
+                            "blocking_issues": [],
+                        }
+                    )
+                }
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
+
+            self.assertEqual("blocked", result["status"])
+            coding_result = json.loads(
+                (root / "experiments" / "demo" / "trial_002" / "workspace_coding_result.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertIn("patch_find_not_found:src/model.py", coding_result["blocking_issues"])
+            self.assertEqual(
+                "FEATURE_FLAG = False\n",
+                (project / "src" / "model.py").read_text(encoding="utf-8"),
             )
 
     def test_run_workspace_code_writer_restores_base_snapshot_before_patch(self):
@@ -474,6 +912,102 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
             self.assertIn("full_file_update_not_allowed_in_patch_only:src/model.py", result["issues"])
             self.assertEqual("FEATURE_FLAG = False\n", (project / "src" / "model.py").read_text(encoding="utf-8"))
 
+    def test_patch_mode_allows_creating_a_brand_new_file(self):
+        # Regression for trial_030: the plan needed a new helper module, but
+        # patch-only mode rejected every file_update outright. The planner
+        # kept proposing the module and the code writer kept refusing, so the
+        # trial burned its whole LLM budget on retries without writing a line.
+        # A file that does not exist yet overwrites nothing, so creating it is
+        # safe even in patch-only mode.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_handoff(root, project, edit_policy={"mode": "patch_only", "allow_full_file_updates": False})
+            client = FakeWorkspaceCodeWriterClient(
+                {
+                    "output_text": json.dumps(
+                        {
+                            "status": "completed",
+                            "summary": "Add a shared helper module and use it.",
+                            "changed_files": ["src/helpers.py", "src/model.py"],
+                            "patch_updates": [
+                                {
+                                    "path": "src/model.py",
+                                    "find": "FEATURE_FLAG = False\n",
+                                    "replace": "from src.helpers import build\n\nFEATURE_FLAG = True\n",
+                                    "reason": "Use the new helper.",
+                                }
+                            ],
+                            "file_updates": [
+                                {"path": "src/helpers.py", "content": "def build():\n    return 1\n"}
+                            ],
+                            "validation_results": [],
+                            "blocking_issues": [],
+                        }
+                    )
+                }
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
+
+            self.assertEqual("accepted", result["status"])
+            self.assertEqual("def build():\n    return 1\n", (project / "src" / "helpers.py").read_text(encoding="utf-8"))
+            self.assertIn("from src.helpers import build", (project / "src" / "model.py").read_text(encoding="utf-8"))
+
+    def test_patch_mode_still_blocks_rewriting_an_existing_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_handoff(root, project, edit_policy={"mode": "patch_only", "allow_full_file_updates": False})
+            client = FakeWorkspaceCodeWriterClient(
+                {
+                    "output_text": json.dumps(
+                        {
+                            "status": "completed",
+                            "summary": "Rewrite an existing file wholesale.",
+                            "changed_files": ["src/model.py"],
+                            "file_updates": [{"path": "src/model.py", "content": "FEATURE_FLAG = True\n"}],
+                            "validation_results": [],
+                            "blocking_issues": [],
+                        }
+                    )
+                }
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
+
+            self.assertEqual("blocked", result["status"])
+            self.assertIn("full_file_update_not_allowed_in_patch_only:src/model.py", result["issues"])
+            self.assertEqual("FEATURE_FLAG = False\n", (project / "src" / "model.py").read_text(encoding="utf-8"))
+
+    def test_new_file_outside_allowed_paths_is_still_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_handoff(root, project, edit_policy={"mode": "patch_only", "allow_full_file_updates": False})
+            client = FakeWorkspaceCodeWriterClient(
+                {
+                    "output_text": json.dumps(
+                        {
+                            "status": "completed",
+                            "summary": "Create a file outside the write scope.",
+                            "changed_files": ["data/leak.py"],
+                            "file_updates": [{"path": "data/leak.py", "content": "X = 1\n"}],
+                            "validation_results": [],
+                            "blocking_issues": [],
+                        }
+                    )
+                }
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
+
+            self.assertEqual("blocked", result["status"])
+            self.assertFalse((project / "data" / "leak.py").exists())
+
     def test_run_workspace_code_writer_blocks_too_many_patch_updates_in_patch_mode(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -526,6 +1060,9 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
         project: Path,
         edit_policy: dict | None = None,
         source_trial_id: str | None = None,
+        allowed_write_paths: list[str] | None = None,
+        predict_commands: list[str] | None = None,
+        validation_commands: list[str] | None = None,
     ) -> None:
         trial = root / "experiments" / "demo" / "trial_002"
         trial.mkdir(parents=True)
@@ -559,9 +1096,10 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                         "avoid_first_trial": ["gaussian_naive_bayes_for_mixed_numeric_and_categorical_data"],
                     },
                     "edit_policy": edit_policy or {"mode": "full_file_allowed", "allow_full_file_updates": True},
-                    "allowed_write_paths": ["src/", "tests/", "train.py"],
+                    "allowed_write_paths": allowed_write_paths or ["src/", "tests/", "train.py"],
                     "forbidden_paths": ["data/", "outputs/metrics.json", "outputs/submission.csv"],
-                    "validation_commands": ["{python} -m pytest tests -q"],
+                    "validation_commands": validation_commands or ["{python} -m pytest tests -q"],
+                    "predict_commands": predict_commands or [],
                     "artifact_policy": {
                         "save_model": {
                             "default": False,

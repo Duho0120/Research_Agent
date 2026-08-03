@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from ..agents.memory import log_decision
 from ..paths import competition_memory_dir
@@ -225,10 +225,11 @@ def should_call_llm(
         else int(counted_calls.get("strategy_calls_today", 0))
     )
     allowed_reasons = set(policy.get("call_llm_when", []))
-    within_budget = (
-        resolved_trial_calls < int(policy.get("max_llm_calls_per_trial", 4))
-        and resolved_strategy_calls < int(policy.get("max_strategy_calls_per_day", 20))
-    )
+    max_calls_per_trial = policy.get("max_llm_calls_per_trial", 4)
+    max_calls_per_day = policy.get("max_strategy_calls_per_day", 20)
+    within_budget = max_calls_per_trial is None or resolved_trial_calls < int(max_calls_per_trial)
+    if within_budget and max_calls_per_day is not None:
+        within_budget = resolved_strategy_calls < int(max_calls_per_day)
     return {
         "decision": "call_llm" if reason in allowed_reasons and within_budget else "skip_llm",
         "reason": reason,
@@ -292,8 +293,7 @@ def count_llm_calls_from_decision_log(
         return {"trial_llm_calls": 0, "strategy_calls_today": 0, "source": "decision_log"}
 
     current_day = today or datetime.now(timezone.utc).date().isoformat()
-    trial_count = 0
-    today_count = 0
+    rows: list[dict[str, Any]] = []
     for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
         if not line.strip():
             continue
@@ -301,12 +301,13 @@ def count_llm_calls_from_decision_log(
             row = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if not _row_counts_as_llm_call(row):
-            continue
-        if trial_id is not None and row.get("trial_id") == trial_id:
-            trial_count += 1
-        if str(row.get("time", "")).startswith(current_day):
-            today_count += 1
+        rows.append(row)
+    trial_count = _count_llm_call_events(
+        row for row in rows if trial_id is not None and row.get("trial_id") == trial_id
+    )
+    today_count = _count_llm_call_events(
+        row for row in rows if str(row.get("time", "")).startswith(current_day)
+    )
     return {
         "trial_llm_calls": trial_count,
         "strategy_calls_today": today_count,
@@ -316,14 +317,33 @@ def count_llm_calls_from_decision_log(
     }
 
 
-def _row_counts_as_llm_call(row: dict[str, Any]) -> bool:
-    if row.get("decision_type") == "llm_call" and row.get("decision") == "call_llm":
-        return True
-    evidence = row.get("evidence", {})
-    if not isinstance(evidence, dict):
-        return False
-    token_decision = evidence.get("token_decision", {})
-    return isinstance(token_decision, dict) and token_decision.get("decision") == "call_llm"
+def _count_llm_call_events(rows: Iterable[dict[str, Any]]) -> int:
+    """Count API calls once even when the same token decision is logged repeatedly."""
+
+    request_ids: set[str] = set()
+    legacy_outcomes = 0
+    preflight_decisions = 0
+    for row in rows:
+        evidence = row.get("evidence", {})
+        evidence = evidence if isinstance(evidence, dict) else {}
+        token_usage = evidence.get("token_usage", {})
+        token_usage = token_usage if isinstance(token_usage, dict) else {}
+        request_id = str(token_usage.get("request_id") or "").strip()
+        if request_id:
+            request_ids.add(request_id)
+            continue
+
+        if row.get("decision_type") == "llm_call":
+            if row.get("decision") == "call_llm":
+                preflight_decisions += 1
+            continue
+
+        token_decision = evidence.get("token_decision", {})
+        if isinstance(token_decision, dict) and token_decision.get("decision") == "call_llm":
+            legacy_outcomes += 1
+
+    completed_or_legacy_calls = len(request_ids) + legacy_outcomes
+    return completed_or_legacy_calls if completed_or_legacy_calls else preflight_decisions
 
 
 def _decision(decision: str, reason: str, evidence: dict[str, Any], next_action: str) -> dict[str, Any]:

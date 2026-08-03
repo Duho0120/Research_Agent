@@ -12,7 +12,7 @@ from . import paths
 from .store import now_iso
 
 
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "4"
 
 
 def default_db_path() -> Path:
@@ -424,11 +424,382 @@ def resolve_pending_action(action_id: str, db_path: Path | None = None) -> dict[
     return _decode_row(row) if row else None
 
 
+def record_review_evidence(record: dict[str, Any], db_path: Path | None = None) -> dict[str, Any]:
+    competition_id = _required(record, "competition_id")
+    trial_id = _required(record, "trial_id")
+    trigger = _required(record, "trigger")
+    timestamp = now_iso()
+    values = {
+        "competition_id": competition_id,
+        "trial_id": trial_id,
+        "trial_number": _int_or_none(record.get("trial_number")) or 0,
+        "trigger": trigger,
+        "axis": record.get("axis"),
+        "fingerprint": _required(record, "fingerprint"),
+        "evidence_json": _json_text(record.get("evidence", {})),
+        "created_at": record.get("created_at") or timestamp,
+    }
+    with state_db_connection(db_path) as connection:
+        _ensure_schema(connection)
+        _ensure_competition(connection, competition_id)
+        connection.execute(
+            """
+            INSERT INTO review_evidence (
+                competition_id, trial_id, trial_number, trigger, axis,
+                fingerprint, evidence_json, created_at
+            )
+            VALUES (
+                :competition_id, :trial_id, :trial_number, :trigger, :axis,
+                :fingerprint, :evidence_json, :created_at
+            )
+            ON CONFLICT(competition_id, trial_id, trigger) DO UPDATE SET
+                trial_number = excluded.trial_number,
+                axis = excluded.axis,
+                fingerprint = excluded.fingerprint,
+                evidence_json = excluded.evidence_json
+            """,
+            values,
+        )
+    result = dict(values)
+    result["evidence"] = _json_value(result.pop("evidence_json"))
+    return result
+
+
+def list_review_evidence(
+    competition_id: str,
+    *,
+    minimum_trial_number: int = 0,
+    db_path: Path | None = None,
+) -> list[dict[str, Any]]:
+    with state_db_connection(db_path) as connection:
+        _ensure_schema(connection)
+        rows = connection.execute(
+            """
+            SELECT * FROM review_evidence
+            WHERE competition_id = ? AND trial_number >= ?
+            ORDER BY trial_number, created_at
+            """,
+            [competition_id, minimum_trial_number],
+        ).fetchall()
+    return [_decode_row(dict(row)) for row in rows]
+
+
+def get_review_policy_state(
+    competition_id: str,
+    db_path: Path | None = None,
+) -> dict[str, Any] | None:
+    with state_db_connection(db_path) as connection:
+        _ensure_schema(connection)
+        row = _fetch_one(
+            connection,
+            "SELECT * FROM review_policy_state WHERE competition_id = ?",
+            [competition_id],
+        )
+    return _decode_row(row) if row else None
+
+
+def upsert_review_policy_state(
+    record: dict[str, Any],
+    db_path: Path | None = None,
+) -> dict[str, Any]:
+    competition_id = _required(record, "competition_id")
+    values = {
+        "competition_id": competition_id,
+        "pending_action_id": record.get("pending_action_id"),
+        "last_request_trial": _int_or_none(record.get("last_request_trial")),
+        "last_fingerprint": record.get("last_fingerprint"),
+        "cooldown_until_trial": _int_or_none(record.get("cooldown_until_trial")),
+        "updated_at": record.get("updated_at") or now_iso(),
+    }
+    with state_db_connection(db_path) as connection:
+        _ensure_schema(connection)
+        _ensure_competition(connection, competition_id)
+        connection.execute(
+            """
+            INSERT INTO review_policy_state (
+                competition_id, pending_action_id, last_request_trial,
+                last_fingerprint, cooldown_until_trial, updated_at
+            )
+            VALUES (
+                :competition_id, :pending_action_id, :last_request_trial,
+                :last_fingerprint, :cooldown_until_trial, :updated_at
+            )
+            ON CONFLICT(competition_id) DO UPDATE SET
+                pending_action_id = excluded.pending_action_id,
+                last_request_trial = excluded.last_request_trial,
+                last_fingerprint = excluded.last_fingerprint,
+                cooldown_until_trial = excluded.cooldown_until_trial,
+                updated_at = excluded.updated_at
+            """,
+            values,
+        )
+    return values
+
+
+def create_chat_session(
+    competition_id: str,
+    db_path: Path | None = None,
+    *,
+    title: str | None = None,
+) -> dict[str, Any]:
+    competition_id = str(competition_id).strip()
+    if not competition_id:
+        raise ValueError("Missing required field: competition_id")
+    timestamp = now_iso()
+    session_id = f"chat_{uuid.uuid4().hex}"
+    values = {
+        "session_id": session_id,
+        "competition_id": competition_id,
+        "title": str(title or "새 대화").strip() or "새 대화",
+        "status": "active",
+        "created_at": timestamp,
+        "updated_at": timestamp,
+    }
+    with state_db_connection(db_path) as connection:
+        _ensure_schema(connection)
+        _ensure_competition(connection, competition_id)
+        connection.execute(
+            """
+            UPDATE chat_sessions
+            SET status = 'archived', updated_at = ?
+            WHERE competition_id = ? AND status = 'active'
+            """,
+            (timestamp, competition_id),
+        )
+        connection.execute(
+            """
+            INSERT INTO chat_sessions (
+                session_id, competition_id, title, status, created_at, updated_at
+            )
+            VALUES (
+                :session_id, :competition_id, :title, :status, :created_at, :updated_at
+            )
+            """,
+            values,
+        )
+    return values
+
+
+def get_active_chat_session(
+    competition_id: str,
+    db_path: Path | None = None,
+) -> dict[str, Any] | None:
+    with state_db_connection(db_path) as connection:
+        _ensure_schema(connection)
+        row = _fetch_one(
+            connection,
+            """
+            SELECT *
+            FROM chat_sessions
+            WHERE competition_id = ? AND status = 'active'
+            ORDER BY updated_at DESC, created_at DESC
+            LIMIT 1
+            """,
+            [competition_id],
+        )
+    return _decode_row(row) if row else None
+
+
+def list_chat_sessions(
+    competition_id: str,
+    db_path: Path | None = None,
+    *,
+    limit: int = 30,
+) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(int(limit), 100))
+    with state_db_connection(db_path) as connection:
+        _ensure_schema(connection)
+        rows = connection.execute(
+            """
+            SELECT
+                s.*,
+                COUNT(m.message_id) AS message_count
+            FROM chat_sessions s
+            LEFT JOIN chat_messages m ON m.session_id = s.session_id
+            WHERE s.competition_id = ?
+            GROUP BY s.session_id
+            ORDER BY
+                CASE WHEN s.status = 'active' THEN 0 ELSE 1 END,
+                s.updated_at DESC,
+                s.created_at DESC
+            LIMIT ?
+            """,
+            (competition_id, safe_limit),
+        ).fetchall()
+    return [_decode_row(dict(row)) for row in rows]
+
+
+def list_chat_messages(
+    competition_id: str,
+    session_id: str,
+    db_path: Path | None = None,
+    *,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    safe_limit = max(1, min(int(limit), 500))
+    with state_db_connection(db_path) as connection:
+        _ensure_schema(connection)
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM (
+                SELECT *
+                FROM chat_messages
+                WHERE competition_id = ? AND session_id = ?
+                ORDER BY message_id DESC
+                LIMIT ?
+            )
+            ORDER BY message_id ASC
+            """,
+            (competition_id, session_id, safe_limit),
+        ).fetchall()
+    return [_decode_row(dict(row)) for row in rows]
+
+
+def record_chat_exchange(
+    competition_id: str,
+    *,
+    trial_id: str | None,
+    question: str,
+    answer: str,
+    session_id: str | None = None,
+    assistant_metadata: dict[str, Any] | None = None,
+    db_path: Path | None = None,
+) -> dict[str, Any]:
+    competition_id = str(competition_id).strip()
+    question = str(question).strip()
+    answer = str(answer).strip()
+    if not competition_id:
+        raise ValueError("Missing required field: competition_id")
+    if not question:
+        raise ValueError("Missing required field: question")
+    if not answer:
+        raise ValueError("Missing required field: answer")
+
+    timestamp = now_iso()
+    with state_db_connection(db_path) as connection:
+        _ensure_schema(connection)
+        _ensure_competition(connection, competition_id)
+        session = None
+        if session_id:
+            session = _fetch_one(
+                connection,
+                """
+                SELECT * FROM chat_sessions
+                WHERE session_id = ? AND competition_id = ?
+                """,
+                [session_id, competition_id],
+            )
+            if session is None:
+                raise ValueError("Chat session does not belong to the selected experiment.")
+        else:
+            session = _fetch_one(
+                connection,
+                """
+                SELECT * FROM chat_sessions
+                WHERE competition_id = ? AND status = 'active'
+                ORDER BY updated_at DESC, created_at DESC
+                LIMIT 1
+                """,
+                [competition_id],
+            )
+
+        if session is None:
+            session_id = f"chat_{uuid.uuid4().hex}"
+            session = {
+                "session_id": session_id,
+                "competition_id": competition_id,
+                "title": "새 대화",
+                "status": "active",
+                "created_at": timestamp,
+                "updated_at": timestamp,
+            }
+            connection.execute(
+                """
+                INSERT INTO chat_sessions (
+                    session_id, competition_id, title, status, created_at, updated_at
+                )
+                VALUES (
+                    :session_id, :competition_id, :title, :status, :created_at, :updated_at
+                )
+                """,
+                session,
+            )
+        else:
+            session_id = str(session["session_id"])
+
+        connection.execute(
+            """
+            UPDATE chat_sessions
+            SET status = 'archived', updated_at = ?
+            WHERE competition_id = ? AND session_id <> ? AND status = 'active'
+            """,
+            (timestamp, competition_id, session_id),
+        )
+        title = _chat_title(question)
+        connection.execute(
+            """
+            UPDATE chat_sessions
+            SET
+                status = 'active',
+                title = CASE WHEN title IS NULL OR title = '' OR title = '새 대화' THEN ? ELSE title END,
+                updated_at = ?
+            WHERE session_id = ?
+            """,
+            (title, timestamp, session_id),
+        )
+        user_cursor = connection.execute(
+            """
+            INSERT INTO chat_messages (
+                session_id, competition_id, trial_id, role, content, metadata_json, created_at
+            )
+            VALUES (?, ?, ?, 'user', ?, '{}', ?)
+            """,
+            (session_id, competition_id, trial_id, question, timestamp),
+        )
+        assistant_cursor = connection.execute(
+            """
+            INSERT INTO chat_messages (
+                session_id, competition_id, trial_id, role, content, metadata_json, created_at
+            )
+            VALUES (?, ?, ?, 'assistant', ?, ?, ?)
+            """,
+            (
+                session_id,
+                competition_id,
+                trial_id,
+                answer,
+                _json_text(assistant_metadata or {}),
+                timestamp,
+            ),
+        )
+        saved_session = _fetch_one(
+            connection,
+            "SELECT * FROM chat_sessions WHERE session_id = ?",
+            [session_id],
+        )
+    return {
+        "session": _decode_row(saved_session or session),
+        "user_message_id": int(user_cursor.lastrowid),
+        "assistant_message_id": int(assistant_cursor.lastrowid),
+    }
+
+
 def list_competitions(db_path: Path | None = None) -> list[dict[str, Any]]:
     with state_db_connection(db_path) as connection:
         _ensure_schema(connection)
         rows = connection.execute("SELECT * FROM competitions ORDER BY updated_at DESC, competition_id").fetchall()
     return [_decode_row(dict(row)) for row in rows]
+
+
+def delete_competition(competition_id: str, db_path: Path | None = None) -> None:
+    """Delete a competition row; ON DELETE CASCADE removes all its trials,
+    scores, decisions, artifacts, submissions, pending actions, review
+    evidence, and chat history in the same statement.
+    """
+    with state_db_connection(db_path) as connection:
+        _ensure_schema(connection)
+        connection.execute("DELETE FROM competitions WHERE competition_id = ?", [competition_id])
 
 
 def list_trials(competition_id: str, db_path: Path | None = None) -> list[dict[str, Any]]:
@@ -649,6 +1020,53 @@ def _schema_sql() -> str:
         FOREIGN KEY (competition_id) REFERENCES competitions(competition_id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS review_evidence (
+        evidence_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        competition_id TEXT NOT NULL,
+        trial_id TEXT NOT NULL,
+        trial_number INTEGER NOT NULL,
+        trigger TEXT NOT NULL,
+        axis TEXT,
+        fingerprint TEXT NOT NULL,
+        evidence_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        UNIQUE (competition_id, trial_id, trigger),
+        FOREIGN KEY (competition_id) REFERENCES competitions(competition_id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS review_policy_state (
+        competition_id TEXT PRIMARY KEY,
+        pending_action_id TEXT,
+        last_request_trial INTEGER,
+        last_fingerprint TEXT,
+        cooldown_until_trial INTEGER,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (competition_id) REFERENCES competitions(competition_id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS chat_sessions (
+        session_id TEXT PRIMARY KEY,
+        competition_id TEXT NOT NULL,
+        title TEXT NOT NULL DEFAULT '새 대화',
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (competition_id) REFERENCES competitions(competition_id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS chat_messages (
+        message_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        competition_id TEXT NOT NULL,
+        trial_id TEXT,
+        role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+        content TEXT NOT NULL,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES chat_sessions(session_id) ON DELETE CASCADE,
+        FOREIGN KEY (competition_id) REFERENCES competitions(competition_id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_trials_competition_status
         ON trials(competition_id, status);
     CREATE INDEX IF NOT EXISTS idx_scores_competition_local
@@ -657,6 +1075,12 @@ def _schema_sql() -> str:
         ON trial_scores(competition_id, lb_score);
     CREATE INDEX IF NOT EXISTS idx_pending_competition_status
         ON pending_actions(competition_id, status, priority);
+    CREATE INDEX IF NOT EXISTS idx_review_evidence_competition_trial
+        ON review_evidence(competition_id, trial_number, trigger);
+    CREATE INDEX IF NOT EXISTS idx_chat_sessions_competition_updated
+        ON chat_sessions(competition_id, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_session_message
+        ON chat_messages(session_id, message_id);
     """
 
 
@@ -775,7 +1199,19 @@ def _decode_row(row: dict[str, Any]) -> dict[str, Any]:
     for field in ["is_best_local", "is_best_lb", "is_user_facing", "requires_user_approval"]:
         if field in decoded and decoded[field] is not None:
             decoded[field] = bool(decoded[field])
-    for field in ["payload_json", "rejected_axes_json", "rejected_candidates_json", "planner_constraints_json"]:
+    for field in [
+        "payload_json",
+        "evidence_json",
+        "rejected_axes_json",
+        "rejected_candidates_json",
+        "planner_constraints_json",
+        "metadata_json",
+    ]:
         if field in decoded:
             decoded[field.removesuffix("_json")] = _json_value(decoded.pop(field))
     return decoded
+
+
+def _chat_title(question: str) -> str:
+    compact = " ".join(str(question).split())
+    return compact if len(compact) <= 48 else compact[:47].rstrip() + "…"

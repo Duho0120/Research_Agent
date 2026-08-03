@@ -40,7 +40,7 @@ class WorkspaceResultCycleTest(unittest.TestCase):
             rows = (root / "memory" / "demo" / "trial_index.jsonl").read_text().splitlines()
             self.assertEqual(1, len(rows))
 
-    def test_second_nonurgent_trial_releases_queue_and_requests_review(self):
+    def test_repeated_nonurgent_evidence_accumulates_before_requesting_review(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self._write_state(root)
@@ -51,22 +51,31 @@ class WorkspaceResultCycleTest(unittest.TestCase):
             }
             self._write_trial(root, "trial_001", metrics)
             self._write_trial(root, "trial_002", {**metrics, "cv_score": 0.72})
+            self._write_trial(root, "trial_003", {**metrics, "cv_score": 0.71})
 
             with patch("kaggle_research_agent.paths.project_root", return_value=root):
                 first = process_workspace_result("demo", "trial_001")
                 second = process_workspace_result("demo", "trial_002")
+                third = process_workspace_result("demo", "trial_003")
 
             self.assertEqual("completed_review_deferred", first["status"])
-            self.assertEqual("awaiting_human_review", second["status"])
-            self.assertEqual("request_now", second["human_review"]["timing"])
-            self.assertEqual("request-user-review", second["next_action"])
-            self.assertTrue((root / "experiments" / "demo" / "trial_002" / "review_pack" / "manifest.json").exists())
+            self.assertEqual("completed_review_deferred", second["status"])
+            self.assertEqual("awaiting_human_review", third["status"])
+            self.assertEqual("request_now", third["human_review"]["timing"])
+            self.assertEqual("request-user-review", third["next_action"])
+            self.assertTrue((root / "experiments" / "demo" / "trial_003" / "review_pack" / "manifest.json").exists())
+            db_path = root / "memory" / "research_agent.sqlite3"
+            from kaggle_research_agent.state_db import list_pending_actions
+
+            pending = list_pending_actions("demo", db_path)
+            self.assertEqual(1, len(pending))
+            self.assertEqual("trial_003", pending[0]["trial_id"])
             queue = json.loads(
                 (root / "memory" / "demo" / "deferred_review_queue.json").read_text(encoding="utf-8")
             )
             self.assertEqual([], queue["items"])
             rows = (root / "memory" / "demo" / "trial_index.jsonl").read_text().splitlines()
-            self.assertEqual(2, len(rows))
+            self.assertEqual(3, len(rows))
 
     def test_leakage_requests_review_on_first_trial(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -111,7 +120,8 @@ class WorkspaceResultCycleTest(unittest.TestCase):
                 second = process_workspace_result("demo", "trial_002")
 
             self.assertEqual("awaiting_human_review", first["status"])
-            self.assertEqual("completed_review_deferred", second["status"])
+            self.assertEqual("completed", second["status"])
+            self.assertEqual("suppressed_pending", second["human_review"]["action"])
             self.assertTrue(second["pipeline_readiness"]["pending_user_review"])
             self.assertFalse((root / "experiments" / "demo" / "trial_002" / "review_pack").exists())
 

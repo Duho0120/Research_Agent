@@ -86,12 +86,13 @@ def retrieve_experiment_evidence(
     question: str,
 ) -> list[tuple[str, str]]:
     mode = classify_question(question)
-    structured = _structured_evidence(root, competition, trial_id, question)
+    structured = _structured_evidence(root, competition, question)
     if mode == "structured" and structured:
         return _fit_budget(structured)
 
-    documents = _rank_document_chunks(root, competition, trial_id, question, mode=mode)
-    return _fit_budget([*structured, *documents])
+    executed = _executed_facts_evidence(root, competition, question)
+    documents = _rank_document_chunks(root, competition, question, mode=mode)
+    return _fit_budget([*structured, *executed, *documents])
 
 
 def classify_question(question: str) -> str:
@@ -108,18 +109,22 @@ def classify_question(question: str) -> str:
 def _structured_evidence(
     root: Path,
     competition: str,
-    trial_id: str | None,
     question: str,
 ) -> list[tuple[str, str, float]]:
     rows = _structured_trial_rows(root, competition)
     requested = _requested_trials(question)
-    asks_for_all = _asks_for_all_trials(question)
     if requested:
         rows = [row for row in rows if str(row.get("trial_id") or "").lower() in requested]
-    elif trial_id and not asks_for_all:
-        selected = [row for row in rows if str(row.get("trial_id") or "").lower() == trial_id.lower()]
-        if selected:
-            rows = selected
+    else:
+        # No specific trial could be confidently extracted from the question
+        # (regex trial-reference parsing misses some phrasings). Rather than
+        # silently narrowing to whatever trial happens to be open in the UI
+        # -- which answers confidently from the wrong trial's data when the
+        # question was actually about a different one -- keep every trial's
+        # compact summary. It is cheap enough to always include in full, and
+        # recent-first ordering means the most relevant rows are the ones
+        # kept if the evidence budget ever has to truncate the list.
+        rows = list(reversed(rows))
     if not rows:
         return []
     payload = {
@@ -141,6 +146,53 @@ def _structured_trial_rows(root: Path, competition: str) -> list[dict[str, Any]]
             if value is not None and current.get(key) in (None, "", "-"):
                 current[key] = value
     return [rows_by_trial[key] for key in sorted(rows_by_trial)]
+
+
+def _executed_facts_evidence(
+    root: Path,
+    competition: str,
+    question: str,
+) -> list[tuple[str, str, float]]:
+    requested = _requested_trials(question)
+    experiment_root = root / "experiments" / competition
+    # As in _structured_evidence: when no trial reference was confidently
+    # parsed, do not guess the currently-open trial -- consider every trial,
+    # most recent first, so a vague question is still answered from the
+    # right place if the wrong one is what happened to be open, and so
+    # recent (more likely relevant) trials are the ones the evidence-item
+    # cap keeps if there are too many to include in full.
+    paths = sorted(experiment_root.glob("trial_*/internal/executed_trial_facts.json"), reverse=not requested)
+    result: list[tuple[str, str, float]] = []
+    for path in paths:
+        path_trial = path.parent.parent.name.lower()
+        if requested and path_trial not in requested:
+            continue
+        try:
+            facts = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(facts, dict):
+            continue
+        payload = {
+            "evidence_kind": "executed_facts",
+            "authority": (
+                "Actual code-derived execution facts. These override plan-only intent "
+                "when describing what was applied."
+            ),
+            "trial_id": facts.get("trial_id") or path_trial,
+            "source_trial_id": facts.get("source_trial_id"),
+            "primary_change_axis": facts.get("primary_change_axis"),
+            "applied_change_details": facts.get("change_details") or [],
+            "model": facts.get("model") or {},
+            "preprocessing": facts.get("preprocessing") or {},
+            "validation": facts.get("validation") or {},
+            "features": facts.get("features") or {},
+            "scores": facts.get("scores") or {},
+            "consistency_issues": facts.get("consistency_issues") or [],
+        }
+        source = str(path.relative_to(root))
+        result.append((source, json.dumps(payload, ensure_ascii=False, indent=2), 95.0))
+    return result
 
 
 def _sqlite_trial_rows(root: Path, competition: str) -> dict[str, dict[str, Any]]:
@@ -218,7 +270,6 @@ def _compact_row(row: dict[str, Any]) -> dict[str, Any]:
 def _rank_document_chunks(
     root: Path,
     competition: str,
-    trial_id: str | None,
     question: str,
     *,
     mode: str,
@@ -226,13 +277,23 @@ def _rank_document_chunks(
     query_terms = _query_terms(question)
     if not query_terms:
         return []
+    # As in _structured_evidence/_executed_facts_evidence: when no trial
+    # reference was confidently parsed, do not narrow the candidate files to
+    # the currently-open trial. Leaving requested empty lets _candidate_files
+    # search every trial's documents, and the relevance scoring below (not a
+    # blunt trial-id filter) picks the right chunks regardless of which
+    # trial they came from.
     requested = _requested_trials(question)
-    if not requested and trial_id and not _asks_for_all_trials(question):
-        requested = {trial_id.lower()}
 
     documents: list[tuple[str, str, list[str], float]] = []
     seen_content: set[str] = set()
-    for path in _candidate_files(root, competition, requested, include_code=_asks_about_code(question)):
+    for path in _candidate_files(
+        root,
+        competition,
+        requested,
+        include_code=_asks_about_code(question),
+        include_plan_documents=not _asks_about_applied_execution(question),
+    ):
         source = str(path.relative_to(root))
         for chunk_index, content in enumerate(_chunks(path), start=1):
             fingerprint = _content_fingerprint(content)
@@ -283,6 +344,7 @@ def _candidate_files(
     requested_trials: set[str],
     *,
     include_code: bool,
+    include_plan_documents: bool,
 ) -> list[Path]:
     roots = [
         root / "experiments" / competition,
@@ -300,7 +362,10 @@ def _candidate_files(
             continue
         for pattern in patterns:
             for path in base.rglob(pattern):
-                if not path.is_file() or _excluded(path):
+                if not path.is_file() or _excluded(
+                    path,
+                    include_plan_documents=include_plan_documents,
+                ):
                     continue
                 relative = str(path.relative_to(root)).lower()
                 path_trial = _trial_from_path(relative)
@@ -310,9 +375,22 @@ def _candidate_files(
     return sorted(set(paths), key=lambda path: (_path_priority(path), str(path)))
 
 
-def _excluded(path: Path) -> bool:
+def _excluded(path: Path, *, include_plan_documents: bool = True) -> bool:
     name = path.name.lower()
     if name in _EXCLUDED_NAMES or name.startswith(_EXCLUDED_PREFIXES):
+        return True
+    if not include_plan_documents and name in {
+        "01_plan.ko.md",
+        "next_experiment.md",
+        "next_experiment.json",
+        "delta_plan.md",
+        "delta_plan.json",
+        "demo_experiment_plan.md",
+        "demo_experiment_plan.json",
+        "pipeline_improvement_plan.md",
+        "pipeline_improvement_plan.json",
+        "plan.md",
+    }:
         return True
     lowered_parts = {part.lower() for part in path.parts}
     return bool({"__pycache__", "internal", "workspace_logs"} & lowered_parts)
@@ -386,18 +464,49 @@ def _normalize(text: str) -> str:
     return text.lower().replace("\\", "/")
 
 
+_TRIAL_LIST_PATTERN = re.compile(
+    # "trial 23", "Trial_24", "trial023", plus a trailing enumerated list like
+    # ", 24, 25" or "및 24, 25" so "Trial 23, 24, 25" is captured in full.
+    r"trial[\s_#:-]*0*(\d+(?:\s*(?:,|、|및|and|그리고)\s*0*\d+)*)",
+    re.IGNORECASE,
+)
+_TRIAL_ORDINAL_PATTERN = re.compile(r"(\d+)\s*(?:번째|번|회차|회|차)")  # "23번째", "23번", "14회차", "14회", "23차"
+
+
 def _requested_trials(question: str) -> set[str]:
-    return set(re.findall(r"trial_\d+", question.lower()))
-
-
-def _asks_for_all_trials(question: str) -> bool:
-    normalized = _normalize(question)
-    return any(term in normalized for term in ("각 실험", "각 trial", "전체", "지금까지", "모든 trial"))
+    requested: set[str] = set()
+    for match in _TRIAL_LIST_PATTERN.finditer(question):
+        for number in re.findall(r"\d+", match.group(1)):
+            requested.add(f"trial_{int(number):03d}")
+    for match in _TRIAL_ORDINAL_PATTERN.finditer(question):
+        requested.add(f"trial_{int(match.group(1)):03d}")
+    return requested
 
 
 def _asks_about_code(question: str) -> bool:
     normalized = _normalize(question)
     return any(term in normalized for term in ("코드", "code", "실제 실행", "실행 코드", "모델"))
+
+
+def _asks_about_applied_execution(question: str) -> bool:
+    normalized = _normalize(question)
+    if any(term in normalized for term in ("계획", "plan", "예정", "다음 trial", "next trial")):
+        return False
+    return any(
+        term in normalized
+        for term in (
+            "개선",
+            "적용",
+            "실행",
+            "변경",
+            "바뀐",
+            "사용한 모델",
+            "applied",
+            "executed",
+            "changed",
+            "improvement",
+        )
+    )
 
 
 def _trial_from_path(relative_path: str) -> str | None:

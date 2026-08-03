@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from .agents.memory import record_user_feedback
+from .feedback_policy import apply_feedback_response, mark_feedback_request_applied
 from .interaction_contract import interaction_contract
 from .user_insight_policy import interpret_user_insight, new_insight_id, register_user_insight
 from .operations import build_operations_status, can_run_next_trial
@@ -242,6 +243,7 @@ def respond_to_request(
         )
 
     payload = action.get("payload") or {}
+    selected_option = _selected_option(payload, answers or {})
     answer_text = _format_request_answer(answers or {}, free_text)
     feedback = record_user_feedback(
         competition,
@@ -251,17 +253,47 @@ def respond_to_request(
         user_feedback=answer_text,
         decision=decision or _derive_decision(answers or {}) or "user_response_recorded",
         follow_up_action=follow_up_action
-        or str((answers or {}).get("follow_up_action") or payload.get("follow_up_action") or "consider_in_next_plan"),
+        or str(
+            (answers or {}).get("follow_up_action")
+            or selected_option.get("follow_up_action")
+            or payload.get("follow_up_action")
+            or "consider_in_next_plan"
+        ),
     )
+    try:
+        application = apply_feedback_response(
+            competition,
+            str(trial_id),
+            request_id=request_id,
+            feedback=feedback,
+            payload=payload,
+        )
+    except Exception as error:
+        return _envelope(
+            action="respond_to_request",
+            ok=False,
+            status="apply_failed",
+            message="답변은 기록했지만 실험 상태에 반영하지 못했습니다. 요청은 대기 상태로 유지됩니다.",
+            data={
+                "request": _pending_request(action),
+                "feedback": feedback,
+                "interaction": interaction,
+            },
+            db_path=db_path,
+            synced=False,
+            errors=[{"code": "feedback_application_failed", "message": str(error)}],
+        )
     resolved = resolve_pending_action(request_id, db_path=db_path)
+    mark_feedback_request_applied(competition, db_path=db_path)
     return _envelope(
         action="respond_to_request",
         ok=True,
         status="completed",
-        message="User response recorded and request resolved.",
+        message="사용자 답변을 다음 실험 계획에 반영했고 요청을 완료했습니다.",
         data={
             "request": _pending_request(resolved or action),
             "feedback": feedback,
+            "application": application,
             "interaction": interaction,
         },
         next_actions=[
@@ -501,6 +533,19 @@ def _pending_request(action: dict[str, Any]) -> dict[str, Any]:
         "question": payload.get("question") or action.get("message"),
         "context_files": list(payload.get("context_files") or []),
         "questions": list(payload.get("questions") or []),
+        "problem": payload.get("problem"),
+        "evidence_snapshot": list(payload.get("evidence_snapshot") or []),
+        "evidence_summary": list(payload.get("evidence_summary") or []),
+        "interpretation": payload.get("interpretation"),
+        "recommendation": payload.get("recommendation"),
+        "why_user_needed": payload.get("why_user_needed"),
+        "options": list(payload.get("options") or []),
+        "default_if_no_response": payload.get("default_if_no_response"),
+        "interaction_type": payload.get("interaction_type"),
+        "interaction_label": payload.get("interaction_label"),
+        "execution_supported": payload.get("execution_supported", True),
+        "execution_note": payload.get("execution_note"),
+        "policy": dict(payload.get("policy") or {}),
         "payload": payload,
         "created_at": action.get("created_at"),
         "resolved_at": action.get("resolved_at"),
@@ -535,6 +580,16 @@ def _derive_decision(answers: dict[str, Any]) -> str | None:
         if value:
             return str(value)
     return None
+
+
+def _selected_option(payload: dict[str, Any], answers: dict[str, Any]) -> dict[str, Any]:
+    selected = str(answers.get("decision") or answers.get("approval") or "").strip()
+    if not selected:
+        return {}
+    for option in payload.get("options") or []:
+        if isinstance(option, dict) and str(option.get("value") or "") == selected:
+            return option
+    return {}
 
 
 def _next_actions_from_operation(competition: str, operation: dict[str, Any]) -> list[dict[str, Any]]:

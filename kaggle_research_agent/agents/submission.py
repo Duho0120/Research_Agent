@@ -2,10 +2,15 @@
 
 
 import json
-from typing import Any
+import shutil
+import tempfile
+from pathlib import Path
+from typing import Any, Callable
+
+import os
 
 from .. import paths
-from ..integrations import kaggle_cli
+from ..integrations import dacon_api, kaggle_cli
 from ..paths import competition_memory_dir, competition_submissions_dir, experiments_dir, trial_dir
 from ..store import load_state, now_iso, save_state, write_text
 from ..trial_artifacts import prepare_trial_execution_facts
@@ -56,6 +61,7 @@ def record_submission_result(
     }
     _append_submission_log(competition, row)
     _write_trial_files(competition, trial_id, row)
+    _merge_submission_evidence_into_metrics(competition, trial_id, row)
     prepare_trial_execution_facts(competition, trial_id)
     evaluate_user_insight_submission(
         competition,
@@ -78,6 +84,36 @@ def record_submission_result(
     if is_best:
         _write_best_files(competition, trial_id, row)
     return row
+
+
+def _merge_submission_evidence_into_metrics(
+    competition: str,
+    trial_id: str,
+    row: dict[str, Any],
+) -> None:
+    metrics_path = trial_dir(competition, trial_id) / "metrics.json"
+    if not metrics_path.exists():
+        return
+    try:
+        metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return
+    if not isinstance(metrics, dict):
+        return
+    metrics.update(
+        {
+            "lb_score": row.get("submitted_lb_score"),
+            "submitted_lb_score": row.get("submitted_lb_score"),
+            "submitted_rank": row.get("submitted_rank"),
+            "submission_file": row.get("submission_file"),
+            "submission_status": "submitted",
+            "is_best_submission": bool(row.get("is_best")),
+        }
+    )
+    metrics_path.write_text(
+        json.dumps(metrics, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 def render_submission_result(row: dict[str, Any]) -> str:
@@ -285,6 +321,11 @@ def submit_trial(
     poll_attempts: int = 5,
     poll_interval_seconds: float = 30.0,
     kaggle_runner: kaggle_cli.CommandRunner | None = None,
+    dacon_competition_id: str | None = None,
+    dacon_team_name: str | None = None,
+    dacon_message: str | None = None,
+    dacon_submit_fn: dacon_api.SubmitFn | None = None,
+    dacon_fetch_submissions_fn: Callable[..., dict[str, Any]] | None = None,
     notes: str = "",
 ) -> dict[str, Any]:
     """Submit or record a trial while preserving before/after leaderboard evidence."""
@@ -317,10 +358,24 @@ def submit_trial(
             poll_interval_seconds=poll_interval_seconds,
             runner=kaggle_runner,
         )
+    elif dacon_competition_id:
+        submit_result = _run_dacon_submission(
+            # Use the resolved absolute path: dacon_api has no subprocess cwd
+            # to resolve a project-root-relative path against (Kaggle's path
+            # only works because kaggle_cli's runner sets cwd=project_root).
+            submission_file=str(submission_path),
+            competition_id=dacon_competition_id,
+            team_name=dacon_team_name or "",
+            message=dacon_message or version_name,
+            submit_fn=dacon_submit_fn,
+            fetch_submissions_fn=dacon_fetch_submissions_fn,
+            display_file_name=f"{version_name}{submission_path.suffix}",
+        )
     else:
         submit_result = _run_command(submit_command) if submit_command else {"returncode": 0, "stdout": "", "stderr": ""}
 
-    if kaggle_competition_slug and submit_result["status"] not in {"submitted", "submitted_without_polling"}:
+    platform_competition_ref = kaggle_competition_slug or dacon_competition_id
+    if platform_competition_ref and submit_result["status"] not in {"submitted", "submitted_without_polling"}:
         result = {
             "competition": competition,
             "trial_id": trial_id,
@@ -388,6 +443,10 @@ def submit_trial(
         result["status"] = "submitted"
         result["kaggle_competition_slug"] = kaggle_competition_slug
         result["kaggle_team_name"] = kaggle_team_name
+    elif dacon_competition_id:
+        result["status"] = "submitted"
+        result["dacon_competition_id"] = dacon_competition_id
+        result["dacon_team_name"] = dacon_team_name
     _write_submit_run(out_dir, result)
     return result
 
@@ -462,6 +521,54 @@ def _run_kaggle_submission(
             "cli_check": cli_check,
             "auth_check": auth_check,
         }
+    file_name = Path(submission_file).name
+    existing = kaggle_cli.fetch_submissions(
+        competition_slug=competition_slug,
+        cwd=root,
+        page_size=20,
+        runner=command_runner,
+    )
+    existing_matches = (
+        kaggle_cli.matching_submissions(
+            existing.get("stdout", ""),
+            description=message,
+            file_name=file_name,
+        )
+        if existing.get("ok")
+        else []
+    )
+    if existing_matches:
+        lookup = kaggle_cli.poll_submission(
+            competition_slug,
+            description=message,
+            file_name=file_name,
+            cwd=root,
+            attempts=poll_attempts,
+            sleep_seconds=poll_interval_seconds,
+            runner=command_runner,
+        )
+        if lookup["status"] == "found":
+            return {
+                "status": "submitted_without_polling",
+                "returncode": 0,
+                "stdout": "",
+                "stderr": "",
+                "cli_check": cli_check,
+                "auth_check": auth_check,
+                "submissions": lookup.get("command_result"),
+                "submission_result": lookup["submission"],
+                "reused_existing_submission": True,
+            }
+        return {
+            "status": "submission_pending",
+            "returncode": 0,
+            "reason": "A matching Kaggle submission already exists and is still being processed.",
+            "cli_check": cli_check,
+            "auth_check": auth_check,
+            "submissions": lookup.get("command_result"),
+            "submission_result": lookup.get("submission") or existing_matches[0],
+            "reused_existing_submission": True,
+        }
     submit = kaggle_cli.submit_competition(
         competition_slug=competition_slug,
         submission_file=submission_file,
@@ -479,21 +586,30 @@ def _run_kaggle_submission(
             "submit": submit,
         }
     if not poll_leaderboard:
-        submissions = kaggle_cli.fetch_submissions(
-            competition_slug=competition_slug,
+        lookup = kaggle_cli.poll_submission(
+            competition_slug,
+            description=message,
+            file_name=file_name,
             cwd=root,
-            page_size=5,
+            attempts=poll_attempts,
+            sleep_seconds=poll_interval_seconds,
             runner=command_runner,
         )
-        latest_submission = (
-            kaggle_cli.latest_completed_submission(
-                submissions.get("stdout", ""),
-                description=message,
-                file_name=Path(submission_file).name,
-            )
-            if submissions["ok"]
-            else None
-        )
+        latest_submission = lookup.get("submission") or {}
+        if lookup["status"] != "found":
+            return {
+                "status": "submission_pending",
+                "returncode": 0,
+                "reason": "Kaggle accepted the submission, but its public score is still pending.",
+                "stdout": submit["stdout"],
+                "stderr": submit["stderr"],
+                "cli_check": cli_check,
+                "auth_check": auth_check,
+                "submit": submit,
+                "submissions": lookup.get("command_result"),
+                "submission_result": latest_submission,
+                "reused_existing_submission": False,
+            }
         return {
             "status": "submitted_without_polling",
             "returncode": 0,
@@ -502,8 +618,9 @@ def _run_kaggle_submission(
             "cli_check": cli_check,
             "auth_check": auth_check,
             "submit": submit,
-            "submissions": submissions,
-            "submission_result": latest_submission or {},
+            "submissions": lookup.get("command_result"),
+            "submission_result": latest_submission,
+            "reused_existing_submission": False,
         }
     if not team_name:
         return {
@@ -544,6 +661,115 @@ def _run_kaggle_submission(
         "competition": competition,
         "trial_id": trial_id,
         "version_name": version_name,
+    }
+
+
+def _run_dacon_submission(
+    *,
+    submission_file: str,
+    competition_id: str,
+    team_name: str,
+    message: str,
+    submit_fn: dacon_api.SubmitFn | None,
+    fetch_submissions_fn: Callable[..., dict[str, Any]] | None = None,
+    display_file_name: str | None = None,
+) -> dict[str, Any]:
+    """Submit via the DACON adapter, translated into the same result shape
+    _run_kaggle_submission produces (status/returncode/reason) so the shared
+    downstream code in submit_trial does not need to branch by platform.
+
+    DACON's submit endpoint returns no score, but its submission-history
+    endpoint does, so the scored value is read back from there and surfaced
+    as `submission_result.public_score` -- the same field the Kaggle path
+    uses -- which is what lets lb_score be recorded automatically instead of
+    having to be typed in from a manual leaderboard check.
+
+    Every trial writes to the same `outputs/submission.csv` path, so without
+    display_file_name every row in DACON's own submission history page would
+    show the identical file name "submission.csv" with no way to tell which
+    trial produced which entry short of opening each one's memo. When given,
+    a same-content copy is uploaded under that name instead -- the workspace's
+    canonical output path is left untouched.
+    """
+    upload_path = submission_file
+    temp_dir: str | None = None
+    if display_file_name:
+        temp_dir = tempfile.mkdtemp(prefix="dacon_submit_")
+        upload_path = str(Path(temp_dir) / display_file_name)
+        shutil.copyfile(submission_file, upload_path)
+    try:
+        result = dacon_api.submit_competition(
+            competition_id=competition_id,
+            submission_file=upload_path,
+            team_name=team_name,
+            message=message,
+            env=dict(os.environ),
+            submit_fn=submit_fn,
+        )
+    finally:
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+    if not result["ok"]:
+        return {
+            "status": result["status"],
+            "returncode": 1,
+            "reason": result.get("error"),
+            "dacon_result": result,
+        }
+    submitted = {
+        "status": "submitted",
+        "returncode": 0,
+        "stdout": "",
+        "stderr": "",
+        "dacon_result": result,
+    }
+    scored = _fetch_dacon_submitted_score(
+        competition_id=competition_id,
+        message=message,
+        fetch_submissions_fn=fetch_submissions_fn,
+    )
+    if scored is not None:
+        submitted["submission_result"] = scored
+    return submitted
+
+
+def _fetch_dacon_submitted_score(
+    *,
+    competition_id: str,
+    message: str,
+    fetch_submissions_fn: Callable[..., dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    """Read back the score DACON assigned to the submission just filed.
+
+    Best effort: a missing session token, a network error, or a history that
+    does not list this submission yet all return None rather than failing an
+    upload that already succeeded. The submission is located by its memo,
+    which this codebase sets, so a concurrent manual submission is not
+    mistaken for the one recorded here.
+    """
+    fetch = fetch_submissions_fn or dacon_api.fetch_my_submissions
+    try:
+        history = fetch(competition_id, env=dict(os.environ))
+    except Exception:  # noqa: BLE001 - never fail a completed upload over the score lookup
+        return None
+    if not history.get("ok"):
+        return None
+    matches = [
+        row
+        for row in (history.get("submissions") or [])
+        if isinstance(row, dict) and str(row.get("memo") or "") == message
+    ]
+    if not matches:
+        return None
+    latest = max(matches, key=lambda row: row.get("sub_id") or 0)
+    score = latest.get("score")
+    if not isinstance(score, (int, float)) or isinstance(score, bool):
+        return None
+    return {
+        "public_score": score,
+        "sub_id": latest.get("sub_id"),
+        "submitted_at": latest.get("c_time"),
+        "file_link": latest.get("file_link"),
     }
 
 

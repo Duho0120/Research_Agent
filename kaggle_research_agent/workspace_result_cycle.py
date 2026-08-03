@@ -5,14 +5,15 @@ from pathlib import Path
 from typing import Any
 
 from .agents.memory import log_decision, remember_trial
-from .agents.policy_gate import decide_human_review
 from .agents.result_analyst import diagnose_trial, evaluate_trial
 from .agents.review_pack import prepare_review_pack
+from .feedback_policy import create_feedback_request, evaluate_feedback_policy
 from .paths import competition_memory_dir, experiment_dir, trial_dir
 from .state_db_auto import sync_trial_state_after_finish
 from .store import load_trial_index, write_text
 from .trial_artifacts import organize_trial_artifacts, prepare_trial_execution_facts, read_trial_json
 from .trial_decision import write_trial_decision_card
+from .trial_decision import load_latest_decision_context
 from .trial_memory_card import write_trial_memory_card
 from .user_insight_policy import mark_user_insight_applied
 
@@ -86,6 +87,13 @@ def process_workspace_result(competition: str, trial_id: str) -> dict[str, Any]:
 
     evaluation = evaluate_trial(competition, trial_id)
     diagnosis = diagnose_trial(competition, trial_id)
+    previous_decision = load_latest_decision_context(competition)
+    diagnosis["primary_axis"] = (
+        execution_facts.get("primary_change_axis")
+        or previous_decision.get("active_axis")
+        or diagnosis.get("primary_axis")
+    )
+    diagnosis["axis_attempt_count"] = int(previous_decision.get("axis_attempt_count") or 0) + 1
     readiness = {
         "execution_profile_ready": collection.get("profile_status") == "ready",
         "workspace_run_completed": collection.get("workspace_run_status") == "completed",
@@ -93,7 +101,7 @@ def process_workspace_result(competition: str, trial_id: str) -> dict[str, Any]:
         "completed_trial_count": len(load_trial_index(competition)) + 1,
         "pending_user_review": _has_pending_user_review(competition),
     }
-    human_review = decide_human_review(
+    human_review = evaluate_feedback_policy(
         competition,
         trial_id,
         diagnosis,
@@ -113,8 +121,17 @@ def process_workspace_result(competition: str, trial_id: str) -> dict[str, Any]:
         deferred_items = _load_deferred_items(competition)
         review_diagnosis = _merge_deferred_context(diagnosis, deferred_items)
         review_pack = prepare_review_pack(competition, trial_id, review_diagnosis)
+        pending_action = create_feedback_request(
+            competition,
+            trial_id,
+            review_diagnosis,
+            human_review,
+            review_pack=review_pack,
+        )
+        review_pack["pending_action_id"] = pending_action["action_id"]
         _clear_deferred_review(competition)
         steps.append("review_pack_prepared")
+        steps.append("pending_action_created")
 
     if human_review["timing"] == "request_now":
         status = "awaiting_human_review"

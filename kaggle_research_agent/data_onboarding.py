@@ -126,7 +126,8 @@ def _read_csv_schema(path: Path, max_rows: int = 20) -> dict[str, Any]:
 
 def _infer_role(name: str) -> str:
     lowered = name.lower()
-    if "sample_submission" in lowered or "sample-submission" in lowered:
+    normalized_stem = "".join(character for character in Path(lowered).stem if character.isalnum())
+    if normalized_stem in {"samplesubmission", "gendersubmission"}:
         return "sample_submission"
     if Path(lowered).stem == "train" or "train" in lowered:
         return "train"

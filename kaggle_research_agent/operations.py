@@ -129,7 +129,11 @@ def _with_operation_fields(status: dict[str, Any]) -> dict[str, Any]:
     latest = _latest_trial(trials)
     pending_actions = list(status.get("pending_actions") or [])
     latest_status = str(latest.get("status") or "").casefold()
-    next_id = str(latest.get("trial_id")) if latest_status in {"planned", "ready"} else next_trial_id(trials)
+    next_id = (
+        str(latest.get("trial_id"))
+        if latest_status in {"discovered", "planned", "ready"}
+        else next_trial_id(trials)
+    )
     competition_id = experiment["competition_id"]
     active_axis = latest.get("active_axis") or latest.get("primary_change_axis") or latest.get("change_axis")
     attempt_count = latest.get("axis_attempt_count")
@@ -138,7 +142,10 @@ def _with_operation_fields(status: dict[str, Any]) -> dict[str, Any]:
     if pending_actions:
         state = "waiting_user"
         label = "사용자 승인/피드백 대기 요청을 먼저 확인하세요."
-    elif not trials:
+    elif not trials or (
+        latest_status == "discovered"
+        and not any(_trial_has_result(row) for row in trials)
+    ):
         state = "ready_first_trial"
         label = "첫 trial을 실행할 수 있습니다."
     elif latest_status == "blocked":
@@ -149,7 +156,7 @@ def _with_operation_fields(status: dict[str, Any]) -> dict[str, Any]:
         label = "실험 입력 자료 또는 데이터 준비가 필요합니다."
     else:
         state = "ready_next_trial"
-        if latest_status in {"planned", "ready"}:
+        if latest_status in {"discovered", "planned", "ready"}:
             label = "준비된 계획으로 코드 작성을 시작할 수 있습니다."
         elif _axis_refinement_in_progress(active_axis, attempt_count, attempt_limit):
             label = f"`{active_axis}` 개선축 안에서 다음 후보/파라미터 변형을 시도하세요."
@@ -212,6 +219,14 @@ def _latest_trial(trials: list[dict[str, Any]]) -> dict[str, Any]:
     if not trials:
         return {}
     return sorted(trials, key=lambda row: (_trial_number(str(row.get("trial_id") or "")) or -1, str(row.get("trial_id") or "")))[-1]
+
+
+def _trial_has_result(trial: dict[str, Any]) -> bool:
+    return bool(
+        str(trial.get("status") or "").casefold() == "completed"
+        or trial.get("local_score") is not None
+        or trial.get("lb_score") is not None
+    )
 
 
 def _trial_number(trial_id: str) -> int | None:

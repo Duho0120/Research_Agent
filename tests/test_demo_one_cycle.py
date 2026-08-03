@@ -9,7 +9,13 @@ from unittest.mock import patch
 
 from kaggle_research_agent import simple_yaml
 from kaggle_research_agent.cli import main
-from kaggle_research_agent.demo_one_cycle import build_demo_plan_payload, run_demo_one_cycle
+from kaggle_research_agent.demo_one_cycle import (
+    _demo_baseline_recommendation,
+    _infer_demo_file_role,
+    _infer_demo_task_type,
+    build_demo_plan_payload,
+    run_demo_one_cycle,
+)
 from kaggle_research_agent.graph.demo_auto_loop import run_demo_graph_auto_loop
 from kaggle_research_agent.graph.demo_cycle_graph import run_demo_graph_cycle
 from kaggle_research_agent.state_db import get_trial_summary
@@ -17,6 +23,64 @@ from kaggle_research_agent.trial_artifacts import trial_artifact_exists
 
 
 class DemoOneCycleTest(unittest.TestCase):
+    def test_kaggle_camel_case_sample_submission_is_not_treated_as_train(self):
+        self.assertEqual(
+            "sample_submission",
+            _infer_demo_file_role("sampleSubmission.csv", ["datetime", "count"], "count"),
+        )
+
+    def test_rmsle_task_uses_regression_baseline_recommendations(self):
+        train = {
+            "column_profiles": [
+                {
+                    "name": "count",
+                    "role": "target",
+                    "type": "numeric",
+                    "unique_in_sample": 1,
+                    "baseline_use": "exclude",
+                }
+            ]
+        }
+        task_type = _infer_demo_task_type(train, "count", metric="rmsle")
+        recommendation = _demo_baseline_recommendation(
+            train,
+            target_column="count",
+            id_column="datetime",
+            task_type=task_type,
+        )
+
+        self.assertEqual("tabular_regression_or_ranking", task_type)
+        self.assertIn("regularized_linear_regression", recommendation["preferred_model_families"][0])
+
+    def test_baseline_recommendation_excludes_train_only_columns(self):
+        train = {
+            "column_profiles": [
+                {"name": "datetime", "baseline_use": "exclude"},
+                {"name": "count", "baseline_use": "exclude"},
+                {"name": "temp", "baseline_use": "include_numeric"},
+                {"name": "casual", "baseline_use": "include_numeric"},
+                {"name": "registered", "baseline_use": "include_numeric"},
+            ]
+        }
+        test = {
+            "column_profiles": [
+                {"name": "datetime", "baseline_use": "exclude"},
+                {"name": "temp", "baseline_use": "include_numeric"},
+            ]
+        }
+
+        recommendation = _demo_baseline_recommendation(
+            train,
+            test=test,
+            target_column="count",
+            id_column="datetime",
+            task_type="tabular_regression_or_ranking",
+        )
+
+        self.assertEqual(["temp"], recommendation["include_features_first"])
+        self.assertIn("casual", recommendation["exclude_columns"])
+        self.assertIn("registered", recommendation["exclude_columns"])
+
     def test_demo_one_cycle_runs_mock_plan_code_execution_and_records_result(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "agent"
@@ -915,6 +979,265 @@ class DemoOneCycleTest(unittest.TestCase):
                 )
             )
             self.assertEqual("trial_001", context["source_trial_id"])
+
+    def test_continuation_context_exposes_recommended_base_trial_at_top_level(self):
+        # workspace_coding_handoff.py reads continuation.get("recommended_base_trial")
+        # at the top level (not nested under decision_context) to decide which
+        # trial's code snapshot is authoritative. When an axis gets exhausted and
+        # rejected, the recommended base trial rolls back to an earlier trial
+        # while source_trial_id (the immediately-previous trial) stays put -- both
+        # values must be present and must be allowed to differ.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            project = Path(tmp) / "project"
+            root.mkdir()
+            project.mkdir()
+            self._write_state(root)
+            self._write_profile(root, project)
+
+            from kaggle_research_agent.demo_one_cycle import _write_continuation_context
+            from kaggle_research_agent.trial_decision import write_trial_decision_card
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                write_trial_decision_card(
+                    "demo",
+                    "trial_001",
+                    plan={"plan_type": "initial_pipeline_plan"},
+                    metrics={"cv_score": 0.85, "objective": "maximize"},
+                )
+                write_trial_decision_card(
+                    "demo",
+                    "trial_002",
+                    plan={
+                        "plan_type": "continuation_delta_plan",
+                        "source_trial_id": "trial_001",
+                        "primary_change_axis": "validation_review",
+                        "change_details": ["Candidate: time series cv"],
+                    },
+                    metrics={"cv_score": 0.83, "objective": "maximize"},
+                )
+                write_trial_decision_card(
+                    "demo",
+                    "trial_003",
+                    plan={
+                        "plan_type": "continuation_delta_plan",
+                        "source_trial_id": "trial_001",
+                        "primary_change_axis": "validation_review",
+                        "change_details": ["Candidate: group k-fold"],
+                    },
+                    metrics={"cv_score": 0.82, "objective": "maximize"},
+                )
+                write_trial_decision_card(
+                    "demo",
+                    "trial_004",
+                    plan={
+                        "plan_type": "continuation_delta_plan",
+                        "source_trial_id": "trial_001",
+                        "primary_change_axis": "validation_review",
+                        "change_details": ["Candidate: stratified split"],
+                    },
+                    metrics={"cv_score": 0.81, "objective": "maximize"},
+                )
+                # source_trial_id is forced to the last-completed trial (trial_004),
+                # mirroring plan_following_trial's real call, even though the axis
+                # is now exhausted and the recommended base has rolled back.
+                _write_continuation_context("demo", "trial_005", source_trial_id="trial_004")
+
+            context = json.loads(
+                (root / "experiments" / "demo" / "trial_005" / "continuation_context.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual("trial_004", context["source_trial_id"])
+            self.assertEqual("trial_001", context["recommended_base_trial"])
+            self.assertEqual(
+                "trial_001", context["decision_context"]["recommended_base_trial"]
+            )
+
+    def test_find_duplicate_candidate_detects_repeated_candidate_for_same_axis(self):
+        from kaggle_research_agent.trial_decision import find_duplicate_candidate
+
+        decision_context = {
+            "rejected_candidates_by_axis": {
+                "validation_review": ["validation_review: candidate=time series cv"],
+            }
+        }
+        repeated_plan = {
+            "primary_change_axis": "validation_review",
+            "change_details": ["Candidate: time series cv"],
+        }
+        different_plan = {
+            "primary_change_axis": "validation_review",
+            "change_details": ["Candidate: group k-fold"],
+        }
+        different_axis_plan = {
+            "primary_change_axis": "feature_representation",
+            "change_details": ["Candidate: time series cv"],
+        }
+
+        self.assertIsNotNone(find_duplicate_candidate(decision_context, repeated_plan))
+        self.assertIsNone(find_duplicate_candidate(decision_context, different_plan))
+        self.assertIsNone(find_duplicate_candidate(decision_context, different_axis_plan))
+
+    def test_prepare_workspace_trial_plan_forces_replan_when_candidate_repeats_and_succeeds_on_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            project = Path(tmp) / "project"
+            root.mkdir()
+            project.mkdir()
+            self._write_state(root)
+            self._write_profile(root, project)
+
+            from kaggle_research_agent.demo_one_cycle import prepare_workspace_trial_plan
+            from kaggle_research_agent.trial_decision import write_trial_decision_card
+
+            duplicate_plan = {
+                "status": "ready",
+                "plan_type": "continuation_delta_plan",
+                "source_trial_id": "trial_001",
+                "primary_change_axis": "validation_review",
+                "plan_title": "Retry time series cv",
+                "change_details": ["Candidate: time series cv"],
+            }
+            fresh_plan = {
+                "status": "ready",
+                "plan_type": "continuation_delta_plan",
+                "source_trial_id": "trial_001",
+                "primary_change_axis": "validation_review",
+                "plan_title": "Try group k-fold instead",
+                "change_details": ["Candidate: group k-fold"],
+            }
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                write_trial_decision_card(
+                    "demo",
+                    "trial_001",
+                    plan={"plan_type": "initial_pipeline_plan"},
+                    metrics={"cv_score": 0.85, "objective": "maximize"},
+                )
+                write_trial_decision_card(
+                    "demo",
+                    "trial_002",
+                    plan={
+                        "plan_type": "continuation_delta_plan",
+                        "source_trial_id": "trial_001",
+                        "primary_change_axis": "validation_review",
+                        "change_details": ["Candidate: time series cv"],
+                    },
+                    metrics={"cv_score": 0.83, "objective": "maximize"},
+                )
+                with patch(
+                    "kaggle_research_agent.demo_one_cycle.create_demo_experiment_plan",
+                    side_effect=[duplicate_plan, fresh_plan],
+                ) as mock_create_plan:
+                    result = prepare_workspace_trial_plan(
+                        "demo",
+                        "trial_003",
+                        source_trial_id="trial_002",
+                        allow_api=True,
+                    )
+
+            self.assertEqual("planned", result["status"])
+            self.assertEqual("Try group k-fold instead", result["plan"]["plan_title"])
+            self.assertEqual(2, mock_create_plan.call_count)
+
+    def test_prepare_workspace_trial_plan_writes_korean_preview_before_execution(self):
+        # trial_013 in production showed raw English next_experiment.md because
+        # user_view/01_plan.ko.md only existed after a trial actually ran.
+        # prepare_workspace_trial_plan must now write a Korean-labeled preview
+        # as soon as planning succeeds, before any code writing/execution.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            project = Path(tmp) / "project"
+            root.mkdir()
+            project.mkdir()
+            self._write_state(root)
+            self._write_profile(root, project)
+
+            from kaggle_research_agent.demo_one_cycle import prepare_workspace_trial_plan
+
+            fresh_plan = {
+                "status": "ready",
+                "plan_type": "continuation_delta_plan",
+                "source_trial_id": "trial_012",
+                "primary_change_axis": "feature_engineering:new_simple_numeric_features",
+                "plan_title": "Add windspeed_zero indicator on top of trial_012",
+                "change_details": ["Name: windspeed_is_zero"],
+            }
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch(
+                    "kaggle_research_agent.demo_one_cycle.create_demo_experiment_plan",
+                    return_value=fresh_plan,
+                ):
+                    result = prepare_workspace_trial_plan(
+                        "demo",
+                        "trial_013",
+                        source_trial_id="trial_012",
+                        allow_api=True,
+                    )
+                preview_path = (
+                    root / "experiments" / "demo" / "trial_013" / "user_view" / "01_plan.ko.md"
+                )
+                self.assertTrue(preview_path.is_file())
+                preview_content = preview_path.read_text(encoding="utf-8")
+
+            self.assertEqual("planned", result["status"])
+            self.assertIn("trial_013 실험 계획", preview_content)
+            self.assertIn("windspeed_is_zero", preview_content)
+
+    def test_prepare_workspace_trial_plan_blocks_when_replan_still_repeats_candidate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            project = Path(tmp) / "project"
+            root.mkdir()
+            project.mkdir()
+            self._write_state(root)
+            self._write_profile(root, project)
+
+            from kaggle_research_agent.demo_one_cycle import prepare_workspace_trial_plan
+            from kaggle_research_agent.trial_decision import write_trial_decision_card
+
+            duplicate_plan = {
+                "status": "ready",
+                "plan_type": "continuation_delta_plan",
+                "source_trial_id": "trial_001",
+                "primary_change_axis": "validation_review",
+                "plan_title": "Retry time series cv",
+                "change_details": ["Candidate: time series cv"],
+            }
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                write_trial_decision_card(
+                    "demo",
+                    "trial_001",
+                    plan={"plan_type": "initial_pipeline_plan"},
+                    metrics={"cv_score": 0.85, "objective": "maximize"},
+                )
+                write_trial_decision_card(
+                    "demo",
+                    "trial_002",
+                    plan={
+                        "plan_type": "continuation_delta_plan",
+                        "source_trial_id": "trial_001",
+                        "primary_change_axis": "validation_review",
+                        "change_details": ["Candidate: time series cv"],
+                    },
+                    metrics={"cv_score": 0.83, "objective": "maximize"},
+                )
+                with patch(
+                    "kaggle_research_agent.demo_one_cycle.create_demo_experiment_plan",
+                    side_effect=[duplicate_plan, duplicate_plan],
+                ) as mock_create_plan:
+                    result = prepare_workspace_trial_plan(
+                        "demo",
+                        "trial_003",
+                        source_trial_id="trial_002",
+                        allow_api=True,
+                    )
+
+            self.assertEqual("duplicate_candidate_blocked", result["status"])
+            self.assertEqual(2, mock_create_plan.call_count)
 
     def test_demo_one_cycle_resumes_from_completed_plan_and_code_result(self):
         with tempfile.TemporaryDirectory() as tmp:

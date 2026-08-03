@@ -25,3 +25,6 @@ local_failure_patterns:
   permission_error:
     - PermissionError
     - Access is denied
+  artifact_serialization:
+    - is not JSON serializable
+    - Object of type

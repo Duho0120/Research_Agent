@@ -125,8 +125,14 @@ from typing import Any
 
 from ..paths import competition_memory_dir, competition_submissions_dir, trial_dir
 from ..store import load_state, write_text
+from ..trial_decision import MAX_AXIS_NO_IMPROVE_ATTEMPTS, load_latest_decision_context
 from .pipeline_planner import plan_pipeline_improvement
-from ..user_insight_policy import interpret_user_insight, strategy_for_axis
+from ..user_insight_policy import (
+    _TERMINAL_INSIGHT_STATUSES,
+    interpret_user_insight,
+    strategy_for_axis,
+    user_insight_record_by_id,
+)
 
 
 def propose_next_experiment(
@@ -147,12 +153,23 @@ def propose_next_experiment(
     research_protocol = _latest_or_create_research_protocol(competition, source_trial_id, next_trial_id)
     strategy_hint = diagnosis.get("evidence", {}).get("strategy_recommendation")
     issues = diagnosis.get("evidence", {}).get("issues", [])
+    decision_context = load_latest_decision_context(competition)
+    active_axis = decision_context.get("active_axis")
+    axis_attempt_count = int(decision_context.get("axis_attempt_count") or 0)
+    axis_attempt_limit = int(decision_context.get("axis_attempt_limit") or MAX_AXIS_NO_IMPROVE_ATTEMPTS)
 
-    strategy = (
-        strategy_for_axis(str(user_insight_override.get("active_axis") or "user_insight"))
-        if user_insight_override and user_insight_override.get("status") == "active"
-        else _choose_strategy(strategy_hint, failures, submission, user_feedback, pipeline_plan)
-    )
+    if user_insight_override and user_insight_override.get("status") == "active":
+        # An explicit user insight always takes priority and is pursued via its own
+        # attempt-count tracking (see build_next_trial_user_insight_override).
+        strategy = strategy_for_axis(str(user_insight_override.get("active_axis") or "user_insight"))
+    elif active_axis and axis_attempt_count < axis_attempt_limit:
+        # The current axis (however it was chosen) still has attempts left. Keep
+        # pursuing it -- one axis per full attempt budget, per the intended design --
+        # rather than letting a global failure count auto-escalate to an ungated
+        # "SOTA" strategy switch before the axis itself has actually been exhausted.
+        strategy = strategy_for_axis(active_axis)
+    else:
+        strategy = _choose_strategy(strategy_hint, failures, submission, user_feedback, pipeline_plan)
     plan = {
         "competition": competition,
         "source_trial_id": source_trial_id,
@@ -234,6 +251,12 @@ def _choose_strategy(
     user_feedback: dict[str, Any] | None = None,
     pipeline_plan: dict[str, Any] | None = None,
 ) -> str:
+    # "sota_architecture_attempt" is only ever chosen when a user explicitly asks
+    # for it (decision == "prepare_sota_research"). The intended design escalates
+    # a plateaued axis to a different concrete axis (e.g. model_family_change),
+    # never to an undirected "try something SOTA" jump picked without the user's
+    # involvement -- that always requires explaining cost/risk and getting
+    # approval first.
     if user_feedback:
         decision = user_feedback.get("decision")
         if decision == "user_insight_for_planner":
@@ -247,12 +270,8 @@ def _choose_strategy(
 
     if pipeline_plan:
         axis = pipeline_plan.get("primary_axis")
-        if axis == "validation":
-            return "validation_review"
-        if axis in {"model_architecture", "pretraining_strategy"}:
-            return "sota_architecture_attempt"
-        if axis == "model_family":
-            return "sota_architecture_attempt" if failures >= 3 else "model_family_change"
+        if axis:
+            return strategy_for_axis(axis)
 
     lb_worsened = False
     if submission:
@@ -261,7 +280,7 @@ def _choose_strategy(
         lb_worsened = (score_delta is not None and score_delta < 0) or (rank_delta is not None and rank_delta < 0)
 
     if strategy_hint == "strategy_escalation" or failures >= 3:
-        return "sota_architecture_attempt" if lb_worsened or failures >= 3 else "model_family_change"
+        return "model_family_change"
     if lb_worsened:
         return "validation_review"
     return "controlled_refinement"
@@ -319,7 +338,7 @@ def _changes_for_strategy(strategy: str) -> list[str]:
 def _guardrails_for_strategy(strategy: str) -> list[str]:
     guardrails = [
         "Keep validation unchanged unless this is explicitly a validation review.",
-        "Do not submit if expected gain is within known seed variance.",
+        "When submission tracking is enabled, submit every completed trial so leaderboard evidence is recorded.",
         "Record current and submitted leaderboard score/rank if a submission is made.",
     ]
     if strategy == "sota_architecture_attempt":
@@ -392,8 +411,19 @@ def _latest_user_feedback(competition: str, trial_id: str) -> dict[str, Any] | N
         return None
     rows = _read_jsonl(path)
     for row in reversed(rows):
-        if row.get("trial_id") == trial_id:
-            return row
+        if row.get("trial_id") != trial_id:
+            continue
+        insight_id = row.get("insight_id")
+        if insight_id:
+            record = user_insight_record_by_id(competition, str(insight_id))
+            if record and record.get("status") in _TERMINAL_INSIGHT_STATUSES:
+                # This feedback already ran its full insight lifecycle (applied,
+                # evaluated, and superseded/completed/exhausted) in an earlier
+                # planning round. Re-surfacing it here would re-plan the same
+                # instruction over and over for every later trial that happens to
+                # share this trial_id as its source, instead of moving forward.
+                continue
+        return row
     return None
 
 

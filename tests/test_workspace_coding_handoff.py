@@ -13,6 +13,57 @@ from kaggle_research_agent.workspace_coding_handoff import prepare_workspace_cod
 
 
 class WorkspaceCodingHandoffTest(unittest.TestCase):
+    def test_code_priority_is_generic_not_titanic_specific(self):
+        from kaggle_research_agent.workspace_coding_handoff import (
+            _code_file_priority,
+            _context_file_limit,
+            _delta_code_file_priority,
+        )
+
+        self.assertEqual(0, _code_file_priority(Path("src/pipeline.py"))[0])
+        self.assertEqual(0, _code_file_priority(Path("src/baseline.py"))[0])
+        self.assertEqual(2, _code_file_priority(Path("src/titanic_pipeline.py"))[0])
+        self.assertEqual(14000, _context_file_limit("src/pipeline.py", 2000))
+        delta_plan = {
+            "code_change_targets": [
+                "train_step.py: replace the estimator",
+                "predict_step.py: verify inference",
+            ]
+        }
+        self.assertLess(
+            _delta_code_file_priority(Path("train_step.py"), delta_plan),
+            _delta_code_file_priority(Path("src/baseline.py"), delta_plan),
+        )
+
+    def test_current_workspace_file_listing_prioritizes_plan_relevant_file_over_alphabetical_tiebreak(self):
+        # Regression for trial_026: the "Current Workspace Code" section (the
+        # live files, as opposed to the saved base-trial snapshot) built its
+        # file order with the same plain alphabetical tie-break bug fixed
+        # earlier for the base-trial-snapshot section. When predict_step.py
+        # and train_step.py tie on priority, predict_step.py wins
+        # alphabetically and gets listed first -- if the char budget then
+        # runs out, train_step.py (the file the plan actually needs) can be
+        # cut off entirely even in the "expanded retry" snapshot.
+        from kaggle_research_agent.workspace_coding_handoff import _allowed_readable_files
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "predict_step.py").write_text("def predict():\n    return 'noop'\n", encoding="utf-8")
+            (root / "test_step.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+            (root / "train_step.py").write_text(
+                "def train_validate():\n    return 'StandardScaler'\n", encoding="utf-8"
+            )
+            delta_plan = {"code_change_targets": [], "required_code_symbols": ["train_validate"]}
+
+            files = _allowed_readable_files(
+                root,
+                ["predict_step.py", "test_step.py", "train_step.py"],
+                max_files=10,
+                delta_plan=delta_plan,
+            )
+
+            self.assertEqual("train_step.py", files[0].name)
+
     def test_prepare_workspace_coding_handoff_writes_scoped_request(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -69,6 +120,15 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             self.assertNotIn("tests/README.md", snapshot_text)
             request = trial / "workspace_coding_agent_request.md"
             self.assertTrue(request.exists())
+            pending_snapshot = json.loads(
+                (trial / "internal" / "pending_execution_plan_snapshot.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual("pending", pending_snapshot["status"])
+            self.assertEqual("trial_002", pending_snapshot["trial_id"])
+            self.assertEqual(
+                "workspace_coding_agent_request.md:Next Experiment",
+                pending_snapshot["source"],
+            )
             text = request.read_text(encoding="utf-8")
             self.assertIn("Allowed External Write Paths", text)
             self.assertIn("src/", text)
@@ -147,6 +207,40 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
         self.assertIn("Current Workspace Code", snapshot_text)
         self.assertIn("MODEL = 'baseline'", prompt)
         self.assertIn("EXTRA = 'current'", prompt)
+
+    def test_runtime_repair_handoff_preserves_current_workspace_and_failure_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_execution_profile(root, project)
+            self._write_next_trial(root, continuation_mode="can_continue")
+            (project / "src" / "baseline.py").write_text("MODEL = 'failed_delta'\n", encoding="utf-8")
+            failure = {
+                "failed_stage": "train",
+                "failure_type": "artifact_serialization",
+                "log_tail": "TypeError: Object of type ufunc is not JSON serializable",
+            }
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = prepare_workspace_coding_handoff(
+                    "demo",
+                    "trial_002",
+                    expanded_snapshot=True,
+                    retry_reason="workspace_runtime_failure",
+                    runtime_failure_context=failure,
+                )
+                trial = root / "experiments" / "demo" / "trial_002"
+                handoff = json.loads((trial / "workspace_coding_handoff.json").read_text(encoding="utf-8"))
+                payload = build_workspace_code_writer_payload(handoff, model="gpt-5.5")
+
+        prompt = payload["input"][1]["content"]
+        self.assertEqual("expanded_runtime_repair", result["snapshot_mode"])
+        self.assertFalse(result["edit_policy"]["restore_base_before_patch"])
+        self.assertEqual(failure, result["runtime_failure_context"])
+        self.assertIn("Runtime repair mode", prompt)
+        self.assertIn("Object of type ufunc is not JSON serializable", prompt)
+        self.assertIn("failed_delta", prompt)
+        self.assertIn("JSON serializable", prompt)
 
     def test_patch_only_handoff_keeps_class_based_pipeline_targets_visible(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -308,6 +402,203 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             self.assertIn("CabinMissing_Pclass3", prompt)
             self.assertNotIn("def run_prediction", prompt)
             self.assertIn("Omitted for compact delta patch mode", prompt)
+
+    def test_prepare_workspace_coding_handoff_blocks_when_plan_find_target_missing_from_base_code(self):
+        # Regression for trial_027: the plan continued axis
+        # model_hyperparameters:Ridge and assumed Ridge( already existed in
+        # the base trial's code (because an earlier, unaccepted attempt at
+        # that axis had it), but the actual recommended base trial
+        # (trial_014-equivalent here) still used a different estimator. This
+        # used to only surface after a wasted code-writing LLM call
+        # ("patch_find_not_found"); it should now be caught up front.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_execution_profile(root, project)
+            self._write_next_trial(root, continuation_mode="can_continue")
+            source = root / "experiments" / "demo" / "trial_001" / "user_view" / "code"
+            (source / "src").mkdir(parents=True, exist_ok=True)
+            (source / "train_step.py").write_text(
+                "from sklearn.ensemble import HistGradientBoostingRegressor\n\n"
+                "def train():\n    return HistGradientBoostingRegressor()\n",
+                encoding="utf-8",
+            )
+            (source / "predict_step.py").write_text("def predict():\n    return 'noop'\n", encoding="utf-8")
+            trial = root / "experiments" / "demo" / "trial_002"
+            (trial / "delta_plan.json").write_text(
+                json.dumps(
+                    {
+                        "plan_type": "delta_patch",
+                        "source_trial_id": "trial_001",
+                        "primary_change_axis": "model_hyperparameters:Ridge",
+                        "code_change_targets": [
+                            "File: train_step.py",
+                            "Find: Ridge(",
+                            "Replace Hint: Ridge(alpha=1.0, solver='cholesky')",
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = prepare_workspace_coding_handoff("demo", "trial_002")
+
+            self.assertEqual("blocked", result["status"])
+            self.assertIn("plan_find_target_missing_in_base_code:train_step.py", result["blocking_issues"])
+            self.assertEqual("resolve-workspace-handoff-blockers", result["next_action"])
+            self.assertFalse((trial / "workspace_coding_agent_request.md").exists())
+
+    def test_expanded_snapshot_hides_current_code_body_when_base_will_be_restored(self):
+        # Regression for trial_030: on the expanded retry the snapshot dumped
+        # the current workspace body labelled "Used as exact patch context",
+        # but restore_base_before_patch overwrites that workspace with the
+        # base trial snapshot before the patch is applied. The code writer
+        # copied find text from the doomed current code (which used a
+        # different local variable name) and every patch failed with
+        # patch_find_not_found.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_execution_profile(root, project)
+            self._write_next_trial(root, continuation_mode="can_continue")
+            # Base trial snapshot uses `X`; the live workspace uses `Xb`.
+            source = root / "experiments" / "demo" / "trial_001" / "user_view" / "code"
+            source.mkdir(parents=True, exist_ok=True)
+            (source / "train_step.py").write_text(
+                "def train():\n    X = build()\n    X = X.assign(hr_sin=1)\n    return X\n",
+                encoding="utf-8",
+            )
+            (project / "train_step.py").write_text(
+                "def train():\n    Xb = build()\n    Xb = Xb.assign(hr_sin=1)\n    return Xb\n",
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = prepare_workspace_coding_handoff("demo", "trial_002", expanded_snapshot=True)
+                snapshot = (
+                    root / "experiments" / "demo" / "trial_002" / "workspace_context_snapshot.md"
+                ).read_text(encoding="utf-8")
+
+            self.assertEqual("ready", result["status"])
+            self.assertTrue(result["edit_policy"]["restore_base_before_patch"])
+            # The soon-to-be-overwritten body must not be offered as patch source.
+            self.assertNotIn("Xb", snapshot)
+            self.assertIn("WILL BE OVERWRITTEN", snapshot)
+            # The authoritative base code is still available to patch against.
+            self.assertIn("X = X.assign(hr_sin=1)", snapshot)
+
+    def test_runtime_repair_still_shows_current_code_because_nothing_is_restored(self):
+        # Runtime repair fixes a crash in code that already ran, so the base
+        # snapshot is deliberately NOT restored -- there the current workspace
+        # really is the authoritative patch source and must stay visible.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_execution_profile(root, project)
+            self._write_next_trial(root, continuation_mode="can_continue")
+            (project / "train.py").write_text(
+                "def train():\n    Xb = build()\n    return Xb\n", encoding="utf-8"
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = prepare_workspace_coding_handoff(
+                    "demo",
+                    "trial_002",
+                    expanded_snapshot=True,
+                    runtime_failure_context={"failed_stage": "train", "returncode": 1},
+                )
+                snapshot = (
+                    root / "experiments" / "demo" / "trial_002" / "workspace_context_snapshot.md"
+                ).read_text(encoding="utf-8")
+
+            self.assertFalse(result["edit_policy"]["restore_base_before_patch"])
+            self.assertIn("Xb", snapshot)
+
+    def test_delta_patch_snapshot_prioritizes_explicit_target_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_execution_profile(root, project)
+            self._write_next_trial(root, continuation_mode="can_continue")
+            source = root / "experiments" / "demo" / "trial_001" / "user_view" / "code"
+            for relative, content in {
+                "src/baseline.py": "BASELINE = True\n",
+                "predict_step.py": "def predict():\n    return 'ridge'\n",
+                "train_step.py": "from sklearn.linear_model import Ridge\n\ndef train():\n    return Ridge()\n",
+            }.items():
+                path = source / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+            trial = root / "experiments" / "demo" / "trial_002"
+            (trial / "delta_plan.json").write_text(
+                json.dumps(
+                    {
+                        "plan_type": "delta_patch",
+                        "source_trial_id": "trial_001",
+                        "primary_change_axis": "model_family",
+                        "code_change_targets": [
+                            "train_step.py: replace Ridge",
+                            "predict_step.py: verify inference",
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                prepare_workspace_coding_handoff("demo", "trial_002")
+
+            snapshot = (trial / "workspace_context_snapshot.md").read_text(encoding="utf-8")
+            self.assertIn("### train_step.py", snapshot)
+            self.assertIn("### predict_step.py", snapshot)
+            self.assertNotIn("### src/baseline.py", snapshot)
+
+    def test_delta_patch_snapshot_falls_back_to_required_code_symbols_when_targets_empty(self):
+        # Regression for trial_015: the planner sometimes leaves
+        # code_change_targets empty even though the plan clearly needs a
+        # specific file changed (it still names the function via
+        # required_code_symbols). With the tight max_files=2 budget for delta
+        # refinement, a plain alphabetical tie-break between predict_step.py
+        # and train_step.py picked predict_step.py and silently dropped
+        # train_step.py -- the file that actually needed the patch.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_execution_profile(root, project)
+            self._write_next_trial(root, continuation_mode="can_continue")
+            source = root / "experiments" / "demo" / "trial_001" / "user_view" / "code"
+            for relative, content in {
+                "src/baseline.py": "BASELINE = True\n",
+                "predict_step.py": "def predict():\n    return 'noop'\n",
+                "train_step.py": (
+                    "from sklearn.preprocessing import StandardScaler\n\n"
+                    "def train_validate():\n    return StandardScaler()\n"
+                ),
+            }.items():
+                path = source / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+            trial = root / "experiments" / "demo" / "trial_002"
+            (trial / "delta_plan.json").write_text(
+                json.dumps(
+                    {
+                        "plan_type": "delta_patch",
+                        "source_trial_id": "trial_001",
+                        "primary_change_axis": "preprocessing:remove_standard_scaler_for_tree_model",
+                        "code_change_targets": [],
+                        "required_code_symbols": ["train_validate"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                prepare_workspace_coding_handoff("demo", "trial_002")
+
+            snapshot = (trial / "workspace_context_snapshot.md").read_text(encoding="utf-8")
+            self.assertIn("### train_step.py", snapshot)
+            self.assertIn("StandardScaler", snapshot)
 
     def test_handoff_uses_recommended_base_trial_for_code_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp:

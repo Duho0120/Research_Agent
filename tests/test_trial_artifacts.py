@@ -5,11 +5,56 @@ from pathlib import Path
 from unittest.mock import patch
 
 from kaggle_research_agent import simple_yaml
-from kaggle_research_agent.trial_artifacts import organize_trial_artifacts, trial_artifact_exists
-from kaggle_research_agent.trial_user_view import _plan_note_lines, render_user_plan
+from kaggle_research_agent.trial_artifacts import (
+    _extract_pipeline_details,
+    _extract_pipeline_facts,
+    _pipeline_submission_columns,
+    organize_trial_artifacts,
+    reconcile_trial_execution_metadata,
+    trial_artifact_exists,
+)
+from kaggle_research_agent.trial_user_view import _plan_note_lines, render_user_plan, render_user_scores
 
 
 class TrialArtifactsTest(unittest.TestCase):
+    def test_user_scores_only_marks_submission_best(self):
+        without_submission = render_user_scores(
+            {
+                "trial_id": "trial_001",
+                "status": "completed",
+                "metric": "rmsle",
+                "objective": "minimize",
+                "local_score": 1.0,
+                "is_best_local": True,
+                "is_best_lb": False,
+            }
+        )
+        with_submission_best = render_user_scores(
+            {
+                "trial_id": "trial_002",
+                "status": "completed",
+                "metric": "rmsle",
+                "objective": "minimize",
+                "local_score": 0.9,
+                "lb_score": 0.8,
+                "is_best_local": False,
+                "is_best_lb": True,
+            }
+        )
+
+        self.assertIn("제출 점수 기록 후 판단", without_submission)
+        self.assertNotIn("local best", without_submission)
+        self.assertIn("| Best 표시 | Best |", with_submission_best)
+
+    class _UnavailableTranslationClient:
+        """Simulates the translation API being unavailable, forcing the
+        Korean-labeled template fallback so existing content assertions in
+        this test (written against that template) stay meaningful, without
+        this test making a real network call."""
+
+        def create_response(self, payload):
+            raise RuntimeError("translation API unavailable in test")
+
     class _SummaryClient:
         def create_response(self, payload):
             return {
@@ -86,6 +131,65 @@ class TrialArtifactsTest(unittest.TestCase):
             self.assertIn("CabinMissing_Pclass3", text)
             self.assertNotIn("첫 회차", text)
             self.assertNotIn("first trial", text.lower())
+
+    def test_execution_metadata_reconciliation_uses_executed_model_and_plan_axis(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trial = root / "experiments" / "demo" / "trial_002"
+            trial.mkdir(parents=True)
+            (trial / "metrics.json").write_text(
+                json.dumps(
+                    {
+                        "trial_id": "trial_001",
+                        "cv_score": 0.81,
+                        "model": "LogisticRegression",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            structure = {
+                "stages": [
+                    {
+                        "id": "model_definition",
+                        "structured_details": {
+                            "estimator": "VotingClassifier",
+                            "parameters": {"voting": "soft"},
+                        },
+                    }
+                ],
+                "consistency_issues": [],
+            }
+            plan = {
+                "source_trial_id": "trial_001",
+                "primary_change_axis": "model_ensemble",
+            }
+
+            with patch("kaggle_research_agent.paths.ROOT", root):
+                with patch(
+                    "kaggle_research_agent.trial_artifacts.build_trial_summary",
+                    return_value={"trial_id": "trial_002"},
+                ):
+                    with patch(
+                        "kaggle_research_agent.trial_artifacts.build_pipeline_structure",
+                        return_value=structure,
+                    ):
+                        with patch(
+                            "kaggle_research_agent.trial_artifacts.resolve_trial_plan",
+                            return_value=plan,
+                        ):
+                            with patch(
+                                "kaggle_research_agent.trial_artifacts.write_executed_trial_facts",
+                                return_value={"model": "VotingClassifier"},
+                            ):
+                                result = reconcile_trial_execution_metadata("demo", "trial_002")
+
+            repaired = json.loads((trial / "metrics.json").read_text(encoding="utf-8"))
+            self.assertEqual("corrected", result["status"])
+            self.assertEqual("VotingClassifier", repaired["model"])
+            self.assertEqual("trial_002", repaired["trial_id"])
+            self.assertEqual("trial_001", repaired["source_trial_id"])
+            self.assertEqual("model_ensemble", repaired["change_axis"])
+            self.assertTrue((trial / "internal" / "execution_consistency.json").exists())
 
     def test_organize_trial_artifacts_writes_readme_and_moves_debug_files(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -194,6 +298,7 @@ class TrialArtifactsTest(unittest.TestCase):
                     low_cost_user_summary=True,
                     allow_api=True,
                     low_cost_summary_client=self._SummaryClient(),
+                    plan_translation_client=self._UnavailableTranslationClient(),
                 )
 
             self.assertEqual("demo", result["competition"])
@@ -400,6 +505,104 @@ class TrialArtifactsTest(unittest.TestCase):
             self.assertEqual("RandomForestClassifier", model["estimator"])
             self.assertEqual("300", model["parameters"]["n_estimators"])
 
+    def test_pipeline_structure_extracts_regression_time_split_and_imported_dump(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trial = root / "experiments" / "bike" / "trial_001"
+            trial.mkdir(parents=True)
+            project = root / "workspace"
+            (project / "src").mkdir(parents=True)
+            (project / "workspace_config.json").write_text(
+                json.dumps(
+                    {
+                        "target_column": "count",
+                        "id_column": "datetime",
+                        "metric": "rmsle",
+                        "objective": "minimize",
+                        "required_data_files": ["train.csv", "test.csv"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (project / "src" / "features.py").write_text(
+                "\n".join(
+                    [
+                        "BASE_FEATURES = ['season', 'holiday', 'workingday', 'weather', 'temp', 'atemp', 'humidity', 'windspeed']",
+                        "DT_FEATURES = ['dt_year', 'dt_month', 'dt_dayofweek', 'dt_hour']",
+                        "FEATURE_COLUMNS = BASE_FEATURES + DT_FEATURES",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (project / "train_step.py").write_text(
+                "\n".join(
+                    [
+                        "import pandas as pd",
+                        "from joblib import dump",
+                        "from sklearn.linear_model import Ridge",
+                        "from sklearn.impute import SimpleImputer",
+                        "from sklearn.preprocessing import StandardScaler",
+                        "df = pd.read_csv('data/train.csv')",
+                        "df = df.sort_values('datetime').reset_index(drop=True)",
+                        "split_at = max(1, int(len(df) * 0.8))",
+                        "X_train, X_valid = X.iloc[:split_at], X.iloc[split_at:]",
+                        "# fallback when the dataset is too small",
+                        "model = Ridge(alpha=1.0, fit_intercept=True)",
+                        "SimpleImputer(strategy='median')",
+                        "StandardScaler()",
+                        "model.fit(X_train, y_train)",
+                        "dump(model, outputs / 'model.joblib')",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            comp = root / "competitions" / "bike"
+            comp.mkdir(parents=True)
+            simple_yaml.dump({"project_root": str(project)}, comp / "execution_profile.yaml")
+            (trial / "metrics.json").write_text(
+                json.dumps({"cv_score": 1.0086, "metric": "rmsle", "objective": "minimize"}),
+                encoding="utf-8",
+            )
+            (trial / "metrics_collection.json").write_text(json.dumps({"status": "collected"}), encoding="utf-8")
+            (trial / "workspace_run.json").write_text(json.dumps({"status": "completed"}), encoding="utf-8")
+            (trial / "workspace_coding_result.json").write_text(
+                json.dumps({"changed_files": ["train_step.py", "src/features.py"]}),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                organize_trial_artifacts("bike", "trial_001")
+
+            structure = json.loads((trial / "internal" / "pipeline_structure.json").read_text(encoding="utf-8"))
+            by_id = {stage["id"]: stage for stage in structure["stages"]}
+            self.assertEqual("Ridge", by_id["model_definition"]["structured_details"]["estimator"])
+            self.assertEqual("1.0", by_id["model_definition"]["structured_details"]["parameters"]["alpha"])
+            self.assertEqual("time_ordered_holdout", by_id["data_split_cv"]["structured_details"]["method"])
+            self.assertEqual(0.2, by_id["data_split_cv"]["structured_details"]["test_size"])
+            self.assertEqual(
+                [
+                    "season",
+                    "holiday",
+                    "workingday",
+                    "weather",
+                    "temp",
+                    "atemp",
+                    "humidity",
+                    "windspeed",
+                    "dt_year",
+                    "dt_month",
+                    "dt_dayofweek",
+                    "dt_hour",
+                ],
+                by_id["feature_representation"]["structured_details"]["final_feature_columns"],
+            )
+            self.assertFalse(by_id["dataset_dataloader"]["included"])
+            self.assertEqual("joblib.dump", by_id["model_checkpoint"]["structured_details"]["writer"])
+            self.assertEqual(
+                "outputs/model.joblib",
+                by_id["model_checkpoint"]["structured_details"]["checkpoint_path"],
+            )
+
     def test_pipeline_structure_prefers_runtime_feature_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -515,6 +718,57 @@ class TrialArtifactsTest(unittest.TestCase):
             self.assertIn("Pclass", user_structure)
             self.assertIn("Sex", user_structure)
             self.assertIn("pickle", json.dumps(checkpoint))
+
+    def test_pipeline_submission_columns_reads_nested_submission_dict(self):
+        # pipeline_summary.json writers nest the schema under
+        # {"submission": {"columns": [...]}}; a bare top-level
+        # "submission_columns" key must still work for callers that already
+        # flattened it.
+        self.assertEqual(
+            ["id", "x", "y", "z"],
+            _pipeline_submission_columns({"submission": {"columns": ["id", "x", "y", "z"]}}),
+        )
+        self.assertEqual(
+            ["id", "target"],
+            _pipeline_submission_columns({"submission_columns": ["id", "target"]}),
+        )
+        self.assertIsNone(_pipeline_submission_columns({}))
+        self.assertIsNone(_pipeline_submission_columns({"submission": {}}))
+
+    def test_extract_pipeline_details_uses_real_multi_column_submission_schema(self):
+        # Regression test: this pipeline_summary shape (nested "submission":
+        # {"columns": [...]}) previously missed the lookup entirely and fell
+        # back to a hardcoded "target" prediction column even though the
+        # real submission wrote id,x,y,z -- which fed a false "trial emitted
+        # id,target" claim into later planning.
+        summary = {
+            "project_root": "/does/not/matter",
+            "metrics": {},
+        }
+        with patch(
+            "kaggle_research_agent.trial_artifacts._workspace_pipeline_summary",
+            return_value={"submission": {"columns": ["id", "x", "y", "z"]}},
+        ):
+            details = _extract_pipeline_details(summary, code_files=[], code_text="")
+
+        self.assertEqual("x,y,z", details["test_inference_output"]["prediction_column"])
+        self.assertEqual("x,y,z", details["data_load"]["target_column"])
+
+    def test_extract_pipeline_facts_does_not_fabricate_a_target_column(self):
+        # Regression test for the fabricated "id,target" claim: with no
+        # explicit target_column anywhere and a real multi-column submission
+        # schema, the data_load fact must describe the real columns, not
+        # assert a "target" column that was never detected.
+        summary = {"project_root": "/does/not/matter", "metrics": {}}
+        with patch(
+            "kaggle_research_agent.trial_artifacts._workspace_pipeline_summary",
+            return_value={"submission": {"columns": ["id", "x", "y", "z"]}},
+        ):
+            facts = _extract_pipeline_facts(summary, code_files=[], code_text="")
+
+        joined = "\n".join(facts["data_load"])
+        self.assertIn("학습 타깃은 `x,y,z`", joined)
+        self.assertNotIn("학습 타깃은 `target`", joined)
 
     def test_organize_trial_artifacts_prefers_internal_code_snapshot_over_current_workspace(self):
         with tempfile.TemporaryDirectory() as tmp:

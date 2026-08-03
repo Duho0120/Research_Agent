@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 from .agents.memory import log_decision
 from .code_snapshot import load_trial_code_snapshot
 from .execution_profile import load_execution_profile, validate_execution_profile
+from .execution_plan_snapshot import capture_pending_execution_plan
 from .paths import competition_dir, trial_dir
 from .policies import load_policy
 from .rag_policy import evaluate_rag_policy
@@ -21,6 +23,7 @@ def prepare_workspace_coding_handoff(
     *,
     expanded_snapshot: bool = False,
     retry_reason: str | None = None,
+    runtime_failure_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     out_dir = trial_dir(competition, trial_id)
     next_experiment_path = out_dir / "next_experiment.md"
@@ -56,10 +59,24 @@ def prepare_workspace_coding_handoff(
         continuation=continuation,
         expanded_snapshot=expanded_snapshot,
         retry_reason=retry_reason,
+        runtime_failure_context=runtime_failure_context,
     )
+    # _build_handoff may discover further issues (e.g. the plan's own Find:
+    # hints not matching the base trial's actual code) that were not knowable
+    # until it resolved the base trial's code snapshot -- blocking_issues is
+    # shared by reference, so re-derive status from it rather than the
+    # earlier, possibly stale local value.
+    status = handoff.get("status", status)
     write_text(out_dir / "workspace_coding_handoff.json", json.dumps(handoff, ensure_ascii=False, indent=2) + "\n")
     if status == "ready":
-        write_text(out_dir / "workspace_coding_agent_request.md", render_workspace_coding_request(handoff, coding_instruction))
+        request_text = render_workspace_coding_request(handoff, coding_instruction)
+        write_text(out_dir / "workspace_coding_agent_request.md", request_text)
+        capture_pending_execution_plan(
+            competition,
+            trial_id,
+            request_text=request_text,
+            request_id=handoff.get("request_id"),
+        )
     log_decision(
         competition,
         trial_id,
@@ -88,6 +105,7 @@ def _build_handoff(
     continuation: dict[str, Any],
     expanded_snapshot: bool = False,
     retry_reason: str | None = None,
+    runtime_failure_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     out_dir = trial_dir(competition, trial_id)
     artifacts = profile.get("artifacts", {}) if profile else {}
@@ -96,20 +114,32 @@ def _build_handoff(
     forbidden = list(scope.get("forbidden", [])) if isinstance(scope, dict) else []
     forbidden = _unique([*forbidden, *artifacts.get("metrics", []), *artifacts.get("submission", [])])
     validation_commands = []
+    predict_commands = []
     commands = profile.get("commands", {}) if profile else {}
     if isinstance(commands, dict):
         validation_commands = list(commands.get("test", []))
+        predict_commands = list(commands.get("predict", []))
     edit_mode = _edit_mode_for_continuation(continuation)
     source_trial_id = str(continuation.get("source_trial_id") or "") or None
     code_base_trial_id = str(continuation.get("recommended_base_trial") or "") or source_trial_id
     base_code_files = _source_trial_code_files(competition, code_base_trial_id)
     base_code_source = _source_trial_code_source_label(competition, code_base_trial_id) if base_code_files else None
-    restore_base_before_patch = bool(code_base_trial_id and base_code_files)
+    is_runtime_repair = bool(runtime_failure_context)
+    restore_base_before_patch = bool(code_base_trial_id and base_code_files and not is_runtime_repair)
+    delta_plan = _load_json_object(out_dir / "delta_plan.json") or {}
+    if status == "ready" and not is_runtime_repair:
+        # Check the plan's own Find: hints against the base trial's actual
+        # code before any code-writing LLM call is spent generating a patch
+        # from them. A plan can assume a change from an earlier, unaccepted
+        # attempt at the same axis is already present in the base trial's
+        # code -- it is not, since only accepted trials become the new base.
+        blocking_issues.extend(_plan_find_target_issues(delta_plan, base_code_files))
+        if blocking_issues:
+            status = "blocked"
     next_action = "send-to-workspace-coding-agent" if status == "ready" else "resolve-workspace-handoff-blockers"
     metrics_paths = artifacts.get("metrics", []) if isinstance(artifacts, dict) else []
     metrics_path = metrics_paths[0] if metrics_paths else "outputs/metrics.json"
     context_files = _context_files(competition, trial_id)
-    delta_plan = _load_json_object(out_dir / "delta_plan.json") or {}
     patch_budget = _patch_budget_for_delta(delta_plan)
     artifact_policy = load_policy("artifact_policy")
     data_card_summary = _load_data_card_summary(competition)
@@ -122,6 +152,7 @@ def _build_handoff(
                 profile,
                 continuation,
                 expanded_snapshot=expanded_snapshot,
+                base_will_be_restored=restore_base_before_patch,
             )
         )
         rag_policy = _workspace_coding_rag_policy(continuation)
@@ -169,8 +200,13 @@ def _build_handoff(
         "pending_human_review": bool(continuation.get("pending_human_review")),
         "review_source_trial": continuation.get("review_source_trial"),
         "context_files": context_files,
-        "snapshot_mode": "expanded_after_code_writer_blocked" if expanded_snapshot else "standard",
+        "snapshot_mode": (
+            "expanded_runtime_repair"
+            if is_runtime_repair
+            else ("expanded_after_code_writer_blocked" if expanded_snapshot else "standard")
+        ),
         "retry_reason": retry_reason,
+        "runtime_failure_context": runtime_failure_context or {},
         "retrieval_context": _compact_retrieval_context(retrieval_context),
         "data_card_summary": data_card_summary,
         "edit_policy": {
@@ -190,6 +226,7 @@ def _build_handoff(
         "allowed_write_paths": allowed,
         "forbidden_paths": forbidden,
         "validation_commands": validation_commands,
+        "predict_commands": predict_commands,
         "execution_constraints": {
             "do_not_run_training": True,
             "do_not_submit": True,
@@ -207,6 +244,7 @@ def _build_handoff(
                 "metric should match the competition metric name when known.",
                 "objective must be maximize or minimize.",
                 "Additional diagnostic keys such as validation_accuracy are allowed, but cv_score is the canonical score.",
+                "Every metrics and pipeline-summary value must be JSON serializable. Convert numpy scalars, callables, estimators, paths, and other objects to primitive values or stable strings before json.dumps.",
             ],
         },
         "artifact_policy": artifact_policy,
@@ -297,6 +335,20 @@ def render_workspace_coding_request(handoff: dict[str, Any], next_experiment: st
         "",
     ]
     lines.extend(f"- {item}" for item in handoff["context_files"] or ["None"])
+    runtime_failure = handoff.get("runtime_failure_context")
+    if isinstance(runtime_failure, dict) and runtime_failure:
+        lines.extend(
+            [
+                "",
+                "## Runtime Repair Context",
+                "",
+                "- The previous code-writing attempt was applied, but workspace execution failed.",
+                "- Repair the current workspace code only. Preserve the planned experiment change and do not restore the base trial.",
+                "```json",
+                json.dumps(runtime_failure, ensure_ascii=False, indent=2),
+                "```",
+            ]
+        )
     retrieval_context = handoff.get("retrieval_context", {})
     data_card_summary = handoff.get("data_card_summary", {})
     if retrieval_context:
@@ -354,6 +406,20 @@ def render_workspace_coding_request(handoff: dict[str, Any], next_experiment: st
             "- Do not edit data, metrics, submission, or output artifacts.",
             "- Do not write outside the allowed external write paths.",
             "- If a base trial code snapshot is declared, do not preserve rejected changes from later failed trials.",
+            "- Never fabricate, synthesize, or hardcode placeholder train/test data as a fallback when an expected "
+            "file (e.g. data/train.csv, data/test.csv) is missing. A trial that raises a clear error is always "
+            "correct over one that silently substitutes made-up data to produce a plausible-looking metric or "
+            "submission -- a fabricated result is worse than a visible failure because it hides the real problem.",
+            "- The actual data file/folder layout for this competition is listed under 'Data Card Summary' below "
+            "(and in the competition's data_notes.md, if provided) -- read code against those real paths, not "
+            "against a conventional train.csv/test.csv name you assume exists. If the data is split across many "
+            "per-sample files or separate feature/label files, write code that loads and joins them accordingly.",
+            "- If this trial changes the prediction/inference algorithm (e.g. in predict_step.py), the local "
+            "validation/scoring logic (e.g. in test_step.py) must be updated to use the exact same prediction "
+            "logic -- ideally by having both call one shared function (e.g. in src/) rather than each keeping its "
+            "own separate copy. A local score computed from validation code that still runs the OLD algorithm "
+            "does not reflect what the submission actually contains, silently making the local CV score "
+            "meaningless -- this must never happen even when the change is described as small or low-risk.",
             "",
             "## Validation Commands",
             "",
@@ -433,6 +499,7 @@ def _write_workspace_context_snapshot(
     continuation: dict[str, Any],
     *,
     expanded_snapshot: bool = False,
+    base_will_be_restored: bool = False,
 ) -> list[str]:
     out_dir = trial_dir(competition, trial_id)
     source_trial_id = continuation.get("recommended_base_trial") or continuation.get("source_trial_id")
@@ -450,7 +517,12 @@ def _write_workspace_context_snapshot(
         source_trial_id=str(source_trial_id) if source_trial_id else None,
         delta_plan=delta_plan if isinstance(delta_plan, dict) else {},
         compact_for_delta=is_delta_refinement,
-        include_current_code_body=expanded_snapshot,
+        # When the base snapshot is restored over the workspace before the
+        # patch is applied, the current workspace body is guaranteed to be
+        # discarded -- showing it as patch context only invites find strings
+        # that can never match.
+        include_current_code_body=expanded_snapshot and not base_will_be_restored,
+        base_will_be_restored=base_will_be_restored,
         **snapshot_limits,
     )
     path = out_dir / "workspace_context_snapshot.md"
@@ -482,6 +554,7 @@ def render_workspace_context_snapshot(
     delta_plan: dict[str, Any] | None = None,
     compact_for_delta: bool = False,
     include_current_code_body: bool = False,
+    base_will_be_restored: bool = False,
     max_files: int = 16,
     max_chars_per_file: int = 3000,
     max_total_chars: int = 12000,
@@ -515,7 +588,7 @@ def render_workspace_context_snapshot(
         lines.extend(source_sections or ["- No saved source trial code snapshot was found."])
         if source_sections and not include_current_code_body:
             lines.extend(["", "## Current Workspace Code Inventory", ""])
-            lines.extend(_current_code_inventory(profile))
+            lines.extend(_current_code_inventory(profile, base_will_be_restored=base_will_be_restored))
         else:
             lines.extend(
                 [
@@ -531,6 +604,7 @@ def render_workspace_context_snapshot(
                 max_files=max_files,
                 max_chars_per_file=max_chars_per_file,
                 max_total_chars=max_total_chars,
+                delta_plan=delta_plan,
             )
             lines.extend(current_sections or ["- No readable current workspace code files were found."])
     else:
@@ -540,6 +614,7 @@ def render_workspace_context_snapshot(
             max_files=max_files,
             max_chars_per_file=max_chars_per_file,
             max_total_chars=max_total_chars,
+            delta_plan=delta_plan,
         )
         lines.extend(code_sections or ["- No readable code files were found in the allowed write scope."])
     if compact_for_delta:
@@ -588,7 +663,11 @@ def _source_trial_code_sections(
     max_chars_per_file: int,
     max_total_chars: int,
 ) -> list[str]:
-    files = _source_trial_code_files(competition, source_trial_id)
+    files = _source_trial_code_files(
+        competition,
+        source_trial_id,
+        delta_plan=delta_plan,
+    )
     sections: list[str] = []
     total = 0
     for relative, text in files[:max_files]:
@@ -604,7 +683,12 @@ def _source_trial_code_sections(
     return sections
 
 
-def _source_trial_code_files(competition: str, source_trial_id: str | None) -> list[tuple[str, str]]:
+def _source_trial_code_files(
+    competition: str,
+    source_trial_id: str | None,
+    *,
+    delta_plan: dict[str, Any] | None = None,
+) -> list[tuple[str, str]]:
     if not source_trial_id:
         return []
     source_dir = trial_dir(competition, source_trial_id)
@@ -612,16 +696,21 @@ def _source_trial_code_files(competition: str, source_trial_id: str | None) -> l
     if snapshot:
         return sorted(
             [(relative, text) for relative, text in snapshot if relative.endswith(".py")],
-            key=lambda item: _code_file_priority(Path(item[0])),
+            key=lambda item: _delta_code_file_priority(Path(item[0]), delta_plan, text=item[1]),
         )
     code_root = source_dir / "user_view" / "code"
     files: list[tuple[str, str]] = []
     if code_root.is_dir():
-        for path in sorted(code_root.rglob("*.py"), key=lambda item: _code_file_priority(item)):
+        unsorted_files = []
+        for path in code_root.rglob("*.py"):
             relative = path.relative_to(code_root).as_posix()
             text = read_text(path, default="")
             if text:
-                files.append((relative, text))
+                unsorted_files.append((relative, text))
+        files = sorted(
+            unsorted_files,
+            key=lambda item: _delta_code_file_priority(Path(item[0]), delta_plan, text=item[1]),
+        )
     if files:
         return files
     result = _load_json_object(source_dir / "workspace_coding_result.json") or _load_json_object(
@@ -637,7 +726,10 @@ def _source_trial_code_files(competition: str, source_trial_id: str | None) -> l
         content = update.get("content")
         if relative and isinstance(content, str):
             files.append((relative, content))
-    return sorted(files, key=lambda item: _code_file_priority(Path(item[0])))
+    return sorted(
+        files,
+        key=lambda item: _delta_code_file_priority(Path(item[0]), delta_plan, text=item[1]),
+    )
 
 
 def _source_trial_code_source_label(competition: str, source_trial_id: str | None) -> str | None:
@@ -663,11 +755,17 @@ def _current_code_sections(
     max_files: int,
     max_chars_per_file: int,
     max_total_chars: int,
+    delta_plan: dict[str, Any] | None = None,
 ) -> list[str]:
     project_root = Path(str(profile.get("project_root", "")))
     if not project_root.is_dir():
         return []
-    files = _allowed_readable_files(project_root, profile.get("write_scope", {}).get("allowed", []), max_files=max_files)
+    files = _allowed_readable_files(
+        project_root,
+        profile.get("write_scope", {}).get("allowed", []),
+        max_files=max_files,
+        delta_plan=delta_plan,
+    )
     sections: list[str] = []
     total = 0
     for path in files:
@@ -687,7 +785,7 @@ def _current_code_sections(
     return sections
 
 
-def _current_code_inventory(profile: dict[str, Any]) -> list[str]:
+def _current_code_inventory(profile: dict[str, Any], *, base_will_be_restored: bool = False) -> list[str]:
     project_root = Path(str(profile.get("project_root", "")))
     if not project_root.is_dir():
         return ["- Current workspace root is not readable."]
@@ -698,16 +796,19 @@ def _current_code_inventory(profile: dict[str, Any]) -> list[str]:
         "- Current workspace may contain rejected later-trial changes.",
         "- The recommended base trial snapshot above is authoritative for patch find/replace text.",
     ]
+    if base_will_be_restored:
+        lines.append(
+            "- These files WILL BE OVERWRITTEN with the base trial snapshot before your patch is applied. "
+            "Never copy find text from them; local variable names and helper structure may differ from the base."
+        )
     lines.extend(f"- {path.relative_to(project_root).as_posix()}" for path in files)
     return lines
 
 
 def _context_file_limit(relative_path: str, default_limit: int) -> int:
     normalized = relative_path.replace("\\", "/")
-    if normalized.endswith("src/titanic_pipeline.py"):
+    if Path(normalized).name in {"baseline.py", "pipeline.py", "model.py"}:
         return max(default_limit, 14000)
-    if normalized.endswith("src/baseline.py"):
-        return min(max(default_limit, 2200), 4000)
     return default_limit
 
 
@@ -803,7 +904,8 @@ def _compact_baseline_code_for_patch(text: str, max_chars: int, *, delta_plan: d
         *lines[:first_def],
     ]
     for name, start, end in blocks:
-        if name in wanted:
+        is_class = lines[start].startswith("class ")
+        if name in wanted or (not delta_plan and is_class):
             selected_lines.extend(["", f"# --- {name} ---", *lines[start:end]])
     compact = "\n".join(selected_lines).strip() + "\n"
     if len(compact) <= max_chars:
@@ -813,10 +915,10 @@ def _compact_baseline_code_for_patch(text: str, max_chars: int, *, delta_plan: d
 
 def _wanted_baseline_blocks_for_patch(delta_plan: dict[str, Any] | None = None) -> set[str]:
     default = {
-        "extract_title",
         "FeatureBuilder",
-        "AgeMedianLookup",
-        "GroupedAgeImputer",
+        "build_features",
+        "build_feature_matrix",
+        "build_preprocessor",
         "build_pipeline",
         "load_data",
         "make_submission_frame",
@@ -834,12 +936,17 @@ def _wanted_baseline_blocks_for_patch(delta_plan: dict[str, Any] | None = None) 
     if not isinstance(delta_plan, dict) or not delta_plan:
         return default
     text = json.dumps(delta_plan, ensure_ascii=False).lower()
-    wanted = {"extract_title", "build_pipeline", "pipeline_summary", "_build_pipeline"}
-    if any(keyword in text for keyword in ["feature", "title", "cabin", "family", "numeric", "categorical"]):
-        wanted.update({"FeatureBuilder", "_make_features", "GroupedAgeImputer", "AgeMedianLookup"})
-    if any(keyword in text for keyword in ["age", "imput", "missing", "preprocess", "scaler", "encoder"]):
-        wanted.update({"FeatureBuilder", "GroupedAgeImputer", "AgeMedianLookup"})
-    if any(keyword in text for keyword in ["model", "logistic", "randomforest", "classifier", "regularization", "solver"]):
+    wanted = {"build_pipeline", "pipeline_summary", "_build_pipeline"}
+    wanted.update(
+        token
+        for token in re.findall(r"\b[A-Za-z_][A-Za-z0-9_]{2,80}\b", text)
+        if "_" in token
+    )
+    if any(keyword in text for keyword in ["feature", "numeric", "categorical", "representation"]):
+        wanted.update({"FeatureBuilder", "build_features", "build_feature_matrix", "_make_features"})
+    if any(keyword in text for keyword in ["imput", "missing", "preprocess", "scaler", "encoder"]):
+        wanted.update({"build_preprocessor", "build_pipeline", "_build_pipeline"})
+    if any(keyword in text for keyword in ["model", "classifier", "regressor", "regularization", "solver"]):
         wanted.update({"build_pipeline", "_build_pipeline", "pipeline_summary"})
     if any(keyword in text for keyword in ["split", "validation", "cv", "holdout", "metric", "score"]):
         wanted.update({"run_experiment", "_single_holdout_split", "load_data", "pipeline_summary"})
@@ -848,7 +955,13 @@ def _wanted_baseline_blocks_for_patch(delta_plan: dict[str, Any] | None = None) 
     return wanted
 
 
-def _allowed_readable_files(project_root: Path, allowed_paths: list[str], *, max_files: int) -> list[Path]:
+def _allowed_readable_files(
+    project_root: Path,
+    allowed_paths: list[str],
+    *,
+    max_files: int,
+    delta_plan: dict[str, Any] | None = None,
+) -> list[Path]:
     collected: list[Path] = []
     for item in allowed_paths:
         if not isinstance(item, str) or not item.strip():
@@ -864,8 +977,17 @@ def _allowed_readable_files(project_root: Path, allowed_paths: list[str], *, max
                 if child.is_file() and _is_text_code_file(child):
                     collected.append(child)
                 if len(collected) >= max_files:
-                    return _unique_paths(collected)
-    return sorted(_unique_paths(collected), key=_code_file_priority)[:max_files]
+                    return _sorted_by_code_priority(_unique_paths(collected), delta_plan)[:max_files]
+    return _sorted_by_code_priority(_unique_paths(collected), delta_plan)[:max_files]
+
+
+def _sorted_by_code_priority(paths: list[Path], delta_plan: dict[str, Any] | None) -> list[Path]:
+    if not delta_plan:
+        return sorted(paths, key=_code_file_priority)
+    return sorted(
+        paths,
+        key=lambda path: _delta_code_file_priority(path, delta_plan, text=read_text(path, default="")),
+    )
 
 
 def _safe_relative_code_path(value: object) -> str:
@@ -882,13 +1004,122 @@ def _safe_relative_code_path(value: object) -> str:
 
 def _code_file_priority(path: Path) -> tuple[int, str]:
     normalized = path.as_posix()
-    if normalized.endswith("/src/titanic_pipeline.py") or normalized.endswith("src/titanic_pipeline.py"):
+    if path.name in {"baseline.py", "pipeline.py", "model.py"} and "/src/" in f"/{normalized}":
         return (0, normalized)
-    if normalized.endswith("/src/baseline.py") or normalized.endswith("src/baseline.py"):
-        return (4, normalized)
     if path.name in {"train_step.py", "predict_step.py", "test_step.py"}:
         return (1, normalized)
     return (2, normalized)
+
+
+def _delta_code_file_priority(
+    path: Path,
+    delta_plan: dict[str, Any] | None,
+    *,
+    text: str | None = None,
+) -> tuple[int, str]:
+    normalized = path.as_posix().lstrip("./")
+    targets = _delta_target_code_paths(delta_plan)
+    for index, target in enumerate(targets):
+        if normalized == target or normalized.endswith(f"/{target}"):
+            return (-100 + index, normalized)
+    # No file is explicitly named anywhere in the plan (not even inside
+    # change_details/required_code_symbols). Rather than falling straight
+    # through to the generic alphabetical tie-break -- which can silently
+    # exclude the one file that actually needs to change once the snapshot's
+    # max_files budget is tight -- check whether this file's code actually
+    # contains a distinctive identifier (class/library name, or a named
+    # function) the plan talks about, and if so treat it like an explicit
+    # target.
+    if text and _references_plan_identifier(text, delta_plan):
+        return (-50, normalized)
+    return _code_file_priority(path)
+
+
+_CAMEL_CASE_IDENTIFIER = re.compile(r"\b[A-Z][a-z0-9]*[A-Z][A-Za-z0-9]*\b")
+
+
+def _plan_identifiers(delta_plan: dict[str, Any] | None) -> set[str]:
+    if not isinstance(delta_plan, dict):
+        return set()
+    identifiers: set[str] = set()
+    for symbol in delta_plan.get("required_code_symbols") or []:
+        if isinstance(symbol, str) and symbol.strip():
+            identifiers.add(symbol.strip())
+    for field in ("primary_change_axis", "plan_title", "rationale", "change_details", "keep_unchanged"):
+        value = delta_plan.get(field)
+        texts = value if isinstance(value, list) else [value] if isinstance(value, str) else []
+        for item in texts:
+            if isinstance(item, str):
+                identifiers.update(_CAMEL_CASE_IDENTIFIER.findall(item))
+    return identifiers
+
+
+def _references_plan_identifier(text: str, delta_plan: dict[str, Any] | None) -> bool:
+    for identifier in _plan_identifiers(delta_plan):
+        if re.search(rf"\bdef\s+{re.escape(identifier)}\s*\(", text) or identifier in text:
+            return True
+    return False
+
+
+def _delta_target_code_paths(delta_plan: dict[str, Any] | None) -> list[str]:
+    if not isinstance(delta_plan, dict):
+        return []
+    targets: list[str] = []
+    # code_change_targets is the intended field, but the planner sometimes
+    # names the file inside change_details/required_code_symbols instead
+    # (e.g. "Code Change Targets: train_step.py: replace ...") without also
+    # copying it into code_change_targets itself. Scan those fields too so a
+    # misplaced-but-present filename still counts as an explicit target.
+    for field in ("code_change_targets", "change_details", "required_code_symbols"):
+        for item in delta_plan.get(field, []) or []:
+            if not isinstance(item, str):
+                continue
+            for match in re.findall(r"[A-Za-z0-9_./\\-]+\.py", item):
+                normalized = match.replace("\\", "/").strip("./")
+                if normalized and normalized not in targets:
+                    targets.append(normalized)
+    return targets
+
+
+def _plan_find_target_issues(
+    delta_plan: dict[str, Any],
+    base_code_files: list[tuple[str, str]],
+) -> list[str]:
+    """Check the plan's own "File:"/"Find:" hints against the base trial's
+    actual code before any code-writing LLM call is spent turning them into
+    a patch. A plan can assume a change from an earlier, unaccepted attempt
+    at the same axis is already present in the base trial's code -- it is
+    not, since only accepted trials become the new base -- and this catches
+    that mismatch deterministically, without an LLM call, before it wastes
+    one on a patch that can never apply.
+    """
+    targets = delta_plan.get("code_change_targets")
+    if not isinstance(targets, list) or not base_code_files:
+        return []
+    base_by_path = dict(base_code_files)
+    issues: list[str] = []
+    current_file: str | None = None
+    for item in targets:
+        if not isinstance(item, str):
+            continue
+        stripped = item.strip()
+        lowered = stripped.lower()
+        if lowered.startswith("file:"):
+            current_file = stripped.split(":", 1)[1].strip()
+            continue
+        if not lowered.startswith("find:") or not current_file:
+            continue
+        find_text = stripped.split(":", 1)[1].strip()
+        if not find_text:
+            continue
+        matched_text = None
+        for relative, text in base_by_path.items():
+            if relative == current_file or relative.endswith(f"/{current_file}"):
+                matched_text = text
+                break
+        if matched_text is not None and find_text not in matched_text:
+            issues.append(f"plan_find_target_missing_in_base_code:{current_file}")
+    return issues
 
 
 def _is_text_code_file(path: Path) -> bool:
@@ -943,6 +1174,27 @@ def _load_data_card_summary(competition: str) -> dict[str, Any]:
         "train_file": card.get("train_file"),
         "test_file": card.get("test_file"),
         "sample_submission_file": card.get("sample_submission_file"),
+        # Datasets that ship one CSV per sample under data/<split>/ have no
+        # train_file/test_file at all; without these keys the code writer only
+        # saw nulls and fell back to assuming a conventional flat train.csv.
+        "dataset_layout": card.get("dataset_layout"),
+        "train_dir": card.get("train_dir"),
+        "test_dir": card.get("test_dir"),
+        "directory_datasets": [
+            {
+                "name": group.get("name"),
+                "role": group.get("role"),
+                "file_count": group.get("file_count"),
+                "filename_pattern": group.get("filename_pattern"),
+                "example_files": group.get("example_files", []),
+                "per_file_columns": group.get("per_file_columns", []),
+                "sample_id_source": group.get("sample_id_source"),
+                "id_matched_files": group.get("id_matched_files", []),
+                "notes": group.get("notes", []),
+            }
+            for group in (card.get("directory_datasets") or [])
+            if isinstance(group, dict)
+        ],
         "include_features_first": recommendation.get("include_features_first", []),
         "defer_features_first": recommendation.get("defer_features_first", []),
         "exclude_columns": recommendation.get("exclude_columns", []),

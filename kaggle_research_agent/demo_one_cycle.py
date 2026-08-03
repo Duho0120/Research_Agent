@@ -4,6 +4,7 @@ import ast
 import csv
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -21,8 +22,9 @@ from .retrieval.context_pack import build_context_pack, context_pack_prompt_summ
 from .state_db_auto import sync_trial_state_after_finish
 from .store import load_recent_trials, load_state, now_iso, read_text, write_text
 from .trial_artifacts import organize_trial_artifacts, trial_artifact_path
-from .trial_decision import load_latest_decision_context, write_trial_decision_card
+from .trial_decision import find_duplicate_candidate, load_latest_decision_context, write_trial_decision_card
 from .trial_memory_card import write_trial_memory_card
+from .trial_user_view import write_proposed_plan_preview
 from .workspace_code_writer import run_workspace_code_writer, validate_workspace_coding_result
 from .workspace_coding_handoff import prepare_workspace_coding_handoff
 from .workspace_metrics_collector import collect_workspace_metrics
@@ -955,6 +957,7 @@ def prepare_workspace_trial_plan(
     existing = _load_ready_demo_plan(out_dir)
     if existing is not None and not force_replan:
         _write_continuation_context(competition, trial_id, source_trial_id=source_trial_id)
+        _write_proposed_plan_preview_safely(competition, trial_id, existing, allow_api=allow_api)
         return {
             "competition": competition,
             "trial_id": trial_id,
@@ -1023,6 +1026,47 @@ def prepare_workspace_trial_plan(
             "issues": list(plan.get("issues") or []),
             "plan": plan,
         }
+    duplicate = find_duplicate_candidate(context.get("decision_context") or {}, plan)
+    if duplicate:
+        retry_plan, retry_context, still_duplicate = _replan_avoiding_duplicate_candidate(
+            competition,
+            trial_id,
+            context,
+            model_policy=model_policy,
+            allow_api=allow_api,
+            trial_llm_calls=trial_llm_calls,
+            strategy_calls_today=strategy_calls_today,
+            duplicate=duplicate,
+        )
+        if retry_plan.get("status") != "ready":
+            return {
+                "competition": competition,
+                "trial_id": trial_id,
+                "status": "blocked_planning",
+                "issues": list(retry_plan.get("issues") or []) + [f"duplicate_candidate_retry_failed: {duplicate}"],
+                "plan": retry_plan,
+            }
+        plan, context = retry_plan, retry_context
+        if still_duplicate:
+            log_decision(
+                competition,
+                trial_id,
+                decision_type="duplicate_candidate_blocked",
+                decision="duplicate_candidate_blocked",
+                reason="New plan repeated a candidate already rejected for the same axis, even after one forced replan.",
+                evidence={
+                    "primary_change_axis": plan.get("primary_change_axis"),
+                    "repeated_candidate": still_duplicate,
+                },
+                next_action="revise-plan-with-different-candidate-or-axis",
+            )
+            return {
+                "competition": competition,
+                "trial_id": trial_id,
+                "status": "duplicate_candidate_blocked",
+                "issues": [f"Repeated already-rejected candidate: {still_duplicate}"],
+                "plan": plan,
+            }
     if user_insight_override:
         plan["user_insight_override"] = user_insight_override
         plan["plan_revision"] = {
@@ -1031,6 +1075,14 @@ def prepare_workspace_trial_plan(
         }
         _write_plan_result(competition, trial_id, plan)
     _write_continuation_context(competition, trial_id, source_trial_id=source_trial_id)
+    _write_proposed_plan_preview_safely(
+        competition,
+        trial_id,
+        plan,
+        metric=context.get("metric"),
+        objective=context.get("objective"),
+        allow_api=allow_api,
+    )
     return {
         "competition": competition,
         "trial_id": trial_id,
@@ -1038,6 +1090,69 @@ def prepare_workspace_trial_plan(
         "plan": plan,
         "resumed_from_existing_artifact": False,
     }
+
+
+def _write_proposed_plan_preview_safely(
+    competition: str,
+    trial_id: str,
+    plan: dict[str, Any],
+    *,
+    metric: str | None = None,
+    objective: str | None = None,
+    allow_api: bool = False,
+) -> None:
+    # A preview-render failure must never block planning itself -- this is a
+    # display convenience, not a correctness-critical step.
+    try:
+        write_proposed_plan_preview(
+            competition, trial_id, plan, metric=metric, objective=objective, allow_api=allow_api
+        )
+    except Exception:
+        pass
+
+
+def _replan_avoiding_duplicate_candidate(
+    competition: str,
+    trial_id: str,
+    context: dict[str, Any],
+    *,
+    model_policy: dict[str, Any],
+    allow_api: bool,
+    trial_llm_calls: int | None,
+    strategy_calls_today: int | None,
+    duplicate: str,
+) -> tuple[dict[str, Any], dict[str, Any], str | None]:
+    """Force exactly one replan attempt with an explicit anti-duplicate constraint.
+
+    Returns (plan, context, duplicate_label). duplicate_label is None once a
+    non-repeating plan is produced, or still set if the retry also repeated it.
+    """
+    out_dir = trial_dir(competition, trial_id)
+    retry_context = dict(context)
+    retry_decision_context = dict(retry_context.get("decision_context") or {})
+    retry_decision_context["planner_constraints"] = [
+        f"STRICT: the candidate \"{duplicate}\" was already tried and rejected for this axis. "
+        "Propose a materially different candidate (different parameter values, method, or a different axis "
+        "entirely) instead of repeating it.",
+        *list(retry_decision_context.get("planner_constraints") or []),
+    ]
+    retry_context["decision_context"] = retry_decision_context
+    write_text(out_dir / "demo_context.json", json.dumps(retry_context, ensure_ascii=False, indent=2) + "\n")
+    write_text(out_dir / "demo_context.md", render_demo_context(retry_context))
+    retry_plan = create_demo_experiment_plan(
+        competition,
+        trial_id,
+        retry_context,
+        model_config=model_policy["experiment_planning"],
+        allow_api=allow_api,
+        mock_plan_file=None,
+        trial_llm_calls=trial_llm_calls,
+        strategy_calls_today=strategy_calls_today,
+    )
+    if retry_plan.get("status") != "ready":
+        return retry_plan, retry_context, duplicate
+    still_duplicate = find_duplicate_candidate(retry_decision_context, retry_plan)
+    return retry_plan, retry_context, still_duplicate
 
 
 def _archive_plan_revision(out_dir: Path) -> None:
@@ -1246,6 +1361,9 @@ def build_demo_plan_payload(context: dict[str, Any], *, model: str) -> dict[str,
             "Do not include high-cardinality free-text/id-like columns in the first baseline merely because they exist. Exclude or defer them unless you explicitly engineer a safe derived feature.",
             "For initial_pipeline_plan, these fields are required: plan_type, plan_title, objective, rationale, pipeline_blueprint, code_change_targets, success_criteria, implementation_notes, expected_outputs.",
             "Do not omit pipeline_blueprint, code_change_targets, or success_criteria; they are the coder handoff and next-trial memory.",
+            "Continuation trials are implemented as a small number of exact find/replace patches on the existing files. "
+            "Prefer changes that fit inside files that already exist; only require a brand-new module when the change genuinely cannot live in an existing file.",
+            "Never plan a change that depends on reorganizing or renaming existing modules -- the coder cannot rewrite existing files wholesale.",
         ]
     )
     return {
@@ -1839,6 +1957,7 @@ def _write_continuation_context(competition: str, trial_id: str, source_trial_id
         "competition": competition,
         "trial_id": trial_id,
         "source_trial_id": source_trial_id,
+        "recommended_base_trial": decision_context.get("recommended_base_trial"),
         "next_trial_id": trial_id,
         "continuation_mode": "can_continue",
         "pending_human_review": False,
@@ -1879,13 +1998,23 @@ def _build_demo_data_profile(competition: str, profile: dict[str, Any], state: d
     if data_dir.is_dir():
         for path in sorted(data_dir.glob("*.csv")):
             files.append(_profile_demo_csv(path, data_dir, target_column=target_column, id_column=id_column))
+    directory_datasets = _profile_demo_data_directories(
+        data_dir,
+        target_column=target_column,
+        id_column=id_column,
+        flat_files=files,
+    )
     train = next((item for item in files if item.get("role") == "train"), None)
     test = next((item for item in files if item.get("role") == "test"), None)
     sample = next((item for item in files if item.get("role") == "sample_submission"), None)
+    train_dir = next((item for item in directory_datasets if item.get("role") == "train"), None)
+    test_dir = next((item for item in directory_datasets if item.get("role") == "test"), None)
+    metric = str(competition_state.get("metric") or profile.get("metric") or "")
+    task_type = _infer_demo_task_type(train, target_column, metric=metric)
     data_profile = {
         "schema_version": "1.0",
         "competition": competition,
-        "status": "ready" if files else "missing_local_csv",
+        "status": "ready" if (files or directory_datasets) else "missing_local_csv",
         "project_root": str(project_root) if project_root else None,
         "data_dir": str(data_dir) if data_dir else None,
         "required_data_files": required_files,
@@ -1894,12 +2023,22 @@ def _build_demo_data_profile(competition: str, profile: dict[str, Any], state: d
         "submission_prediction_column": workspace_config.get("submission_prediction_column") or target_column,
         "validation_size": workspace_config.get("validation_size"),
         "random_seed": workspace_config.get("random_seed"),
-        "task_type": _infer_demo_task_type(train, target_column),
+        "task_type": task_type,
         "files": files,
+        "directory_datasets": directory_datasets,
+        "dataset_layout": "per_sample_files" if directory_datasets else "flat_tables",
         "train_file": train.get("name") if train else None,
         "test_file": test.get("name") if test else None,
+        "train_dir": train_dir.get("name") if train_dir else None,
+        "test_dir": test_dir.get("name") if test_dir else None,
         "sample_submission_file": sample.get("name") if sample else None,
-        "baseline_recommendation": _demo_baseline_recommendation(train, target_column=target_column, id_column=id_column),
+        "baseline_recommendation": _demo_baseline_recommendation(
+            train,
+            test=test,
+            target_column=target_column,
+            id_column=id_column,
+            task_type=task_type,
+        ),
     }
     root = competition_dir(competition)
     write_text(root / "data_profile.json", json.dumps(data_profile, ensure_ascii=False, indent=2) + "\n")
@@ -1907,6 +2046,89 @@ def _build_demo_data_profile(competition: str, profile: dict[str, Any], state: d
     write_text(root / "competition_data_card.json", json.dumps(data_profile, ensure_ascii=False, indent=2) + "\n")
     write_text(root / "competition_data_card.md", _render_demo_data_profile(data_profile))
     return data_profile
+
+
+def _profile_demo_data_directories(
+    data_dir: Path,
+    *,
+    target_column: str | None,
+    id_column: str | None,
+    flat_files: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Describe per-sample-file datasets living in data/ subdirectories.
+
+    Some competitions ship one CSV per sample (data/train/TRAIN_00001.csv,
+    data/test/TEST_00001.csv, ...) instead of a single flat data/train.csv.
+    A profile that only lists flat CSVs makes those datasets look absent,
+    which is what pushed the planner and code writer to keep assuming a
+    conventional train.csv/test.csv that does not exist -- and then either
+    fabricate placeholder data or emit an all-zero submission.
+
+    Only the first file of each directory is opened: the members share a
+    schema by construction, and these directories routinely hold 10k+ files.
+    """
+    groups: list[dict[str, Any]] = []
+    if not data_dir.is_dir():
+        return groups
+    for child in sorted(item for item in data_dir.iterdir() if item.is_dir()):
+        members = sorted(child.glob("*.csv"))
+        if not members:
+            continue
+        sample = _profile_demo_csv(members[0], child, target_column=target_column, id_column=id_column)
+        stems = {path.stem for path in members[:200]}
+        groups.append(
+            {
+                "name": f"{child.relative_to(data_dir).as_posix()}/",
+                "role": _infer_demo_directory_role(child.name),
+                "file_count": len(members),
+                "filename_pattern": _demo_filename_pattern(members[0].name),
+                "example_files": [path.name for path in members[:3]],
+                "per_file_columns": sample.get("columns", []),
+                "per_file_rows_sampled": sample.get("rows_sampled"),
+                "column_profiles": sample.get("column_profiles", []),
+                "sample_id_source": "filename_stem",
+                "id_matched_files": _demo_files_matching_stems(flat_files, stems),
+                "notes": [
+                    "Each CSV in this directory is ONE sample; the sample id is the filename stem.",
+                    "Load every file in the directory and derive features per sample -- do not expect a single flat table.",
+                ],
+            }
+        )
+    return groups
+
+
+def _infer_demo_directory_role(name: str) -> str:
+    lowered = name.strip().lower()
+    if lowered.startswith("train"):
+        return "train"
+    if lowered.startswith("test"):
+        return "test"
+    if lowered.startswith(("val", "valid", "dev")):
+        return "validation"
+    return "unknown"
+
+
+def _demo_filename_pattern(name: str) -> str:
+    return re.sub(r"\d", "#", name)
+
+
+def _demo_files_matching_stems(flat_files: list[dict[str, Any]], stems: set[str]) -> list[str]:
+    """Flat CSVs whose id-like column values name files in this directory.
+
+    This is what links data/train_labels.csv (or sample_submission.csv) back
+    to the per-sample files it refers to, so the code writer can see the join
+    key instead of guessing at it.
+    """
+    if not stems:
+        return []
+    matched: list[str] = []
+    for file_profile in flat_files:
+        for column in file_profile.get("column_profiles", []):
+            values = [str(value) for value in column.get("sample_values", []) if value]
+            if values and any(value in stems for value in values):
+                matched.append(f"{file_profile.get('name')}:{column.get('name')}")
+                break
+    return matched
 
 
 def _profile_demo_csv(path: Path, data_dir: Path, *, target_column: str | None, id_column: str | None) -> dict[str, Any]:
@@ -1962,7 +2184,8 @@ def _profile_demo_column(column: str, values: list[str], *, target_column: str |
 def _infer_demo_file_role(name: str, columns: list[str], target_column: str | None) -> str:
     lowered = name.lower()
     stem = Path(lowered).stem
-    if "sample_submission" in lowered or "gender_submission" in lowered:
+    normalized_stem = "".join(character for character in stem if character.isalnum())
+    if normalized_stem in {"samplesubmission", "gendersubmission"}:
         return "sample_submission"
     if stem == "train" or (target_column and target_column in columns):
         return "train"
@@ -1998,9 +2221,17 @@ def _baseline_column_use(role: str, inferred_type: str, unique_count: int, looks
     return "defer_high_cardinality_categorical"
 
 
-def _infer_demo_task_type(train: dict[str, Any] | None, target_column: str | None) -> str:
+def _infer_demo_task_type(
+    train: dict[str, Any] | None,
+    target_column: str | None,
+    *,
+    metric: str = "",
+) -> str:
     if not train or not target_column:
         return "unknown"
+    normalized_metric = metric.strip().casefold().replace("-", "_").replace(" ", "_")
+    if normalized_metric in {"rmse", "rmsle", "mae", "mse", "mean_squared_error", "mean_absolute_error"}:
+        return "tabular_regression_or_ranking"
     target = next((item for item in train.get("column_profiles", []) if item.get("name") == target_column), None)
     if not target:
         return "tabular_unknown_target"
@@ -2012,13 +2243,47 @@ def _infer_demo_task_type(train: dict[str, Any] | None, target_column: str | Non
 def _demo_baseline_recommendation(
     train: dict[str, Any] | None,
     *,
+    test: dict[str, Any] | None = None,
     target_column: str | None,
     id_column: str | None,
+    task_type: str,
 ) -> dict[str, Any]:
     columns = train.get("column_profiles", []) if train else []
-    include = [item["name"] for item in columns if str(item.get("baseline_use", "")).startswith("include_")]
+    test_columns = {
+        str(item.get("name"))
+        for item in (test.get("column_profiles", []) if test else [])
+        if item.get("name")
+    }
+    unavailable_at_inference = [
+        str(item.get("name"))
+        for item in columns
+        if test_columns
+        and item.get("name")
+        and item.get("name") not in test_columns
+        and item.get("name") != target_column
+    ]
+    include = [
+        item["name"]
+        for item in columns
+        if str(item.get("baseline_use", "")).startswith("include_")
+        and item.get("name") not in unavailable_at_inference
+    ]
     defer = [item["name"] for item in columns if str(item.get("baseline_use", "")).startswith("defer")]
-    exclude = [item["name"] for item in columns if item.get("baseline_use") == "exclude"]
+    exclude = _unique_strings(
+        [item["name"] for item in columns if item.get("baseline_use") == "exclude"]
+        + unavailable_at_inference
+    )
+    preferred_models = (
+        [
+            "regularized_linear_regression_on_an_appropriate_target_transform",
+            "small_random_forest_or_gradient_boosted_regressor_if_available",
+        ]
+        if task_type == "tabular_regression_or_ranking"
+        else [
+            "logistic_regression_or_linear_classifier_for_binary_classification",
+            "small_random_forest_or_gradient_boosted_tree_if_available",
+        ]
+    )
     return {
         "first_trial_policy": "stable_supervised_tabular_baseline",
         "target_column": target_column,
@@ -2026,10 +2291,7 @@ def _demo_baseline_recommendation(
         "include_features_first": include,
         "defer_features_first": defer,
         "exclude_columns": exclude,
-        "preferred_model_families": [
-            "logistic_regression_or_linear_classifier_for_binary_classification",
-            "small_random_forest_or_gradient_boosted_tree_if_available",
-        ],
+        "preferred_model_families": preferred_models,
         "avoid_first_trial": [
             "gaussian_naive_bayes_for_mixed_numeric_and_categorical_data",
             "raw_high_cardinality_text_or_identifier_one_hot_features",
@@ -2037,9 +2299,14 @@ def _demo_baseline_recommendation(
         ],
         "notes": [
             "Use concrete data_profile columns before generic RAG summaries.",
+            "Never train on columns that are absent from the test data unless prediction-time derivation is explicit.",
             "Keep the first baseline simple, supervised, deterministic, and submission-format checked.",
         ],
     }
+
+
+def _unique_strings(values: list[Any]) -> list[str]:
+    return list(dict.fromkeys(str(value) for value in values if value not in {None, ""}))
 
 
 def _baseline_guardrails(data_profile: dict[str, Any]) -> dict[str, Any]:
@@ -2168,8 +2435,11 @@ def _render_demo_data_profile(profile: dict[str, Any]) -> str:
         f"- task_type: {profile.get('task_type')}",
         f"- target_column: {profile.get('target_column')}",
         f"- id_column: {profile.get('id_column')}",
+        f"- dataset_layout: {profile.get('dataset_layout')}",
         f"- train_file: {profile.get('train_file')}",
         f"- test_file: {profile.get('test_file')}",
+        f"- train_dir: {profile.get('train_dir')}",
+        f"- test_dir: {profile.get('test_dir')}",
         "",
         "## First Baseline Recommendation",
         "",
@@ -2192,6 +2462,28 @@ def _render_demo_data_profile(profile: dict[str, Any]) -> str:
                 f"baseline_use={column.get('baseline_use')}"
             )
         lines.append("")
+    directory_datasets = profile.get("directory_datasets", [])
+    if directory_datasets:
+        lines.extend(
+            [
+                "## Per-Sample File Directories",
+                "",
+                "This competition stores one CSV per sample inside these directories.",
+                "There is no single flat table for them -- iterate the directory and join on the filename stem.",
+                "",
+            ]
+        )
+        for group in directory_datasets:
+            lines.append(f"### {group.get('name')} [{group.get('role')}]")
+            lines.append(f"- file_count: {group.get('file_count')}")
+            lines.append(f"- filename_pattern: {group.get('filename_pattern')}")
+            lines.append(f"- example_files: {', '.join(group.get('example_files', [])) or 'None'}")
+            lines.append(f"- per_file_columns: {', '.join(group.get('per_file_columns', [])) or 'None'}")
+            lines.append(f"- sample_id_source: {group.get('sample_id_source')}")
+            lines.append(f"- id_matched_files: {', '.join(group.get('id_matched_files', [])) or 'None'}")
+            for note in group.get("notes", []):
+                lines.append(f"- note: {note}")
+            lines.append("")
     return "\n".join(lines)
 
 

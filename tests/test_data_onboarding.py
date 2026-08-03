@@ -8,6 +8,21 @@ from kaggle_research_agent.data_onboarding import profile_competition_data
 
 
 class DataOnboardingTest(unittest.TestCase):
+    def test_camel_case_sample_submission_is_detected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data = root / "data" / "bike"
+            data.mkdir(parents=True)
+            (data / "train.csv").write_text("datetime,count,temp\n2020-01-01,1,10\n", encoding="utf-8")
+            (data / "test.csv").write_text("datetime,temp\n2020-01-02,11\n", encoding="utf-8")
+            (data / "sampleSubmission.csv").write_text("datetime,count\n2020-01-02,0\n", encoding="utf-8")
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                profile = profile_competition_data("bike")
+
+        roles = {item["role"]: item["name"] for item in profile["files"]}
+        self.assertEqual("sampleSubmission.csv", roles["sample_submission"])
+
     def test_profile_competition_data_reads_csv_schemas_and_detects_roles(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

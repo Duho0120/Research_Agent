@@ -183,16 +183,77 @@ def _resolve_score(
 
     source_key = profile.get("metrics_contract", {}).get("source_key")
     if source_key:
-        return _resolve_nested_score(source_metrics, source_key)
+        try:
+            return _resolve_nested_score(source_metrics, source_key)
+        except (KeyError, TypeError, ValueError):
+            # The configured key was a good guess for a previous trial's metrics
+            # shape, but a different code-writer run can reasonably name its
+            # score field differently. Fall through to the metric-name-based
+            # detection below instead of failing outright.
+            pass
 
-    metric = str(competition_state.get("metric") or profile.get("metric") or "").strip().casefold()
+    # Match on a punctuation- and case-insensitive form of the metric name.
+    # A metric like "R-Hit@1cm" gets written to metrics.json under whatever
+    # spelling the code writer picked that run ("R-Hit@1cm", "r_hit_at_1cm",
+    # "val_rhit_1cm", ...), so comparing raw strings made the collector
+    # demand a human-configured source_key on nearly every new metric.
+    metric = str(competition_state.get("metric") or profile.get("metric") or "").strip()
     if metric:
-        for candidate in (f"validation_{metric}", f"val_{metric}", f"valid_{metric}", metric):
-            value = source_metrics.get(candidate)
-            if _is_finite_number(value):
-                return value, candidate
+        normalized_index = _normalized_metric_index(source_metrics)
+
+        def lookup(name: str) -> tuple[str, float | int] | None:
+            for variant in _metric_name_variants(name):
+                match = normalized_index.get(variant)
+                if match:
+                    return match
+            return None
+
+        if source_key:
+            match = lookup(source_key)
+            if match:
+                return match[1], match[0]
+        for prefix in ("validation_", "val_", "valid_", ""):
+            match = lookup(f"{prefix}{metric}")
+            if match:
+                return match[1], match[0]
+        value = source_metrics.get("value")
+        if _is_finite_number(value) and _metric_name_variants(str(source_metrics.get("metric") or "")) & _metric_name_variants(metric):
+            return value, "value"
 
     raise KeyError("metrics_contract.source_key")
+
+
+def _metric_name_variants(name: str) -> set[str]:
+    """Punctuation- and case-insensitive spellings a metric name may take.
+
+    Metric names like "R-Hit@1cm" or "precision@10" get written into
+    metrics.json under whichever spelling the code writer chose that run --
+    "R-Hit@1cm", "r_hit_at_1cm" (with "@" spelled out), or "val_RHit1cm"
+    (with "@" dropped). Comparing raw strings matched none of those, so a
+    human had to configure metrics_contract.source_key for nearly every new
+    metric. Both "@" readings are generated so all of those spellings match.
+    """
+    text = str(name).casefold()
+    return {
+        "".join(character for character in text.replace("@", replacement) if character.isalnum())
+        for replacement in ("at", "")
+    }
+
+
+def _normalized_metric_index(source_metrics: dict[str, Any]) -> dict[str, tuple[str, float | int]]:
+    """Map each normalized spelling of a numeric key -> (original key, value).
+
+    Non-numeric entries are skipped so a descriptive field such as
+    {"metric": "R-Hit@1cm"} -- which holds the metric's *name*, not its
+    score -- is never mistaken for the score itself.
+    """
+    index: dict[str, tuple[str, float | int]] = {}
+    for key, value in source_metrics.items():
+        if not _is_finite_number(value):
+            continue
+        for variant in _metric_name_variants(key):
+            index.setdefault(variant, (key, value))
+    return index
 
 
 def _resolve_nested_score(source_metrics: dict[str, Any], source_key: str) -> tuple[float | int, str]:

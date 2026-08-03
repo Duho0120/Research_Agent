@@ -3,6 +3,9 @@ from __future__ import annotations
 import html
 import json
 import os
+import re
+import zipfile
+from io import BytesIO
 from pathlib import Path
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -14,6 +17,7 @@ from .cli_app import (
     _best_label,
     _compact_cell,
     _compact_score,
+    _filesystem_topic,
     _format_insight_plan_message,
     _keep_latest_user_insight,
     _latest_user_insight,
@@ -21,6 +25,7 @@ from .cli_app import (
     _normalize_workspace_source_path,
     _propose_new_experiment_settings,
     _sqlite_trial_rows,
+    delete_experiment,
     experiment_snapshot,
     list_pending_requests,
     load_experiments,
@@ -31,11 +36,15 @@ from .cli_app import (
     selected_competition,
     start_experiment,
 )
-from .experiment_qa import answer_experiment_question
+from .chat_history import (
+    answer_chat_question,
+    chat_history_snapshot,
+    start_new_chat,
+)
 from .interface_contract import respond_to_request, submit_human_insight
-from .paths import project_root
+from .paths import competition_dir, project_root
 from .state_db import default_db_path, state_db_connection
-from .workspace_preparer import prepare_workspace
+from .workspace_preparer import prepare_workspace, refresh_workspace_inventory
 from .user_insight_policy import latest_user_insight_record, user_insight_target_trial_ids
 
 
@@ -92,6 +101,25 @@ class ResearchAgentHandler(BaseHTTPRequestHandler):
         if parsed.path == "/api/status":
             self._send_json(app_state())
             return
+        if parsed.path == "/api/chat/history":
+            query = parse_qs(parsed.query)
+            session_id = clean((query.get("session_id") or [""])[0]) or None
+            try:
+                self._send_json(
+                    {
+                        "ok": True,
+                        **chat_history_snapshot(
+                            selected_competition(),
+                            session_id=session_id,
+                        ),
+                    }
+                )
+            except ValueError as error:
+                self._send_json(
+                    {"ok": False, "message": str(error)},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+            return
         if parsed.path == "/artifact":
             query = parse_qs(parsed.query)
             relative_path = (query.get("path") or [""])[0]
@@ -101,6 +129,16 @@ class ResearchAgentHandler(BaseHTTPRequestHandler):
                 self.send_error(HTTPStatus.NOT_FOUND, "Artifact not found")
             except ValueError:
                 self.send_error(HTTPStatus.BAD_REQUEST, "Invalid artifact path")
+            return
+        if parsed.path == "/api/artifact":
+            query = parse_qs(parsed.query)
+            relative_path = (query.get("path") or [""])[0]
+            try:
+                self._send_json({"ok": True, **load_artifact_content(relative_path)})
+            except FileNotFoundError:
+                self._send_json({"ok": False, "message": "산출물을 찾을 수 없습니다."}, status=HTTPStatus.NOT_FOUND)
+            except ValueError:
+                self._send_json({"ok": False, "message": "잘못된 산출물 경로입니다."}, status=HTTPStatus.BAD_REQUEST)
             return
         if parsed.path == "/":
             query = parse_qs(parsed.query)
@@ -130,10 +168,65 @@ class ResearchAgentHandler(BaseHTTPRequestHandler):
             if not question:
                 self._send_json({"ok": False, "message": "질문을 입력해주세요."}, status=HTTPStatus.BAD_REQUEST)
                 return
-            answer = ask_agent(question)
-            self._send_json({"ok": True, "question": question, "answer": answer})
+            session_id = clean((data.get("session_id") or [""])[0]) or None
+            try:
+                result = ask_agent_exchange(question, session_id=session_id)
+            except Exception as error:
+                self._send_json(
+                    {"ok": False, "message": f"답변 또는 대화 기록 저장에 실패했습니다: {error}"},
+                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
+                return
+            self._send_json(
+                {
+                    "ok": True,
+                    "question": question,
+                    "answer": result["rendered_answer"],
+                    "history": result["history"],
+                }
+            )
+            return
+        if parsed.path == "/api/chat/session":
+            try:
+                self._send_json({"ok": True, **start_new_chat(selected_competition())})
+            except Exception as error:
+                self._send_json(
+                    {"ok": False, "message": f"새 대화를 만들지 못했습니다: {error}"},
+                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
+            return
+        if parsed.path == "/api/upload-data":
+            self._handle_upload_data()
+            return
+        if parsed.path == "/api/register-experiment":
+            data = self._form_data()
+            message, competition = create_experiment_from_form(data)
+            self._send_json({"ok": competition is not None, "message": message, "competition": competition})
             return
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+
+    def _handle_upload_data(self) -> None:
+        competition = selected_competition()
+        if not competition:
+            self._send_json({"ok": False, "message": "선택된 실험이 없습니다."}, status=HTTPStatus.BAD_REQUEST)
+            return
+        target_dir = workspace_data_dir(competition)
+        if target_dir is None:
+            self._send_json(
+                {"ok": False, "message": "이 실험은 아직 워크스페이스 경로가 없습니다. 실험을 다시 등록해주세요."},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+        length = int(self.headers.get("Content-Length") or "0")
+        body = self.rfile.read(length)
+        files = parse_multipart_files(self.headers.get("Content-Type") or "", body)
+        if not files:
+            self._send_json({"ok": False, "message": "업로드할 파일이 없습니다."}, status=HTTPStatus.BAD_REQUEST)
+            return
+        result = save_uploaded_files(files, target_dir)
+        if result.get("ok") and result.get("saved"):
+            refresh_workspace_inventory(competition, target_dir.parent)
+        self._send_json(result)
 
     def log_message(self, format: str, *args: Any) -> None:
         print("%s - - [%s] %s" % (self.address_string(), self.log_date_time_string(), format % args), flush=True)
@@ -169,7 +262,9 @@ class ResearchAgentHandler(BaseHTTPRequestHandler):
                 self._send_html(render_home(app_state(), message=message, new_experiment_settings=settings))
                 return
             elif action == "new_experiment":
-                message = create_experiment_from_form(data)
+                message, _ = create_experiment_from_form(data)
+            elif action == "delete_experiment":
+                message = delete_experiment_from_form(data)
             else:
                 message = "알 수 없는 요청입니다."
         except Exception as exc:
@@ -251,25 +346,32 @@ def record_insight(insight: str) -> dict[str, Any]:
 def record_feedback_response(data: dict[str, list[str]]) -> str:
     request_id = clean((data.get("request_id") or [""])[0])
     answer = clean((data.get("answer") or [""])[0])
+    decision = clean((data.get("decision") or [""])[0])
     if not request_id:
         return "피드백 요청이 없습니다."
-    if not answer:
-        return "답변을 입력해주세요."
-    result = respond_to_request(request_id, free_text=answer)
+    if not answer and not decision:
+        return "선택지 또는 추가 의견을 입력해주세요."
+    answers = {"decision": decision} if decision else {}
+    result = respond_to_request(request_id, answers=answers, free_text=answer)
     return "답변을 기록했습니다. 다음 실험에 반영하겠습니다." if result.get("ok") else result.get("message", "기록 실패")
 
 
 def ask_agent(question: str) -> str:
+    return str(ask_agent_exchange(question).get("rendered_answer") or "")
+
+
+def ask_agent_exchange(question: str, *, session_id: str | None = None) -> dict[str, Any]:
     question = question.strip()
     if not question:
-        return ""
+        return {"rendered_answer": "", "history": {}}
     snapshot = app_state()["snapshot"]
     trial_id = snapshot.get("current_trial") or snapshot.get("last_completed_trial")
-    result = answer_experiment_question(str(snapshot["competition"]), trial_id, question)
-    mode = result.get("mode_label") or result.get("mode") or "unknown"
-    answer = result.get("answer") or ""
-    warning = result.get("warning")
-    return f"[{mode}]\n{warning}\n{answer}" if warning else f"[{mode}]\n{answer}"
+    return answer_chat_question(
+        str(snapshot["competition"]),
+        trial_id,
+        question,
+        session_id=session_id,
+    )
 
 
 def analyze_new_experiment_from_form(data: dict[str, list[str]]) -> tuple[dict[str, Any] | None, str]:
@@ -283,10 +385,16 @@ def analyze_new_experiment_from_form(data: dict[str, list[str]]) -> tuple[dict[s
     return settings, "에이전트가 새 실험 설정을 분석했습니다. 필요한 항목을 수정한 뒤 등록하세요."
 
 
-def create_experiment_from_form(data: dict[str, list[str]]) -> str:
+def create_experiment_from_form(data: dict[str, list[str]]) -> tuple[str, str | None]:
+    """Register a new experiment from the analysis form.
+
+    Returns (message, competition) -- competition is None on failure, so
+    callers (the JSON registration endpoint) can tell success from failure
+    without parsing the message text.
+    """
     settings, error = _settings_for_new_experiment_registration(data)
     if error:
-        return error
+        return error, None
     assert settings is not None
     competition = str(settings["competition"])
     result = prepare_workspace(
@@ -302,7 +410,124 @@ def create_experiment_from_form(data: dict[str, list[str]]) -> str:
         required_data_files=list(settings.get("required_data_files") or []),
     )
     select_competition(competition)
-    return f"{competition} 실험을 등록하고 선택했습니다. 상태: {result.get('status')}"
+    return f"{competition} 실험을 등록하고 선택했습니다. 상태: {result.get('status')}", competition
+
+
+def delete_experiment_from_form(data: dict[str, list[str]]) -> str:
+    competition = clean((data.get("competition") or [""])[0])
+    confirm_text = clean((data.get("confirm_text") or [""])[0])
+    if not competition:
+        return "삭제할 실험을 찾을 수 없습니다."
+    topic = _filesystem_topic(competition) or competition
+    expected = f"{topic} 지우기"
+    if confirm_text != expected:
+        return f'확인 문구가 일치하지 않습니다. "{expected}"를 정확히 입력해주세요.'
+    result = delete_experiment(competition)
+    return f"{competition} | {topic} 실험을 삭제했습니다." if result.get("ok") else "실험 삭제에 실패했습니다."
+
+
+def workspace_data_dir(competition: str) -> Path | None:
+    """The data/ folder inside a registered experiment's workspace, or None
+    if the experiment has no workspace/source path recorded yet (e.g. still
+    at needs_project_path -- nothing to upload into until that's resolved).
+    """
+    record_path = competition_dir(competition) / "workspace_source.json"
+    if not record_path.exists():
+        return None
+    try:
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    source_path = record.get("source_path")
+    return Path(source_path) / "data" if source_path else None
+
+
+def parse_multipart_files(content_type: str, body: bytes) -> list[tuple[str, bytes]]:
+    """Extract (filename, content) pairs from a multipart/form-data body.
+
+    Python 3.13 removed the `cgi` module (the traditional way to parse
+    this), so this is a small hand-rolled parser -- deliberately narrow: it
+    only pulls out parts that carry a filename (i.e. actual file uploads),
+    ignoring plain form fields, since that's all this endpoint needs.
+    """
+    boundary_match = re.search(r'boundary="?([^";]+)"?', content_type)
+    if not boundary_match:
+        return []
+    delimiter = b"--" + boundary_match.group(1).encode("utf-8")
+    files: list[tuple[str, bytes]] = []
+    for raw_part in body.split(delimiter):
+        # Each real part is exactly "\r\n<headers>\r\n\r\n<content>\r\n" between
+        # delimiters -- strip precisely that one leading/trailing CRLF rather
+        # than bytes.strip(b"\r\n"), which would keep eating into content that
+        # itself ends in \r or \n (e.g. a CSV's trailing newline).
+        part = raw_part
+        if part.startswith(b"\r\n"):
+            part = part[2:]
+        if part.endswith(b"\r\n"):
+            part = part[:-2]
+        if not part or part == b"--":
+            continue
+        header_end = part.find(b"\r\n\r\n")
+        if header_end == -1:
+            continue
+        headers_text = part[:header_end].decode("utf-8", errors="replace")
+        content = part[header_end + 4 :]
+        filename_match = re.search(r'filename="([^"]*)"', headers_text)
+        if not filename_match or not filename_match.group(1):
+            continue
+        files.append((filename_match.group(1), content))
+    return files
+
+
+def save_uploaded_files(files: list[tuple[str, bytes]], target_dir: Path) -> dict[str, Any]:
+    """Write uploaded files into target_dir; .zip files are extracted in
+    place instead of being saved as-is. Every path is resolved against
+    target_dir and checked to still be inside it before writing, so a
+    crafted filename or zip entry (path traversal / zip-slip) can't escape
+    the workspace's data folder.
+    """
+    target_dir.mkdir(parents=True, exist_ok=True)
+    resolved_target = target_dir.resolve()
+    saved: list[str] = []
+    skipped: list[dict[str, str]] = []
+    for filename, content in files:
+        bare_name = Path(filename).name
+        if not bare_name:
+            skipped.append({"name": filename, "reason": "invalid_filename"})
+            continue
+        if bare_name.lower().endswith(".zip"):
+            extracted, zip_skipped = _extract_zip_into(content, target_dir, resolved_target)
+            saved.extend(extracted)
+            skipped.extend(zip_skipped)
+            continue
+        destination = (target_dir / bare_name).resolve()
+        if resolved_target not in destination.parents and destination != resolved_target:
+            skipped.append({"name": filename, "reason": "unsafe_path"})
+            continue
+        destination.write_bytes(content)
+        saved.append(str(destination.relative_to(resolved_target)))
+    return {"ok": True, "saved": saved, "skipped": skipped}
+
+
+def _extract_zip_into(content: bytes, target_dir: Path, resolved_target: Path) -> tuple[list[str], list[dict[str, str]]]:
+    saved: list[str] = []
+    skipped: list[dict[str, str]] = []
+    try:
+        archive = zipfile.ZipFile(BytesIO(content))
+    except zipfile.BadZipFile:
+        return saved, [{"name": "<uploaded zip>", "reason": "bad_zip"}]
+    for entry in archive.infolist():
+        entry_name = entry.filename.replace("\\", "/")
+        if entry_name.endswith("/"):
+            continue
+        destination = (target_dir / entry_name).resolve()
+        if resolved_target not in destination.parents:
+            skipped.append({"name": entry.filename, "reason": "unsafe_path"})
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(archive.read(entry))
+        saved.append(str(destination.relative_to(resolved_target)))
+    return saved, skipped
 
 
 def _settings_for_new_experiment_registration(data: dict[str, list[str]]) -> tuple[dict[str, Any] | None, str | None]:
@@ -399,6 +624,8 @@ def render_home(
           <button type="button" class="secondary" data-open-modal="control-modal">실험 제어</button>
           <button type="button" data-open-modal="new-experiment-modal">새 실험 등록</button>
           <button type="button" data-open-modal="insight-modal">다음 실험 인사이트</button>
+          <button type="button" data-open-modal="feedback-modal" {"disabled" if not pending else ""}>피드백 요청 ({len(pending)})</button>
+          <button type="button" class="danger" data-open-modal="delete-modal">실험 지우기</button>
         </nav>
       </header>
 
@@ -423,7 +650,7 @@ def render_home(
               <p>로컬·제출 점수와 개선축을 비교하고 각 trial 산출물을 확인합니다.</p>
             </div>
           </div>
-          {trial_table(competition)}
+          {trial_table(competition, snapshot=snapshot)}
         </article>
 
         <article class="panel">
@@ -475,6 +702,22 @@ def render_home(
         </section>
       </div>
 
+      <div class="modal-backdrop" id="feedback-modal" hidden>
+        <section class="modal modal-large" role="dialog" aria-modal="true" aria-labelledby="feedback-modal-title">
+          <div class="modal-head">
+            <div>
+              <p class="eyebrow">Human Review</p>
+              <h2 id="feedback-modal-title">피드백 요청</h2>
+            </div>
+            <button type="button" class="icon-button" data-close-modal aria-label="닫기">×</button>
+          </div>
+          <p class="interaction-boundary">에이전트가 자율적으로 확정할 수 없는 연구 판단만 요청합니다. 선택 결과는 현재 실행을 다시 돌리지 않고 다음 계획 단계에 반영됩니다.</p>
+          {pending_list(pending)}
+        </section>
+      </div>
+
+      {delete_experiment_modal(snapshot)}
+
       <div class="modal-backdrop" id="insight-modal" hidden>
         <section class="modal modal-large insight-modal" role="dialog" aria-modal="true" aria-labelledby="insight-modal-title">
           <div class="modal-head">
@@ -495,7 +738,20 @@ def render_home(
           </form>
         </section>
       </div>
-      {floating_chat(answer)}
+
+      <div class="modal-backdrop" id="artifact-modal" hidden>
+        <section class="modal modal-large" role="dialog" aria-modal="true" aria-labelledby="artifact-modal-title">
+          <div class="modal-head">
+            <div>
+              <p class="eyebrow" id="artifact-modal-path"></p>
+              <h2 id="artifact-modal-title">산출물</h2>
+            </div>
+            <button type="button" class="icon-button" data-close-modal aria-label="닫기">×</button>
+          </div>
+          <pre class="document-view" id="artifact-modal-body"></pre>
+        </section>
+      </div>
+      {floating_chat(answer, competition=str(snapshot.get("competition") or ""))}
     </main>
 """,
     )
@@ -524,8 +780,17 @@ def new_experiment_panel(settings: dict[str, Any] | None = None) -> str:
         f'<option value="{value}" {"selected" if create_workspace == value else ""}>{label}</option>'
         for value, label in [("1", "새 워크스페이스 생성"), ("0", "기존 경로 사용")]
     )
+    platform = str(settings.get("platform") or "kaggle")
+    platform_options = "".join(
+        f'<option value="{value}" {"selected" if platform == value else ""} {"disabled" if disabled else ""}>{label}</option>'
+        for value, label, disabled in [
+            ("local_research", "로컬연구 (준비 중)", True),
+            ("kaggle", "캐글", False),
+            ("dacon", "데이콘", False),
+        ]
+    )
     return f"""
-            <form method="post" action="/action" class="stack nested-form">
+            <form method="post" action="/action" class="stack nested-form" id="new-experiment-register-form">
               <p class="hint">에이전트 분석 결과를 확인하고 필요한 항목만 수정하세요. 등록 후 이 실험이 현재 선택된 실험으로 바뀝니다.</p>
               <label>URL 또는 실험을 설명해주세요.</label>
               <textarea name="description">{escape(settings.get("description") or "")}</textarea>
@@ -544,32 +809,119 @@ def new_experiment_panel(settings: dict[str, Any] | None = None) -> str:
               </div>
 
               <div class="two">
-                <input name="competition" value="{escape(settings.get("competition") or "")}" placeholder="실험 ID">
-                <input name="topic" value="{escape(settings.get("topic") or "")}" placeholder="주제명">
+                <div class="field">
+                  <label for="new-experiment-competition">실험 ID</label>
+                  <input id="new-experiment-competition" name="competition" value="{escape(settings.get("competition") or "")}" placeholder="실험 ID">
+                </div>
+                <div class="field">
+                  <label for="new-experiment-topic">주제명</label>
+                  <input id="new-experiment-topic" name="topic" value="{escape(settings.get("topic") or "")}" placeholder="주제명">
+                </div>
               </div>
               <div class="two">
-                <input name="platform" value="{escape(settings.get("platform") or "kaggle")}" placeholder="플랫폼">
-                <select name="create_workspace">{workspace_options}</select>
+                <div class="field">
+                  <label for="new-experiment-platform">플랫폼</label>
+                  <select id="new-experiment-platform" name="platform">{platform_options}</select>
+                </div>
+                <div class="field">
+                  <label for="new-experiment-workspace">워크스페이스</label>
+                  <select id="new-experiment-workspace" name="create_workspace">{workspace_options}</select>
+                </div>
               </div>
               <div class="two">
-                <input name="metric" value="{escape(settings.get("metric") or "")}" placeholder="평가지표">
-                <select name="objective">{objective_options}</select>
+                <div class="field">
+                  <label for="new-experiment-metric">평가지표</label>
+                  <input id="new-experiment-metric" name="metric" value="{escape(settings.get("metric") or "")}" placeholder="평가지표">
+                </div>
+                <div class="field">
+                  <label for="new-experiment-objective">목표 방향</label>
+                  <select id="new-experiment-objective" name="objective">{objective_options}</select>
+                </div>
               </div>
               <div class="two">
-                <input name="target_column" value="{escape(settings.get("target_column") or "")}" placeholder="타깃 컬럼">
-                <input name="id_column" value="{escape(settings.get("id_column") or "")}" placeholder="ID 컬럼">
+                <div class="field">
+                  <label for="new-experiment-target-column">타깃 컬럼</label>
+                  <input id="new-experiment-target-column" name="target_column" value="{escape(settings.get("target_column") or "")}" placeholder="타깃 컬럼">
+                </div>
+                <div class="field">
+                  <label for="new-experiment-id-column">ID 컬럼</label>
+                  <input id="new-experiment-id-column" name="id_column" value="{escape(settings.get("id_column") or "")}" placeholder="ID 컬럼">
+                </div>
               </div>
-              <input name="required_data_files" value="{escape(files)}" placeholder="필수 데이터 파일, 예: train.csv,test.csv">
+              <div class="field">
+                <label for="new-experiment-data-files">필수 데이터 파일</label>
+                <input id="new-experiment-data-files" name="required_data_files" value="{escape(files)}" placeholder="필수 데이터 파일, 예: train.csv,test.csv">
+              </div>
+              <div class="field">
+                <label>데이터 업로드 (선택)</label>
+                <p class="hint">csv 등 개별 파일은 그대로, zip 파일은 등록 시 자동으로 압축이 풀립니다 (파일이 많은 폴더는 압축해서 올려주세요). 등록 버튼을 눌러야 실제로 저장됩니다.</p>
+                <div id="upload-drop-zone" class="upload-drop-zone" tabindex="0">
+                  <p>여기로 파일을 드래그하거나 클릭해서 선택하세요.</p>
+                  <input type="file" id="upload-file-input" multiple hidden>
+                </div>
+                <ul id="upload-file-list" class="upload-file-list"></ul>
+              </div>
               <div class="button-row two">
                 <button class="secondary" name="action" value="new_experiment_analyze">분석 다시 하기</button>
                 <button name="action" value="new_experiment">등록</button>
               </div>
+              <p id="register-status" class="hint" role="status"></p>
             </form>
         """
 
 
-def floating_chat(answer: str = "") -> str:
-    initial_answer = answer_block(answer)
+def delete_experiment_modal(snapshot: dict[str, Any]) -> str:
+    competition = str(snapshot.get("competition") or "")
+    topic = str(snapshot.get("topic") or competition or "-")
+    expected_text = f"{topic} 지우기"
+    return f"""
+      <div class="modal-backdrop" id="delete-modal" hidden>
+        <section class="modal" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title">
+          <div class="modal-head">
+            <div>
+              <p class="eyebrow">Delete Experiment</p>
+              <h2 id="delete-modal-title">실험 지우기</h2>
+            </div>
+            <button type="button" class="icon-button" data-close-modal aria-label="닫기">×</button>
+          </div>
+          <div id="delete-step-confirm">
+            <p><strong>{escape(topic)}</strong> 실험을 지우시겠습니까?</p>
+            <p class="hint">실험에 관련된 모든 파일과 기록(trial, 산출물, 채팅 이력 포함)이 영구적으로 삭제되며 되돌릴 수 없습니다.</p>
+            <div class="button-row two">
+              <button type="button" class="secondary" data-close-modal>No</button>
+              <button type="button" class="danger" id="delete-step-yes">Yes</button>
+            </div>
+          </div>
+          <div id="delete-step-type" hidden>
+            <p>정말로 삭제하려면 아래에 <strong>{escape(expected_text)}</strong>를 정확히 입력하세요.</p>
+            <form method="post" action="/action" class="stack" id="delete-experiment-form">
+              {hidden("action", "delete_experiment")}
+              {hidden("competition", competition)}
+              <input name="confirm_text" id="delete-confirm-input" placeholder="{escape(expected_text)}" autocomplete="off">
+              <div class="button-row two">
+                <button type="button" class="secondary" id="delete-step-back">취소</button>
+                <button type="submit" class="danger" id="delete-confirm-submit" disabled data-expected="{escape(expected_text)}">지우기</button>
+              </div>
+            </form>
+          </div>
+        </section>
+      </div>
+    """
+
+
+def floating_chat(answer: str = "", *, competition: str | None = None) -> str:
+    history = _chat_history_for_render(competition)
+    sessions = list(history.get("sessions") or [])
+    active = history.get("active_session") or {}
+    messages = list(history.get("messages") or [])
+    initial_messages = _chat_messages_html(messages)
+    if not initial_messages:
+        initial_messages = (
+            '<div class="chat-message agent">궁금한 점을 물어보세요. 현재 선택된 실험의 '
+            "사용자용 산출물과 내부 기록을 기준으로 답변합니다.</div>"
+            + answer_block(answer)
+        )
+    session_options = _chat_session_options(sessions, str(active.get("session_id") or ""))
     chat_status = _chat_status_label()
     return f"""
       <button type="button" class="chat-fab" id="chat-fab" aria-label="에이전트 채팅 열기" aria-controls="chat-widget" aria-expanded="false">AI</button>
@@ -583,9 +935,14 @@ def floating_chat(answer: str = "") -> str:
           <button type="button" class="chat-close" id="chat-close" aria-label="채팅 닫기">x</button>
         </header>
         <p class="chat-boundary">읽기 전용 · 대화는 실험 계획, 코드, 점수, 연구 판단을 변경하지 않습니다.</p>
+        <div class="chat-history-toolbar">
+          <select id="chat-session-select" aria-label="이전 대화 선택" {"disabled" if not sessions else ""}>
+            {session_options or '<option value="">저장된 대화 없음</option>'}
+          </select>
+          <button type="button" class="chat-new-session" id="chat-new-session" aria-label="새 대화" title="새 대화">+</button>
+        </div>
         <div class="chat-log" id="chat-log" aria-live="polite">
-          <div class="chat-message agent">궁금한 점을 물어보세요. 현재 선택된 실험의 사용자용 산출물과 내부 기록을 기준으로 답변합니다.</div>
-          {initial_answer}
+          {initial_messages}
         </div>
         <form method="post" action="/api/question" class="chat-form" id="question-form">
           <textarea name="question" rows="2" placeholder="메시지를 입력하세요. Enter 전송, Shift+Enter 줄바꿈"></textarea>
@@ -593,6 +950,43 @@ def floating_chat(answer: str = "") -> str:
         </form>
       </section>
 """
+
+
+def _chat_history_for_render(competition: str | None) -> dict[str, Any]:
+    if not competition:
+        return {"sessions": [], "active_session": None, "messages": []}
+    try:
+        return chat_history_snapshot(competition)
+    except Exception:
+        return {"sessions": [], "active_session": None, "messages": []}
+
+
+def _chat_session_options(sessions: list[dict[str, Any]], active_session_id: str) -> str:
+    options = []
+    for session in sessions:
+        session_id = str(session.get("session_id") or "")
+        title = str(session.get("title") or "새 대화")
+        selected = " selected" if session_id == active_session_id else ""
+        options.append(
+            f'<option value="{escape(session_id)}"{selected}>{escape(title)}</option>'
+        )
+    return "".join(options)
+
+
+def _chat_messages_html(messages: list[dict[str, Any]]) -> str:
+    blocks = []
+    for message in messages:
+        role = str(message.get("role") or "system")
+        if role not in {"user", "assistant", "system"}:
+            role = "system"
+        css_role = "agent" if role == "assistant" else role
+        trial_id = str(message.get("trial_id") or "")
+        meta = f'<small class="chat-message-meta">{escape(trial_id)}</small>' if trial_id else ""
+        blocks.append(
+            f'<div class="chat-message {css_role}">'
+            f'<span>{escape(message.get("content") or "")}</span>{meta}</div>'
+        )
+    return "".join(blocks)
 
 
 def _chat_status_label() -> str:
@@ -635,7 +1029,7 @@ def progress_panel(snapshot: dict[str, Any]) -> str:
 """
 
 
-def trial_table(competition: str) -> str:
+def trial_table(competition: str, *, snapshot: dict[str, Any] | None = None) -> str:
     try:
         rows = _sqlite_trial_rows(competition)
     except Exception as exc:
@@ -648,6 +1042,7 @@ def trial_table(competition: str) -> str:
     for row in rows:
         trial_id = str(row.get("trial_id") or "-")
         status = str(row.get("status") or "")
+        display_status = _effective_trial_status(trial_id, status, snapshot or {})
         is_planned = status.casefold() in {"planned", "ready"}
         detail = render_sqlite_trial_detail(competition, trial_id)
         axis = str(row.get("change_axis") or "-")
@@ -659,7 +1054,7 @@ def trial_table(competition: str) -> str:
         body.append(
             '<tr data-trial-row>'
             f"<td>{escape(trial_id)}</td>"
-            f"<td>{trial_status_badge(status)}</td>"
+            f"<td>{trial_status_badge(display_status)}</td>"
             f"<td>{escape(_compact_score(row.get('local_score')))}</td>"
             f"<td>{escape(_compact_score(row.get('lb_score')))}</td>"
             f"<td>{_tooltip_cell(axis, 28)}</td>"
@@ -702,13 +1097,29 @@ def best_badge(label: str) -> str:
 def trial_status_badge(status: str) -> str:
     value = status.casefold()
     label = {
+        "discovered": "실행 전",
         "planned": "계획 완료",
         "ready": "계획 완료",
         "completed": "완료",
         "blocked": "중단",
+        "recovery_pending": "로컬 완료 · 후처리 대기",
+        "running": "진행 중",
     }.get(value, status or "-")
-    css = "badge planned" if value in {"planned", "ready"} else "badge muted"
+    css = "badge planned" if value in {"discovered", "planned", "ready", "recovery_pending", "running"} else "badge muted"
     return f'<span class="{css}">{escape(label)}</span>'
+
+
+def _effective_trial_status(trial_id: str, status: str, snapshot: dict[str, Any]) -> str:
+    loop = snapshot.get("loop") or {}
+    loop_trial = str(loop.get("current_trial") or loop.get("next_trial") or "")
+    if loop_trial != trial_id:
+        return status
+    loop_status = str(loop.get("status") or "").casefold()
+    if loop_status in {"starting", "running", "resuming"}:
+        return "running"
+    if loop_status == "failed" and loop.get("error") == "recoverable_after_metrics_collection":
+        return "recovery_pending"
+    return status
 
 
 def trial_artifact_links(competition: str, trial_id: str, *, planned: bool = False) -> str:
@@ -718,6 +1129,7 @@ def trial_artifact_links(competition: str, trial_id: str, *, planned: bool = Fal
             (
                 path
                 for path in [
+                    out_dir / "user_view" / "01_plan.ko.md",
                     out_dir / "demo_experiment_plan.md",
                     out_dir / "next_experiment.md",
                 ]
@@ -726,7 +1138,7 @@ def trial_artifact_links(competition: str, trial_id: str, *, planned: bool = Fal
             None,
         )
         plan_chip = (
-            f'<a class="artifact-chip" href="/artifact?{urlencode({"path": str(plan_path)})}">계획</a>'
+            f'<button type="button" class="artifact-chip" data-open-artifact="{escape(project_relative_path(plan_path))}">계획</button>'
             if plan_path
             else '<span class="artifact-chip disabled">계획</span>'
         )
@@ -761,12 +1173,22 @@ def trial_artifact_links(competition: str, trial_id: str, *, planned: bool = Fal
         "scores_ko": "점수",
     }
     links = [
-        f'<a class="artifact-chip" href="/artifact?{urlencode({"path": str(row.get("path") or "")})}">'
-        f'{escape(labels.get(str(row.get("artifact_type") or ""), str(row.get("artifact_type") or "문서")))}</a>'
+        f'<button type="button" class="artifact-chip" data-open-artifact="{escape(project_relative_path(Path(str(row.get("path") or ""))))}">'
+        f'{escape(labels.get(str(row.get("artifact_type") or ""), str(row.get("artifact_type") or "문서")))}</button>'
         for row in rows[:4]
-        if row.get("path")
+        if row.get("path") and _artifact_path_exists(Path(str(row["path"])))
     ]
     return " ".join(links) if links else '<span class="empty">-</span>'
+
+
+def _artifact_path_exists(path: Path) -> bool:
+    candidate = path if path.is_absolute() else project_root() / path
+    try:
+        resolved = candidate.resolve()
+        resolved.relative_to(project_root().resolve())
+    except (OSError, ValueError):
+        return False
+    return resolved.is_file()
 
 
 def artifact_panel(competition: str, snapshot: dict[str, Any]) -> str:
@@ -778,7 +1200,7 @@ def artifact_panel(competition: str, snapshot: dict[str, Any]) -> str:
     if not files:
         return f'<p class="empty">아직 사용자용 산출물이 없습니다.</p><p class="path-text">{escape(user_dir)}</p>'
     items = [
-        f'<li><a href="{artifact_href(path)}">{escape(artifact_title(path))}</a><span>{escape(path.name)}</span></li>'
+        f'<li><button type="button" class="artifact-link" data-open-artifact="{escape(project_relative_path(path))}">{escape(artifact_title(path))}</button><span>{escape(path.name)}</span></li>'
         for path in files
     ]
     return f'<ul class="artifact-list">{"".join(items)}</ul><p class="path-text">{escape(user_dir)}</p>'
@@ -853,6 +1275,19 @@ def locations_panel(competition: str, snapshot: dict[str, Any]) -> str:
     return f'<ul class="location-list">{"".join(rows)}</ul>'
 
 
+def load_artifact_content(relative_path: str) -> dict[str, Any]:
+    path = resolve_project_file(relative_path)
+    try:
+        content = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise FileNotFoundError(str(exc)) from exc
+    return {
+        "title": artifact_title(path),
+        "path": project_relative_path(path),
+        "content": content,
+    }
+
+
 def render_artifact_page(relative_path: str) -> str:
     path = resolve_project_file(relative_path)
     try:
@@ -883,7 +1318,8 @@ def resolve_project_file(relative_path: str) -> Path:
     if not relative_path:
         raise ValueError("empty path")
     root = project_root().resolve()
-    candidate = (root / relative_path.replace("\\", "/").lstrip("/")).resolve()
+    requested = Path(relative_path.replace("\\", "/"))
+    candidate = requested.resolve() if requested.is_absolute() else (root / requested).resolve()
     try:
         candidate.relative_to(root)
     except ValueError as exc:
@@ -958,11 +1394,12 @@ def page(*, title: str, body: str) -> str:
     .badge {{ display: inline-block; border-radius: 999px; background: #dff2eb; color: #0d594e; padding: 3px 8px; font-size: 12px; font-weight: 700; }}
     .badge.planned {{ background: #e8eef5; color: #3f5871; }}
     .badge.muted {{ background: var(--soft); color: var(--muted); }}
-    .artifact-chip {{ display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 3px 8px; margin: 0 4px 4px 0; font-size: 12px; background: #fff; }}
+    .artifact-chip {{ display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 3px 8px; margin: 0 4px 4px 0; font: inherit; font-size: 12px; background: #fff; color: var(--ink); cursor: pointer; }}
     .artifact-chip.disabled {{ background: var(--soft); color: #9aa4ae; cursor: not-allowed; opacity: .72; }}
     .artifact-list, .location-list {{ list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }}
     .artifact-list li {{ border: 1px solid var(--line); border-radius: 6px; padding: 10px; display: grid; gap: 3px; }}
     .artifact-list span, .path-text, .empty, .hint {{ color: var(--muted); }}
+    .artifact-link {{ border: none; background: none; padding: 0; margin: 0; font: inherit; color: var(--accent-2); text-decoration: underline; cursor: pointer; text-align: left; }}
     .path-text {{ margin: 12px 0 0; font-size: 12px; overflow-wrap: anywhere; }}
     .location-list li {{ padding: 8px 0; border-bottom: 1px solid var(--line); }}
     .analysis-box {{ border: 1px solid var(--line); border-radius: 8px; background: #fafbfc; padding: 12px; }}
@@ -979,6 +1416,13 @@ def page(*, title: str, body: str) -> str:
     .control-actions {{ display: flex; align-items: center; justify-content: space-between; gap: 12px; }}
     .control-actions form {{ margin: 0; }}
     .two {{ display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }}
+    .field {{ display: grid; gap: 4px; }}
+    .field label {{ font-size: 12px; font-weight: 600; color: var(--muted); }}
+    .upload-drop-zone {{ display: grid; place-items: center; text-align: center; border: 2px dashed var(--line); border-radius: 8px; padding: 36px 16px; margin: 12px 0; cursor: pointer; color: var(--muted); transition: border-color .15s, background .15s; }}
+    .upload-drop-zone.dragover {{ border-color: var(--accent); background: var(--soft); color: var(--ink); }}
+    .upload-file-list {{ list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 6px; }}
+    .upload-file-list li {{ display: flex; justify-content: space-between; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 13px; }}
+    .upload-file-list button {{ width: auto; padding: 2px 8px; background: transparent; color: var(--muted); border: none; cursor: pointer; }}
     input, select, textarea {{ width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 10px; font: 14px Arial, "Malgun Gothic", sans-serif; color: var(--ink); background: #fff; }}
     input:disabled {{ border-color: #d7dce2; background: #e8ebef; color: #8a949f; cursor: not-allowed; }}
     textarea {{ min-height: 92px; resize: vertical; }}
@@ -1004,6 +1448,20 @@ def page(*, title: str, body: str) -> str:
     .insight-form button {{ width: 100%; }}
     ul {{ margin: 0; padding-left: 20px; line-height: 1.7; }}
     li form {{ margin-top: 8px; display: grid; gap: 8px; }}
+    .feedback-request-card {{ margin-bottom: 14px; border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 7px; padding: 16px; list-style: none; }}
+    .feedback-type {{ display: inline-block; margin-bottom: 9px; border-radius: 5px; padding: 4px 7px; background: #e8f5f2; color: #086b60; font-size: 12px; font-weight: 700; }}
+    .feedback-problem {{ font-size: 16px; line-height: 1.55; }}
+    .feedback-evidence-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin: 12px 0; }}
+    .feedback-evidence {{ display: grid; gap: 4px; border-radius: 6px; padding: 10px; background: var(--soft); }}
+    .feedback-evidence span, .feedback-evidence small {{ color: var(--muted); }}
+    .feedback-evidence strong {{ font-size: 17px; }}
+    .feedback-options {{ display: grid; gap: 8px; }}
+    .feedback-option {{ display: flex; gap: 9px; align-items: flex-start; border: 1px solid var(--line); border-radius: 6px; padding: 10px; cursor: pointer; }}
+    .feedback-option input {{ width: auto; margin-top: 3px; }}
+    .feedback-option span {{ display: grid; gap: 3px; }}
+    .feedback-option small {{ color: var(--muted); font-weight: 400; line-height: 1.45; }}
+    .feedback-default {{ border-radius: 6px; padding: 10px; background: var(--soft); color: var(--muted); }}
+    .feedback-execution-note {{ border-radius: 6px; padding: 10px; background: #fff4d6; color: #76520b; }}
     .chat-fab {{ position: fixed; right: 24px; bottom: 24px; z-index: 30; width: 58px; height: 58px; border-radius: 50%; box-shadow: 0 10px 24px rgba(22,32,42,.2); font-size: 16px; }}
     .chat-widget {{ position: fixed; right: 24px; bottom: 94px; z-index: 31; width: 390px; min-width: 390px; max-width: calc(100vw - 48px); height: min(620px, calc(100vh - 126px)); min-height: min(620px, calc(100vh - 126px)); max-height: calc(100vh - 110px); border: 1px solid var(--line); border-radius: 8px; background: var(--panel); box-shadow: 0 18px 46px rgba(22,32,42,.22); display: flex; flex-direction: column; overflow: hidden; }}
     .chat-resize-handle {{ position: absolute; top: 0; left: 0; z-index: 2; width: 28px; height: 28px; padding: 0; border-radius: 7px 0 7px 0; background: transparent; color: var(--muted); cursor: nwse-resize; touch-action: none; }}
@@ -1015,11 +1473,16 @@ def page(*, title: str, body: str) -> str:
     .chat-widget-head div {{ display: grid; gap: 3px; }}
     .chat-widget-head span {{ color: var(--muted); font-size: 12px; }}
     .chat-boundary {{ margin: 0; padding: 9px 14px; border-bottom: 1px solid var(--line); background: #f5f8fa; color: var(--muted); font-size: 12px; line-height: 1.45; }}
+    .chat-history-toolbar {{ display: grid; grid-template-columns: minmax(0, 1fr) 36px; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: #fff; }}
+    .chat-history-toolbar select {{ min-width: 0; height: 36px; padding: 5px 30px 5px 9px; font-size: 13px; }}
+    .chat-new-session {{ width: 36px; height: 36px; padding: 0; border-radius: 50%; background: var(--soft); color: var(--ink); font-size: 22px; line-height: 1; }}
     .interaction-boundary {{ margin: 0 0 18px; padding: 10px 12px; border-left: 3px solid var(--accent); background: var(--soft); color: var(--muted); line-height: 1.5; }}
     .chat-close {{ width: 34px; height: 34px; border-radius: 50%; padding: 0; background: var(--soft); color: var(--ink); font-size: 18px; }}
     .chat-log {{ display: grid; gap: 10px; margin-bottom: 10px; max-height: 420px; overflow-y: auto; }}
     .chat-widget .chat-log {{ flex: 1; max-height: none; margin: 0; padding: 14px; align-content: start; }}
-    .chat-message {{ border-radius: 8px; padding: 10px 12px; line-height: 1.55; white-space: pre-wrap; }}
+    .chat-message {{ display: grid; gap: 6px; border-radius: 8px; padding: 10px 12px; line-height: 1.55; }}
+    .chat-message > span {{ white-space: pre-wrap; }}
+    .chat-message-meta {{ color: var(--muted); font-size: 11px; }}
     .chat-message.user {{ justify-self: end; max-width: 86%; background: #dff2eb; color: #0d594e; }}
     .chat-message.agent {{ justify-self: start; max-width: 100%; background: var(--soft); color: var(--ink); }}
     .chat-message.system {{ justify-self: stretch; background: #fff4d6; color: #76520b; }}
@@ -1074,11 +1537,6 @@ def page(*, title: str, body: str) -> str:
     modalCloseButtons.forEach((button) => {{
       button.addEventListener("click", () => setModalOpen(button.closest(".modal-backdrop"), false));
     }});
-    document.querySelectorAll(".modal-backdrop").forEach((backdrop) => {{
-      backdrop.addEventListener("click", (event) => {{
-        if (event.target === backdrop) setModalOpen(backdrop, false);
-      }});
-    }});
     document.addEventListener("keydown", (event) => {{
       if (event.key === "Escape") {{
         const openModal = [...document.querySelectorAll(".modal-backdrop")].find((modal) => !modal.hidden);
@@ -1088,6 +1546,151 @@ def page(*, title: str, body: str) -> str:
     if ([...document.querySelectorAll(".modal-backdrop")].some((modal) => !modal.hidden)) {{
       document.body.style.overflow = "hidden";
     }}
+
+    const deleteModal = document.getElementById("delete-modal");
+    const deleteStepConfirm = document.getElementById("delete-step-confirm");
+    const deleteStepType = document.getElementById("delete-step-type");
+    const deleteYesButton = document.getElementById("delete-step-yes");
+    const deleteBackButton = document.getElementById("delete-step-back");
+    const deleteConfirmInput = document.getElementById("delete-confirm-input");
+    const deleteConfirmSubmit = document.getElementById("delete-confirm-submit");
+    function resetDeleteModal() {{
+      if (!deleteStepConfirm || !deleteStepType) return;
+      deleteStepConfirm.hidden = false;
+      deleteStepType.hidden = true;
+      if (deleteConfirmInput) deleteConfirmInput.value = "";
+      if (deleteConfirmSubmit) deleteConfirmSubmit.disabled = true;
+    }}
+    document.querySelectorAll('[data-open-modal="delete-modal"]').forEach((button) => {{
+      button.addEventListener("click", resetDeleteModal);
+    }});
+    deleteYesButton?.addEventListener("click", () => {{
+      deleteStepConfirm.hidden = true;
+      deleteStepType.hidden = false;
+      deleteConfirmInput?.focus();
+    }});
+    deleteBackButton?.addEventListener("click", () => setModalOpen(deleteModal, false));
+    deleteConfirmInput?.addEventListener("input", () => {{
+      if (!deleteConfirmSubmit) return;
+      deleteConfirmSubmit.disabled = deleteConfirmInput.value !== deleteConfirmSubmit.dataset.expected;
+    }});
+
+    const uploadDropZone = document.getElementById("upload-drop-zone");
+    const uploadFileInput = document.getElementById("upload-file-input");
+    const uploadFileList = document.getElementById("upload-file-list");
+    let uploadSelectedFiles = [];
+    function renderUploadFileList() {{
+      if (!uploadFileList) return;
+      uploadFileList.innerHTML = "";
+      uploadSelectedFiles.forEach((file, index) => {{
+        const item = document.createElement("li");
+        const sizeKb = (file.size / 1024).toFixed(1);
+        const label = document.createElement("span");
+        label.textContent = `${{file.name}} (${{sizeKb}} KB)`;
+        const removeButton = document.createElement("button");
+        removeButton.type = "button";
+        removeButton.textContent = "×";
+        removeButton.addEventListener("click", () => {{
+          uploadSelectedFiles.splice(index, 1);
+          renderUploadFileList();
+        }});
+        item.appendChild(label);
+        item.appendChild(removeButton);
+        uploadFileList.appendChild(item);
+      }});
+    }}
+    function addUploadFiles(fileList) {{
+      Array.from(fileList || []).forEach((file) => uploadSelectedFiles.push(file));
+      renderUploadFileList();
+    }}
+    document.querySelectorAll('[data-open-modal="new-experiment-modal"]').forEach((button) => {{
+      button.addEventListener("click", () => {{
+        uploadSelectedFiles = [];
+        renderUploadFileList();
+      }});
+    }});
+    uploadDropZone?.addEventListener("click", () => uploadFileInput?.click());
+    uploadDropZone?.addEventListener("keydown", (event) => {{
+      if (event.key === "Enter" || event.key === " ") {{
+        event.preventDefault();
+        uploadFileInput?.click();
+      }}
+    }});
+    uploadFileInput?.addEventListener("change", (event) => {{
+      addUploadFiles(event.target.files);
+      uploadFileInput.value = "";
+    }});
+    ["dragover", "dragenter"].forEach((eventName) => {{
+      uploadDropZone?.addEventListener(eventName, (event) => {{
+        event.preventDefault();
+        uploadDropZone.classList.add("dragover");
+      }});
+    }});
+    ["dragleave", "dragend"].forEach((eventName) => {{
+      uploadDropZone?.addEventListener(eventName, () => uploadDropZone.classList.remove("dragover"));
+    }});
+    uploadDropZone?.addEventListener("drop", (event) => {{
+      event.preventDefault();
+      uploadDropZone.classList.remove("dragover");
+      addUploadFiles(event.dataTransfer?.files);
+    }});
+
+    const registerForm = document.getElementById("new-experiment-register-form");
+    const registerStatus = document.getElementById("register-status");
+    registerForm?.addEventListener("submit", async (event) => {{
+      const submitter = event.submitter;
+      if (!submitter || submitter.value !== "new_experiment") return;
+      event.preventDefault();
+      submitter.disabled = true;
+      if (registerStatus) registerStatus.textContent = "등록 중...";
+      try {{
+        const formData = new FormData(registerForm);
+        formData.set("action", "new_experiment");
+        const response = await fetch("/api/register-experiment", {{ method: "POST", body: new URLSearchParams(formData) }});
+        const result = await response.json();
+        let finalMessage = result.message;
+        if (result.ok && uploadSelectedFiles.length) {{
+          if (registerStatus) registerStatus.textContent = "데이터 업로드 중...";
+          const uploadForm = new FormData();
+          uploadSelectedFiles.forEach((file) => uploadForm.append("file", file, file.name));
+          const uploadResponse = await fetch("/api/upload-data", {{ method: "POST", body: uploadForm }});
+          const uploadResult = await uploadResponse.json();
+          finalMessage += uploadResult.ok
+            ? ` (데이터 ${{(uploadResult.saved || []).length}}개 파일 업로드됨)`
+            : ` (데이터 업로드 실패: ${{uploadResult.message || "알 수 없는 오류"}})`;
+        }}
+        window.location.href = "/?" + new URLSearchParams({{ message: finalMessage }}).toString();
+      }} catch (error) {{
+        window.location.href = "/?" + new URLSearchParams({{ message: "등록 중 오류가 발생했습니다: " + error }}).toString();
+      }}
+    }});
+
+    const artifactModal = document.getElementById("artifact-modal");
+    const artifactModalTitle = document.getElementById("artifact-modal-title");
+    const artifactModalPath = document.getElementById("artifact-modal-path");
+    const artifactModalBody = document.getElementById("artifact-modal-body");
+    document.querySelectorAll("[data-open-artifact]").forEach((trigger) => {{
+      trigger.addEventListener("click", async () => {{
+        const path = trigger.dataset.openArtifact;
+        if (!path || !artifactModal) return;
+        if (artifactModalTitle) artifactModalTitle.textContent = trigger.textContent.trim() || "산출물";
+        if (artifactModalPath) artifactModalPath.textContent = path;
+        if (artifactModalBody) artifactModalBody.textContent = "불러오는 중...";
+        setModalOpen(artifactModal, true);
+        try {{
+          const response = await fetch(`/api/artifact?path=${{encodeURIComponent(path)}}`);
+          const payload = await response.json();
+          if (!response.ok || !payload.ok) {{
+            if (artifactModalBody) artifactModalBody.textContent = payload.message || "산출물을 불러오지 못했습니다.";
+            return;
+          }}
+          if (artifactModalTitle) artifactModalTitle.textContent = payload.title || "산출물";
+          if (artifactModalBody) artifactModalBody.textContent = payload.content || "";
+        }} catch (error) {{
+          if (artifactModalBody) artifactModalBody.textContent = `산출물을 불러오는 중 오류가 발생했습니다: ${{error}}`;
+        }}
+      }});
+    }});
 
     const trialTable = document.querySelector(".trial-table");
     const pagination = document.querySelector("[data-trial-pagination]");
@@ -1126,6 +1729,8 @@ def page(*, title: str, body: str) -> str:
     const chatFab = document.getElementById("chat-fab");
     const chatClose = document.getElementById("chat-close");
     const chatResizeHandle = document.getElementById("chat-resize-handle");
+    const chatSessionSelect = document.getElementById("chat-session-select");
+    const chatNewSession = document.getElementById("chat-new-session");
     const chatOpenButtons = document.querySelectorAll("[data-open-chat]");
     const chatSizeStorageKey = "research-agent-chat-size";
     const minimumChatWidth = 390;
@@ -1216,17 +1821,89 @@ def page(*, title: str, body: str) -> str:
         chatLog.scrollTop = chatLog.scrollHeight;
       }}
     }}
-    function appendChatMessage(kind, text) {{
+    function appendChatMessage(kind, text, meta = "") {{
       if (!chatLog || !text) return;
       const item = document.createElement("div");
       item.className = `chat-message ${{kind}}`;
-      item.textContent = text;
+      const content = document.createElement("span");
+      content.textContent = text;
+      item.appendChild(content);
+      if (meta) {{
+        const detail = document.createElement("small");
+        detail.className = "chat-message-meta";
+        detail.textContent = meta;
+        item.appendChild(detail);
+      }}
       chatLog.appendChild(item);
       chatLog.scrollTop = chatLog.scrollHeight;
+    }}
+    function renderChatHistory(payload) {{
+      if (!chatLog || !chatSessionSelect || !payload) return;
+      const sessions = Array.isArray(payload.sessions) ? payload.sessions : [];
+      const activeSessionId = payload.active_session?.session_id || "";
+      chatSessionSelect.replaceChildren();
+      if (!sessions.length) {{
+        const empty = document.createElement("option");
+        empty.value = "";
+        empty.textContent = "저장된 대화 없음";
+        chatSessionSelect.appendChild(empty);
+        chatSessionSelect.disabled = true;
+      }} else {{
+        sessions.forEach((session) => {{
+          const option = document.createElement("option");
+          option.value = session.session_id || "";
+          option.textContent = session.title || "새 대화";
+          option.selected = option.value === activeSessionId;
+          chatSessionSelect.appendChild(option);
+        }});
+        chatSessionSelect.disabled = false;
+      }}
+      chatLog.replaceChildren();
+      const messages = Array.isArray(payload.messages) ? payload.messages : [];
+      if (!messages.length) {{
+        appendChatMessage(
+          "agent",
+          "궁금한 점을 물어보세요. 현재 선택된 실험의 사용자용 산출물과 내부 기록을 기준으로 답변합니다.",
+        );
+      }} else {{
+        messages.forEach((message) => {{
+          const kind = message.role === "assistant" ? "agent" : (message.role || "system");
+          appendChatMessage(kind, message.content || "", message.trial_id || "");
+        }});
+      }}
     }}
     chatFab?.addEventListener("click", () => setChatOpen(chatWidget?.hidden));
     chatClose?.addEventListener("click", () => setChatOpen(false));
     chatOpenButtons.forEach((button) => button.addEventListener("click", () => setChatOpen(true)));
+    chatSessionSelect?.addEventListener("change", async () => {{
+      const sessionId = chatSessionSelect.value;
+      if (!sessionId) return;
+      try {{
+        const response = await fetch(`/api/chat/history?session_id=${{encodeURIComponent(sessionId)}}`);
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) {{
+          appendChatMessage("system", payload.message || "이전 대화를 불러오지 못했습니다.");
+          return;
+        }}
+        renderChatHistory(payload);
+      }} catch (error) {{
+        appendChatMessage("system", `이전 대화를 불러오는 중 오류가 발생했습니다: ${{error}}`);
+      }}
+    }});
+    chatNewSession?.addEventListener("click", async () => {{
+      try {{
+        const response = await fetch("/api/chat/session", {{method: "POST"}});
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) {{
+          appendChatMessage("system", payload.message || "새 대화를 만들지 못했습니다.");
+          return;
+        }}
+        renderChatHistory(payload);
+        setChatOpen(true);
+      }} catch (error) {{
+        appendChatMessage("system", `새 대화를 만드는 중 오류가 발생했습니다: ${{error}}`);
+      }}
+    }});
     if (questionForm && chatLog) {{
       const textarea = questionForm.querySelector("textarea[name='question']");
       textarea?.addEventListener("keydown", (event) => {{
@@ -1257,14 +1934,17 @@ def page(*, title: str, body: str) -> str:
           const response = await fetch("/api/question", {{
             method: "POST",
             headers: {{"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"}},
-            body: new URLSearchParams({{question}}),
+            body: new URLSearchParams({{
+              question,
+              session_id: chatSessionSelect?.value || "",
+            }}),
           }});
           const payload = await response.json();
           loading.remove();
           if (!response.ok || !payload.ok) {{
             appendChatMessage("system", payload.message || "답변 생성에 실패했습니다.");
           }} else {{
-            appendChatMessage("agent", payload.answer || "답변 내용이 비어 있습니다.");
+            renderChatHistory(payload.history);
           }}
         }} catch (error) {{
           loading.remove();
@@ -1303,12 +1983,65 @@ def pending_list(requests: list[dict[str, Any]]) -> str:
         request_id = str(request.get("request_id") or "")
         title = request.get("title") or request.get("type") or "요청"
         question = request.get("question") or request.get("message") or ""
+        evidence = "".join(
+            "<div class='feedback-evidence'>"
+            f"<span>{escape(item.get('label') or '근거')}</span>"
+            f"<strong>{escape(item.get('value') or '-')}</strong>"
+            f"<small>{escape(item.get('meaning') or '')}</small>"
+            "</div>"
+            for item in request.get("evidence_snapshot") or []
+            if isinstance(item, dict)
+        )
+        repeated_evidence = "".join(
+            f"<li>{escape(str(item))}</li>"
+            for item in request.get("evidence_summary") or []
+            if str(item).strip()
+        )
+        policy = request.get("policy") if isinstance(request.get("policy"), dict) else {}
+        policy_score = (
+            "<p class='feedback-policy-score'><strong>요청 필요도</strong><br>"
+            f"{escape(policy.get('score'))} / {escape(policy.get('threshold'))}"
+            "<small>회차 수가 아니라 반복 근거와 사용자 판단 필요성을 기준으로 계산합니다.</small></p>"
+            if policy.get("score") is not None
+            else ""
+        )
+        options = "".join(
+            "<label class='feedback-option'>"
+            f"<input type='radio' name='decision' value='{escape(item.get('value') or item.get('label') or '')}' required>"
+            f"<span><strong>{escape(item.get('label') or item.get('value') or '선택')}</strong>"
+            f"<small>{escape(item.get('impact') or '')}</small></span>"
+            "</label>"
+            for item in request.get("options") or []
+            if isinstance(item, dict)
+        )
+        execution_note = (
+            "<p class='feedback-execution-note'><strong>실행 안내</strong><br>"
+            f"{escape(request.get('execution_note') or '현재 버전에서는 이 답변이 외부 계산 환경을 자동 실행하지 않습니다.')}"
+            "</p>"
+            if request.get("execution_supported") is False
+            else ""
+        )
+        support_context = (
+            (f"<div><strong>반복 근거</strong><ul>{repeated_evidence}</ul></div>" if repeated_evidence else "")
+            + policy_score
+        )
         items.append(
-            "<li>"
-            f"<strong>{escape(title)}</strong><br>{escape(question)}"
+            "<li class='feedback-request-card'>"
+            f"<span class='feedback-type'>{escape(request.get('interaction_label') or '사용자 판단 요청')}</span>"
+            f"<h3>{escape(title)}</h3>"
+            f"<p class='feedback-problem'><strong>문제</strong><br>{escape(request.get('problem') or request.get('message') or '-')}</p>"
+            f"<div class='feedback-evidence-grid'>{evidence}</div>"
+            f"{support_context}"
+            f"<p><strong>에이전트 해석</strong><br>{escape(request.get('interpretation') or '-')}</p>"
+            f"<p><strong>에이전트 추천</strong><br>{escape(request.get('recommendation') or '-')}</p>"
+            f"<p><strong>왜 사용자에게 묻나요?</strong><br>{escape(request.get('why_user_needed') or '-')}</p>"
+            f"<p><strong>확인할 질문</strong><br>{escape(question)}</p>"
             f'<form method="post" action="/action">{hidden("action", "feedback")}'
             f'{hidden("request_id", request_id)}'
-            '<textarea name="answer" placeholder="답변을 입력하세요."></textarea>'
+            f"<div class='feedback-options'>{options}</div>"
+            '<textarea name="answer" placeholder="선택 이유나 추가 정보를 입력하세요. 선택지가 없다면 여기에 답변을 입력하세요."></textarea>'
+            f"<p class='feedback-default'><strong>답변이 없을 때</strong><br>{escape(request.get('default_if_no_response') or '-')}</p>"
+            f"{execution_note}"
             "<button>답변 기록</button></form>"
             "</li>"
         )
@@ -1318,8 +2051,13 @@ def pending_list(requests: list[dict[str, Any]]) -> str:
 def insight_hint(existing: Any, snapshot: dict[str, Any]) -> str:
     trial_id = snapshot.get("current_trial") or snapshot.get("last_completed_trial") or "trial_001"
     next_trial = snapshot.get("next_trial") or _next_trial_after(str(trial_id)) or "다음"
-    if existing:
-        record = latest_user_insight_record(str(snapshot.get("competition") or ""), str(trial_id)) or {}
+    # latest_user_insight_record already excludes insights that finished their
+    # lifecycle (superseded/completed/exhausted). If it returns nothing, the raw
+    # feedback text in `existing` is stale history, not something still pending --
+    # showing it here would look like an unresolved duplicate even though it was
+    # already applied and closed out.
+    record = latest_user_insight_record(str(snapshot.get("competition") or ""), str(trial_id)) if existing else None
+    if record:
         text = "\n".join(
             [
                 "이미 인사이트가 제공되었습니다",
@@ -1340,7 +2078,13 @@ def persistent_insight_notice(existing: Any, snapshot: dict[str, Any]) -> str:
         return ""
     trial_id = snapshot.get("current_trial") or snapshot.get("last_completed_trial") or "trial_001"
     next_trial = snapshot.get("next_trial") or _next_trial_after(str(trial_id)) or "다음"
-    record = latest_user_insight_record(str(snapshot.get("competition") or ""), str(trial_id)) or {}
+    # Same reasoning as insight_hint: only show this banner while the insight is
+    # genuinely still open. Once it is superseded/completed/exhausted, stop
+    # displaying it instead of rendering placeholder "pending"/"해석 대기" text
+    # that makes an already-resolved insight look unresolved.
+    record = latest_user_insight_record(str(snapshot.get("competition") or ""), str(trial_id))
+    if not record:
+        return ""
     interpretation = record.get("interpretation") if isinstance(record.get("interpretation"), dict) else {}
     intent = (
         interpretation.get("implementation_intent")
