@@ -296,3 +296,69 @@ def _probe_payload(stdout: str, stderr: str) -> dict[str, Any]:
             except json.JSONDecodeError:
                 break
     return {"error": f"probe_failed: {(stderr or stdout or '').strip()[-200:]}"}
+
+
+PREDICT_SENSITIVITY_PROBE_SOURCE = '''
+import json, os, sys, importlib
+sys.path.insert(0, os.getcwd())
+
+loader_module, predict_module, data_dir = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    loader = importlib.import_module(loader_module)
+    predictor = importlib.import_module(predict_module)
+    from pathlib import Path as _P
+    samples = list(loader.load_samples(_P(data_dir), "train"))[:8]
+    if len(samples) < 2:
+        print("<<PROBE>>" + json.dumps({"error": "not_enough_samples_to_compare"}))
+        raise SystemExit(0)
+    outputs = [repr(predictor.predict(s)) for s in samples]
+except SystemExit:
+    raise
+except Exception as exc:
+    print("<<PROBE>>" + json.dumps({"error": f"{type(exc).__name__}: {exc}"[:300]}))
+    raise SystemExit(0)
+print("<<PROBE>>" + json.dumps({"distinct": len(set(outputs)), "compared": len(outputs)}))
+'''
+
+
+def run_predict_sensitivity_probe(
+    project_root: Path,
+    python: str,
+    *,
+    loader_module: str,
+    predict_module: str,
+    data_dir: Path | str,
+    timeout: int = 900,
+) -> dict[str, Any]:
+    """Ask predict() for several different samples and see if it varies."""
+    with tempfile.TemporaryDirectory() as tmp:
+        probe = Path(tmp) / "_predict_probe.py"
+        probe.write_text(PREDICT_SENSITIVITY_PROBE_SOURCE, encoding="utf-8")
+        try:
+            completed = subprocess.run(
+                [python, str(probe), loader_module, predict_module, str(data_dir)],
+                cwd=str(project_root),
+                text=True,
+                capture_output=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return {"error": "predict_probe_timed_out"}
+    return _probe_payload(completed.stdout, completed.stderr)
+
+
+def evaluate_predict_sensitivity(results: dict[str, Any]) -> list[str]:
+    """A model that returns the same answer for every input is not using its
+    input. Real incident: predict() was `return {"x": 0.0, "y": 0.0, "z":
+    0.0}` for many trials, and the plan it was supposed to implement (Ridge
+    on per-sample features) never got built -- yet every text-level check
+    passed, because the function existed and returned a valid shape.
+    """
+    if not isinstance(results, dict) or results.get("error"):
+        return [f"predict_probe_error:{(results or {}).get('error', 'unknown')}"]
+    compared = results.get("compared") or 0
+    if compared < 2:
+        return ["predict_probe_error:not_enough_samples_to_compare"]
+    if results.get("distinct", 0) < 2:
+        return ["predict_ignores_input:same_output_for_every_sample"]
+    return []

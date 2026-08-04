@@ -39,9 +39,14 @@ from kaggle_research_agent.trial_artifacts import (  # noqa: E402
 )
 from kaggle_research_agent.workspace_after_coding import run_workspace_after_coding  # noqa: E402
 from kaggle_research_agent.workspace_code_writer import run_workspace_code_writer  # noqa: E402
+from kaggle_research_agent.runtime_contract import (  # noqa: E402
+    evaluate_predict_sensitivity,
+    run_predict_sensitivity_probe,
+)
 from kaggle_research_agent.workspace_coding_handoff import (  # noqa: E402
     DATA_LOADER_INIT_TRIAL_ID,
     HARNESS_INIT_TRIAL_ID,
+    _competition_data_dir,
     generate_data_loader,
     generate_scoring_harness,
     prepare_workspace_coding_handoff,
@@ -786,6 +791,15 @@ def run_code_writer_trial(
                     "the score stage for now (see harness_status for details).",
                     flush=True,
                 )
+        constant_issues = _constant_predictor_issues(competition, trial_id)
+        if constant_issues and attempt == 1:
+            print(
+                "Predict returns the same output for every sample; asking the code writer to "
+                "actually use the input...",
+                flush=True,
+            )
+            coding_feedback = {"changed_files": ["predict_step.py"], "rejected_issues": constant_issues}
+            continue
         after_coding = run_workspace_after_coding(
             competition,
             trial_id,
@@ -1382,3 +1396,38 @@ if __name__ == "__main__":
         save_loop_state(status="failed", current_trial=None, error=str(error), pid=None)
         print(f"Workspace auto loop failed: {error}", file=sys.stderr)
         raise
+
+
+def _constant_predictor_issues(competition: str, trial_id: str) -> list[str]:
+    """A predictor that answers identically for every sample is not modeling.
+
+    Only applied once a trial builds on a previous one: the very first trial
+    is legitimately allowed to be a constant submission-format baseline.
+    Skipped unless the competition-level loader exists, since without it
+    there is no structure-agnostic way to fetch comparable samples.
+    """
+    path = trial_dir(competition, trial_id) / "continuation_context.json"
+    try:
+        continuation = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    except (json.JSONDecodeError, OSError):
+        continuation = {}
+    if not (continuation or {}).get("source_trial_id"):
+        return []
+    try:
+        profile = load_execution_profile(competition)
+    except (FileNotFoundError, ValueError):
+        return []
+    project_root = Path(str(profile.get("project_root", "")))
+    if not (project_root / "data_loader.py").is_file():
+        return []
+    results = run_predict_sensitivity_probe(
+        project_root,
+        str(profile.get("python") or "python"),
+        loader_module="data_loader",
+        predict_module="predict_step",
+        data_dir=_competition_data_dir(competition, project_root),
+    )
+    issues = evaluate_predict_sensitivity(results)
+    # Probe failures (import errors, too few samples) are not evidence of a
+    # constant predictor -- only the positive finding blocks.
+    return [i for i in issues if i.startswith("predict_ignores_input")]
