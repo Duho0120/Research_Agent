@@ -792,14 +792,43 @@ def run_code_writer_trial(
                     flush=True,
                 )
         constant_issues = _constant_predictor_issues(competition, trial_id)
-        if constant_issues and attempt == 1:
+        if constant_issues:
+            if attempt == 1:
+                print(
+                    "Predict returns the same output for every sample; asking the code writer to "
+                    "actually use the input...",
+                    flush=True,
+                )
+                coding_feedback = {"changed_files": ["predict_step.py"], "rejected_issues": constant_issues}
+                continue
+            # Detecting this and then running anyway would make the check
+            # pointless: the trial's predictions cannot respond to anything,
+            # so its score carries no information about the change it was
+            # supposed to test.
             print(
-                "Predict returns the same output for every sample; asking the code writer to "
-                "actually use the input...",
+                "Predict still returns the same output for every sample after a corrective retry; "
+                "stopping instead of running a trial whose predictions cannot improve.",
                 flush=True,
             )
-            coding_feedback = {"changed_files": ["predict_step.py"], "rejected_issues": constant_issues}
-            continue
+            log_decision(
+                competition,
+                trial_id,
+                decision_type="constant_predictor_blocked",
+                decision="blocked",
+                reason="predict() returned an identical result for every sample after a corrective retry.",
+                evidence={"issues": constant_issues},
+                next_action="force_replan_next_cycle",
+            )
+            return {
+                "competition": competition,
+                "trial_id": trial_id,
+                "status": "code_writer_blocked",
+                "handoff": handoff,
+                "code_writer": code_writer_result,
+                "constant_predictor_issues": constant_issues,
+                "feedback_ignored": True,
+                "code_writer_attempt": attempt,
+            }
         after_coding = run_workspace_after_coding(
             competition,
             trial_id,

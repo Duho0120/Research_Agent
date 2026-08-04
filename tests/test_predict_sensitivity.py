@@ -146,5 +146,56 @@ class PerturbationDoesNotPolluteMetricsTest(unittest.TestCase):
 
             self.assertFalse((root / "outputs" / "metrics.json").exists())
 
+
+
+class ConstantPredictorBlocksAfterRetryTest(unittest.TestCase):
+    """Detecting a constant predictor and then running anyway would make the
+    check pointless: the trial's score cannot say anything about the change
+    it was meant to test."""
+
+    def _run(self, constant_per_attempt):
+        from scripts import generic_workspace_auto_loop as loop
+
+        after = {
+            "status": "execution_completed",
+            "workspace_run": {"status": "completed"},
+            "metrics_collection": {"status": "collected"},
+        }
+        with unittest.mock.patch.object(loop, "generate_scoring_harness", return_value={"status": "already_exists"}):
+            with unittest.mock.patch.object(loop, "generate_data_loader", return_value={"status": "already_exists"}):
+                with unittest.mock.patch.object(
+                    loop, "prepare_workspace_coding_handoff", return_value={"status": "ready"}
+                ):
+                    with unittest.mock.patch.object(
+                        loop,
+                        "run_workspace_code_writer",
+                        return_value={"status": "accepted", "changed_files": ["predict_step.py"]},
+                    ):
+                        with unittest.mock.patch.object(loop, "run_workspace_after_coding", return_value=after):
+                            with unittest.mock.patch.object(
+                                loop, "_constant_predictor_issues", side_effect=constant_per_attempt
+                            ):
+                                with unittest.mock.patch.object(loop, "log_decision"):
+                                    return loop.run_code_writer_trial(
+                                        "demo",
+                                        "trial_002",
+                                        model="gpt-5",
+                                        provider="openai",
+                                        allow_api=True,
+                                        trial_llm_calls=None,
+                                        strategy_calls_today=None,
+                                    )
+
+    def test_still_constant_after_retry_is_blocked_not_run(self):
+        issues = ["predict_ignores_input:same_output_for_every_sample"]
+        result = self._run([issues, issues])
+        self.assertEqual("code_writer_blocked", result["status"])
+        self.assertTrue(result["feedback_ignored"])
+        self.assertEqual(issues, result["constant_predictor_issues"])
+
+    def test_fixed_on_retry_proceeds_normally(self):
+        result = self._run([["predict_ignores_input:same_output_for_every_sample"], []])
+        self.assertEqual("completed", result["status"])
+
 if __name__ == "__main__":
     unittest.main()
