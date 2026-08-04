@@ -41,7 +41,7 @@ def run_trial(
     python: str,
     *,
     data_dir: Path | str,
-    metric: str,
+    metric: "str | metrics_module.MetricSpec",
     outputs_dir: Path | str | None = None,
     submission_template: Path | str | None = None,
     loader_module: str = LOADER_MODULE,
@@ -61,7 +61,7 @@ def run_trial(
     outputs = Path(outputs_dir) if outputs_dir else root / "outputs"
     result: dict[str, Any] = {
         "status": "blocked",
-        "metric": metric,
+        "metric": metric if isinstance(metric, str) else metric.name,
         "cv_score": None,
         "issues": [],
         "project_root": str(root),
@@ -72,8 +72,10 @@ def run_trial(
         result["issues"] = [f"missing_module:{name}" for name in missing]
         result["next_action"] = "generate-missing-module"
         return result
-    if metric not in metrics_module.METRICS:
-        result["issues"] = [f"unknown_metric:{metric}"]
+    try:
+        metric_spec = metrics_module.resolve(metric)
+    except KeyError:
+        result["issues"] = [f"unknown_metric:{result['metric']}"]
         result["next_action"] = "register-competition-metric"
         return result
 
@@ -135,7 +137,7 @@ def run_trial(
         return result
 
     try:
-        score = metrics_module.compute(metric, child["holdout_predictions"], child["truths"], target_keys)
+        score = metrics_module.compute(metric_spec, child["holdout_predictions"], child["truths"], target_keys)
     except (ValueError, KeyError) as error:
         result["status"] = "failed"
         result["failed_stage"] = "score"
@@ -161,7 +163,7 @@ def run_trial(
         return result
 
     result["cv_score"] = score
-    result["objective"] = metrics_module.objective_of(metric)
+    result["objective"] = metric_spec.objective
     result["submission"] = submission
     result["metrics_path"] = str(_write_metrics(outputs, result, child))
     result["status"] = "completed"

@@ -35,16 +35,31 @@ def register(spec: MetricSpec, *, overwrite: bool = False) -> None:
     METRICS[spec.name] = spec
 
 
+def resolve(metric: "str | MetricSpec") -> MetricSpec:
+    """Accept either a built-in metric's name or an already-resolved spec.
+
+    A competition's own metric is never added to METRICS. That registry is
+    process-global, so registering one competition's implementation would
+    change how a different competition is scored inside the same run -- two
+    competitions whose metric names normalise alike would silently share
+    whichever was provisioned last.
+    """
+    if isinstance(metric, MetricSpec):
+        return metric
+    spec = METRICS.get(metric)
+    if spec is None:
+        raise KeyError(f"unknown metric {metric!r}; built in: {sorted(METRICS)}")
+    return spec
+
+
 def compute(
-    metric: str,
+    metric: "str | MetricSpec",
     predictions: list[dict[str, Any]],
     truths: list[dict[str, Any]],
     target_keys: list[str],
 ) -> float:
     """Score `predictions` against `truths`. Never called from agent code."""
-    spec = METRICS.get(metric)
-    if spec is None:
-        raise KeyError(f"unknown metric {metric!r}; registered: {sorted(METRICS)}")
+    spec = resolve(metric)
     if len(predictions) != len(truths):
         raise ValueError(f"prediction/truth count mismatch: {len(predictions)} vs {len(truths)}")
     if not predictions:
@@ -52,11 +67,8 @@ def compute(
     return float(spec.fn(predictions, truths, target_keys))
 
 
-def objective_of(metric: str) -> str:
-    spec = METRICS.get(metric)
-    if spec is None:
-        raise KeyError(f"unknown metric {metric!r}; registered: {sorted(METRICS)}")
-    return spec.objective
+def objective_of(metric: "str | MetricSpec") -> str:
+    return resolve(metric).objective
 
 
 def _pairs(
@@ -79,6 +91,28 @@ def _rmse(predictions, truths, target_keys) -> float:
 def _mae(predictions, truths, target_keys) -> float:
     pairs = _pairs(predictions, truths, target_keys)
     return sum(abs(p - a) for p, a in pairs) / len(pairs)
+
+
+def _rmsle(predictions, truths, target_keys) -> float:
+    """Root mean squared logarithmic error, as competitions define it.
+
+    Negative predictions are clamped to zero rather than raising: log1p is
+    undefined below -1, and every platform that uses this metric clips instead
+    of rejecting the submission. A negative truth is a different matter -- that
+    means the labels were misread, so it raises.
+    """
+    total = 0.0
+    count = 0
+    for predicted, actual in zip(predictions, truths):
+        for key in target_keys:
+            if key not in predicted:
+                raise ValueError(f"prediction is missing target key {key!r}.")
+            truth = float(actual[key])
+            if truth < 0:
+                raise ValueError(f"rmsle is undefined for a negative truth ({key}={truth}).")
+            total += (math.log1p(max(0.0, float(predicted[key]))) - math.log1p(truth)) ** 2
+            count += 1
+    return math.sqrt(total / count)
 
 
 def _accuracy(predictions, truths, target_keys) -> float:
@@ -107,6 +141,7 @@ def _mean_euclidean_distance(predictions, truths, target_keys) -> float:
 
 
 register(MetricSpec("rmse", "minimize", _rmse))
+register(MetricSpec("rmsle", "minimize", _rmsle))
 register(MetricSpec("mae", "minimize", _mae))
 register(MetricSpec("accuracy", "maximize", _accuracy))
 register(MetricSpec("mean_euclidean_distance", "minimize", _mean_euclidean_distance))

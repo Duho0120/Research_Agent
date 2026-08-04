@@ -14,6 +14,9 @@ from .contract import (
     loader_contract_source,
     model_contract_source,
 )
+from .metric_provisioning import provision_metric
+from .metric_spec import WorkedExample, normalize_metric_name, parse_metric_spec
+from .metric_verification import verify_metric
 from .metrics import METRICS, MetricSpec, compute, register
 from .orchestrator import run_trial
 from .splitting import split_samples
@@ -26,13 +29,18 @@ __all__ = [
     "METRICS",
     "MODEL_MODULE",
     "MetricSpec",
+    "WorkedExample",
     "compute",
     "loader_contract_source",
     "model_contract_source",
+    "normalize_metric_name",
+    "parse_metric_spec",
+    "provision_metric",
     "read_template_ids",
     "register",
     "run_trial",
     "split_samples",
+    "verify_metric",
     "verify_test_ids",
     "write_submission",
 ]
