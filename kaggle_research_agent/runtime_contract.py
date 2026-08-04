@@ -42,13 +42,13 @@ import json, os, sys, importlib
 # and its own relative imports resolve.
 sys.path.insert(0, os.getcwd())
 
-def _facts(module_name):
+def _facts(module_name, data_dir):
     mod = importlib.import_module(module_name)
     loader = getattr(mod, "load_samples", None)
     if loader is None:
         return {"error": "load_samples_not_defined"}
     from pathlib import Path as _P
-    root = _P(mod.__file__).resolve().parent
+    root = _P(data_dir)
     out = {}
     for split in ("train", "test"):
         try:
@@ -78,20 +78,32 @@ def _facts(module_name):
         out["deterministic"] = None
     return out
 
-print("<<PROBE>>" + json.dumps(_facts(sys.argv[1])))
+print("<<PROBE>>" + json.dumps(_facts(sys.argv[1], sys.argv[2])))
 '''
 
 
 def run_sample_loading_probe(
-    project_root: Path, python: str, module_name: str, *, timeout: int = 600
+    project_root: Path,
+    python: str,
+    module_name: str,
+    *,
+    data_dir: Path | str | None = None,
+    timeout: int = 600,
 ) -> dict[str, Any]:
-    """Run the loader in a subprocess and return what it actually produced."""
+    """Run the loader in a subprocess and return what it actually produced.
+
+    ``data_dir`` is what gets handed to ``load_samples`` as its first
+    argument, and it must be the competition's real data directory. Passing
+    the project root instead made a correct loader look broken: it raised
+    (as instructed -- no silent fallback) because the split directories sit
+    under data/, not beside the module.
+    """
     with tempfile.TemporaryDirectory() as tmp:
         probe = Path(tmp) / "_loader_probe.py"
         probe.write_text(PROBE_SOURCE, encoding="utf-8")
         try:
             completed = subprocess.run(
-                [python, str(probe), module_name],
+                [python, str(probe), module_name, str(data_dir or project_root)],
                 cwd=str(project_root),
                 text=True,
                 capture_output=True,

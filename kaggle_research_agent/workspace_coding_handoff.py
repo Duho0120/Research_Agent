@@ -169,7 +169,10 @@ def generate_data_loader(
         runtime_issues: list[str] = []
         if result.get("status") == "accepted":
             facts = run_sample_loading_probe(
-                project_root, str(profile.get("python") or "python"), Path(DATA_LOADER_FILENAME).stem
+                project_root,
+                str(profile.get("python") or "python"),
+                Path(DATA_LOADER_FILENAME).stem,
+                data_dir=_competition_data_dir(competition, project_root),
             )
             runtime_issues = evaluate_loader_contract(
                 facts, label_ids=label_ids, submission_ids=submission_ids
@@ -203,6 +206,17 @@ def generate_data_loader(
             continue
         break
     return {"competition": competition, "status": "blocked", "code_writer": result}
+
+
+def _competition_data_dir(competition: str, project_root: Path) -> Path:
+    """The directory load_samples() receives. The data card records it; fall
+    back to <project_root>/data, then the project root itself."""
+    card = _load_json_object(competition_dir(competition) / "competition_data_card.json") or {}
+    declared = str(card.get("data_dir") or "").strip()
+    if declared and Path(declared).is_dir():
+        return Path(declared)
+    nested = project_root / "data"
+    return nested if nested.is_dir() else project_root
 
 
 def _anchor_ids(competition: str, project_root: Path) -> tuple[set[str] | None, list[str] | None]:
