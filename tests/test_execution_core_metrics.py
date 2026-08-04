@@ -297,6 +297,60 @@ class ProvisioningLadderTest(unittest.TestCase):
         self.assertEqual([], calls)
 
 
+class WorkedExampleReachesProvisioningTest(unittest.TestCase):
+    """The example must travel from metric.md into the check that uses it.
+
+    Real incident: it did not. verify_metric was reading the example off the
+    generated module instead of off the competition's spec, so an
+    implementation was effectively checked against a case it supplied itself.
+    Every unit test passed -- they called verify_metric directly and handed it
+    the example -- and the gap only appeared when a real metric.md went
+    through the real provisioning path: an implementation reading the
+    threshold as 1.0 instead of 0.01 was accepted.
+
+    The same shape of mistake as an audit report that showed a section the API
+    payload never carried: the check existed, and nothing routed to it."""
+
+    def test_wrong_threshold_is_rejected_through_provision_metric(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = _competition(Path(tmp), WITH_EXAMPLE)
+            result = provision_metric(
+                directory,
+                target_keys=["x"],
+                generate=_generator(GOOD_METRIC.replace("<= 0.01", "<= 1.0")),
+            )
+        self.assertEqual("blocked", result["status"])
+        self.assertTrue(
+            any(i.startswith("metric_disagrees_with_worked_example") for i in result["issues"]),
+            result["issues"],
+        )
+
+    def test_a_module_cannot_supply_its_own_worked_example(self):
+        """Grading your own homework proves nothing."""
+        self_serving = GOOD_METRIC.replace("<= 0.01", "<= 1.0") + (
+            "\nfrom execution_core.metric_spec import WorkedExample\n"
+            "WORKED_EXAMPLE = WorkedExample([{'x': 0.0}], [{'x': 0.5}], ['x'], 1.0)\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = _competition(Path(tmp), WITH_EXAMPLE)
+            result = provision_metric(directory, target_keys=["x"], generate=_generator(self_serving))
+        self.assertEqual("blocked", result["status"])
+
+    def test_a_previously_accepted_module_is_rechecked_against_the_current_spec(self):
+        """metric.md may gain an example after the module was provisioned."""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = _competition(Path(tmp), WITH_PROSE)
+            wrong = GOOD_METRIC.replace("<= 0.01", "<= 1.0")
+            accepted = provision_metric(directory, target_keys=["x"], generate=_generator(wrong))
+            self.assertEqual("ready", accepted["status"])  # prose alone cannot see it
+
+            (directory / "metric.md").write_text(WITH_EXAMPLE, encoding="utf-8")
+            rechecked = provision_metric(directory, target_keys=["x"])
+
+        self.assertEqual("blocked", rechecked["status"])
+        self.assertEqual("provisioned", rechecked["source"])
+
+
 class BuiltinMetricTest(unittest.TestCase):
     def test_rmsle_matches_its_definition(self):
         import math

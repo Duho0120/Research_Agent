@@ -61,7 +61,18 @@ def provision_metric(
 
     module_path = directory / METRIC_MODULE_FILENAME
     if module_path.is_file() and not regenerate:
-        loaded = _register_from_file(module_path, key, spec.objective)
+        # Re-verified against the spec on every load, not trusted because it
+        # was accepted once: metric.md may have gained a definition or an
+        # example since, and an implementation that no longer matches the
+        # competition's own words should stop being used.
+        loaded = _register_from_file(
+            module_path,
+            key,
+            spec.objective,
+            target_keys=target_keys,
+            truths=truths,
+            worked_example=spec.worked_example,
+        )
         return {**result, **loaded, "source": "provisioned"}
 
     builtin = metrics_module.METRICS.get(key)
@@ -170,7 +181,14 @@ def _generate_and_verify(
         module_path.parent.mkdir(parents=True, exist_ok=True)
         module_path.write_text(source, encoding="utf-8")
 
-        loaded = _register_from_file(module_path, key, spec.objective, target_keys=target_keys, truths=truths)
+        loaded = _register_from_file(
+            module_path,
+            key,
+            spec.objective,
+            target_keys=target_keys,
+            truths=truths,
+            worked_example=spec.worked_example,
+        )
         attempts.append({"attempt": attempt, "issues": loaded.get("issues", [])})
         if loaded.get("status") == "ready":
             return {
@@ -209,6 +227,7 @@ def _register_from_file(
     *,
     target_keys: list[str] | None = None,
     truths: list[dict[str, Any]] | None = None,
+    worked_example: Any | None = None,
 ) -> dict[str, Any]:
     module = _load_module(module_path)
     if isinstance(module, str):
@@ -228,7 +247,9 @@ def _register_from_file(
         objective=objective,
         target_keys=target_keys or list(getattr(module, "TARGET_KEYS", []) or []),
         truths=truths,
-        worked_example=getattr(module, "WORKED_EXAMPLE", None),
+        # The competition's example, never the module's own. An implementation
+        # supplying the case it is checked against proves nothing.
+        worked_example=worked_example,
     )
     if verification["issues"]:
         return {"status": "blocked", "issues": verification["issues"], "verification": verification}
