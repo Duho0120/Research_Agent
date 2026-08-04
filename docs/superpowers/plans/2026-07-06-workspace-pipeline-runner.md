@@ -14,7 +14,7 @@
 
 **Files:**
 - Create: `tests/test_workspace_runner.py`
-- Create: `kaggle_research_agent/workspace_runner.py`
+- Create: `research_agent/workspace_runner.py`
 
 - [x] Write a failing dry-run test proving no external command executes without `run_now=True`.
 - [x] Run `python -B -m unittest tests.test_workspace_runner.WorkspaceRunnerTest.test_dry_run_records_plan_without_executing -v` and confirm the runner import or behavior fails.
@@ -25,7 +25,7 @@
 
 **Files:**
 - Modify: `tests/test_workspace_runner.py`
-- Modify: `kaggle_research_agent/workspace_runner.py`
+- Modify: `research_agent/workspace_runner.py`
 
 - [x] Add failing tests for successful `test -> train -> predict` execution and stopping after the first failed command.
 - [x] Run `python -B -m unittest tests.test_workspace_runner -v` and confirm the new assertions fail for missing execution behavior.
@@ -36,7 +36,7 @@
 
 **Files:**
 - Modify: `tests/test_workspace_runner.py`
-- Modify: `kaggle_research_agent/workspace_runner.py`
+- Modify: `research_agent/workspace_runner.py`
 
 - [x] Add failing tests for invalid-profile blocking and missing-artifact reporting.
 - [x] Run the focused test module and confirm the new assertions fail.
@@ -47,7 +47,7 @@
 
 **Files:**
 - Modify: `tests/test_workspace_runner.py`
-- Modify: `kaggle_research_agent/cli.py`
+- Modify: `research_agent/cli.py`
 - Create: `docs/workspace_execution.ko.md`
 - Modify: `README.md`
 - Modify: `PROJECT_CHANGELOG.ko.md`
@@ -62,7 +62,7 @@
 **Files:**
 - Verify all changed files.
 
-- [x] Run `python -B -m compileall -q kaggle_research_agent tests` and require exit code 0.
+- [x] Run `python -B -m compileall -q research_agent tests` and require exit code 0.
 - [x] Run `python -B -m unittest discover -s tests -v` and require zero failures.
 - [x] Run `git diff --check` and require no whitespace errors.
 - [x] Review `git diff --stat` and `git status --short` without reverting unrelated user changes.

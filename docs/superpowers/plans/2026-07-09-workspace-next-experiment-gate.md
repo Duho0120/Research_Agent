@@ -16,12 +16,12 @@
 - Create: `tests/test_workspace_next_gate.py`
 
 - [ ] Write tests for: nonurgent pending review continues with caution; urgent review blocks next planning; completed result plans normally; invalid/missing result blocks.
-- [ ] Run the focused test file and confirm it fails because `kaggle_research_agent.workspace_next_gate` does not exist.
+- [ ] Run the focused test file and confirm it fails because `research_agent.workspace_next_gate` does not exist.
 
 ### Task 2: Gate Module
 
 **Files:**
-- Create: `kaggle_research_agent/workspace_next_gate.py`
+- Create: `research_agent/workspace_next_gate.py`
 
 - [ ] Implement `plan_next_workspace_trial(competition, source_trial_id, next_trial_id)`.
 - [ ] Read and validate source `workspace_result_cycle.json`.
@@ -33,7 +33,7 @@
 ### Task 3: CLI Command
 
 **Files:**
-- Modify: `kaggle_research_agent/cli.py`
+- Modify: `research_agent/cli.py`
 - Test: `tests/test_workspace_next_gate.py`
 
 - [ ] Add `plan-next-workspace-trial --competition --source-trial --next-trial`.
@@ -54,5 +54,5 @@
 **Commands:**
 - `python -B -m unittest tests.test_workspace_next_gate -v`
 - `python -B -m unittest discover -s tests -v`
-- `python -B -m compileall -q kaggle_research_agent tests`
+- `python -B -m compileall -q research_agent tests`
 - `git diff --check`

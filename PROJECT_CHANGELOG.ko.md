@@ -14,8 +14,8 @@
 
 주요 변경:
 
-- Python package `kaggle_research_agent` 생성
-- CLI 진입점 `kaggle_research_agent.cli` 구현
+- Python package `research_agent` 생성
+- CLI 진입점 `research_agent.cli` 구현
 - 기본 폴더 구조 생성
   - `competitions/`
   - `experiments/`
@@ -31,21 +31,21 @@
 주요 파일:
 
 - `README.md`
-- `kaggle_research_agent/cli.py`
-- `kaggle_research_agent/planner_agent.py`
-- `kaggle_research_agent/evaluator_agent.py`
-- `kaggle_research_agent/memory_agent.py`
-- `kaggle_research_agent/config_validator.py`
+- `research_agent/cli.py`
+- `research_agent/planner_agent.py`
+- `research_agent/evaluator_agent.py`
+- `research_agent/memory_agent.py`
+- `research_agent/config_validator.py`
 - `colab/worker.py`
 - `colab/worker_notebook.ipynb`
 
 검증:
 
 ```powershell
-python -B -m kaggle_research_agent.cli validate-config --competition demo --trial trial_001
-python -B -m kaggle_research_agent.cli create-job --competition demo --trial trial_001
-python -B -m kaggle_research_agent.cli evaluate --competition demo --trial trial_001
-python -B -m kaggle_research_agent.cli remember --competition demo --trial trial_001
+python -B -m research_agent.cli validate-config --competition demo --trial trial_001
+python -B -m research_agent.cli create-job --competition demo --trial trial_001
+python -B -m research_agent.cli evaluate --competition demo --trial trial_001
+python -B -m research_agent.cli remember --competition demo --trial trial_001
 ```
 
 결과:
@@ -69,17 +69,17 @@ python -B -m kaggle_research_agent.cli remember --competition demo --trial trial
 
 주요 파일:
 
-- `kaggle_research_agent/main_agent.py`
-- `kaggle_research_agent/simple_yaml.py`
-- `kaggle_research_agent/cli.py`
+- `research_agent/main_agent.py`
+- `research_agent/simple_yaml.py`
+- `research_agent/cli.py`
 - `README.md`
 
 검증:
 
 ```powershell
-python -B -m kaggle_research_agent.cli validate-config --competition demo --trial trial_001
-python -B -m kaggle_research_agent.cli cycle --competition demo --trial trial_002 --no-job
-python -B -m kaggle_research_agent.cli cycle --competition demo --trial trial_003
+python -B -m research_agent.cli validate-config --competition demo --trial trial_001
+python -B -m research_agent.cli cycle --competition demo --trial trial_002 --no-job
+python -B -m research_agent.cli cycle --competition demo --trial trial_003
 ```
 
 결과:
@@ -145,10 +145,10 @@ baseline 성능:
 검증:
 
 ```powershell
-python -B -m kaggle_research_agent.cli validate-config --competition patient_action_skeleton --trial trial_001_v07_baseline
-python -B -m kaggle_research_agent.cli validate-config --competition patient_action_skeleton --trial trial_002_c1_bed_wandering_focus
-python -B -m kaggle_research_agent.cli evaluate --competition patient_action_skeleton --trial trial_001_v07_baseline
-python -B -m kaggle_research_agent.cli remember --competition patient_action_skeleton --trial trial_001_v07_baseline
+python -B -m research_agent.cli validate-config --competition patient_action_skeleton --trial trial_001_v07_baseline
+python -B -m research_agent.cli validate-config --competition patient_action_skeleton --trial trial_002_c1_bed_wandering_focus
+python -B -m research_agent.cli evaluate --competition patient_action_skeleton --trial trial_001_v07_baseline
+python -B -m research_agent.cli remember --competition patient_action_skeleton --trial trial_001_v07_baseline
 ```
 
 결과:
@@ -175,18 +175,18 @@ python -B -m kaggle_research_agent.cli remember --competition patient_action_ske
 
 주요 파일:
 
-- `kaggle_research_agent/job_manager.py`
-- `kaggle_research_agent/main_agent.py`
-- `kaggle_research_agent/cli.py`
+- `research_agent/job_manager.py`
+- `research_agent/main_agent.py`
+- `research_agent/cli.py`
 - `scripts/demo_train.py`
 - `README.md`
 
 검증:
 
 ```powershell
-python -B -m kaggle_research_agent.cli cycle --competition demo --trial local_demo_001 --run-now --run-command "python scripts/demo_train.py --config experiments/demo/local_demo_001/config.yaml --output experiments/demo/local_demo_001 --score 0.83"
-python -B -m kaggle_research_agent.cli create-job --competition demo --trial local_demo_002
-python -B -m kaggle_research_agent.cli create-job --competition demo --trial colab_demo_001 --backend colab
+python -B -m research_agent.cli cycle --competition demo --trial local_demo_001 --run-now --run-command "python scripts/demo_train.py --config experiments/demo/local_demo_001/config.yaml --output experiments/demo/local_demo_001 --score 0.83"
+python -B -m research_agent.cli create-job --competition demo --trial local_demo_002
+python -B -m research_agent.cli create-job --competition demo --trial colab_demo_001 --backend colab
 ```
 
 결과:
@@ -332,15 +332,15 @@ python -B -m kaggle_research_agent.cli create-job --competition demo --trial col
 
 주요 구현:
 
-- `kaggle_research_agent/policies.py`
+- `research_agent/policies.py`
   - 정책 yaml 로딩
   - 기본 정책 fallback
-- `kaggle_research_agent/agents/policy_gate.py`
+- `research_agent/agents/policy_gate.py`
   - `decide_execution`
   - `classify_local_failure`
   - `decide_human_review`
   - `should_call_llm`
-- `kaggle_research_agent/agents/review_pack.py`
+- `research_agent/agents/review_pack.py`
   - `review_pack/manifest.json`
   - `summary.ko.md`
   - `questions.ko.md`
@@ -367,10 +367,10 @@ python -B -m unittest discover -s tests -v
 
 주요 변경:
 
-- `kaggle_research_agent/agents/policy_gate.py`
+- `research_agent/agents/policy_gate.py`
   - `log_llm_decision` 추가
   - `should_call_llm` 결과를 `decision_type: llm_call`로 기록
-- `kaggle_research_agent/cli.py`
+- `research_agent/cli.py`
   - `decide-llm` 명령 추가
   - `request-review` 명령에서 `decide_human_review`와 `prepare_review_pack` 연결
 - `tests/test_policy_gate.py`
@@ -440,10 +440,10 @@ python -B -m unittest discover -s tests -v
 
 주요 변경:
 
-- `kaggle_research_agent/agents/experiment_runner.py`
+- `research_agent/agents/experiment_runner.py`
   - `write_local_failure_artifact`
   - `render_local_failure`
-- `kaggle_research_agent/agents/policy_gate.py`
+- `research_agent/agents/policy_gate.py`
   - `classify_local_failure(..., use_artifact=True)`
   - execution decision evidence에 `local_failure_artifact_path` 추가
 - `tests/test_experiment_runner.py`
@@ -454,7 +454,7 @@ python -B -m unittest discover -s tests -v
 검증:
 
 ```powershell
-python -B -m compileall -q kaggle_research_agent
+python -B -m compileall -q research_agent
 python -B -m unittest discover -s tests -v
 ```
 
@@ -477,12 +477,12 @@ python -B -m unittest discover -s tests -v
 
 - `configs/policies/pipeline_improvement_policy.yaml`
 - `docs/policies/pipeline_improvement_policy.ko.md`
-- `kaggle_research_agent/agents/pipeline_planner.py`
+- `research_agent/agents/pipeline_planner.py`
   - `plan_pipeline_improvement`
   - `pipeline_improvement_plan.json/md` 생성
-- `kaggle_research_agent/agents/research_planner.py`
+- `research_agent/agents/research_planner.py`
   - `plan-next`가 source trial의 pipeline improvement plan을 evidence로 사용
-- `kaggle_research_agent/cli.py`
+- `research_agent/cli.py`
   - `plan-improvement` 명령 추가
 - `tests/test_pipeline_planner.py`
   - validation 우선, error analysis/human review 우선, model family 우선 테스트 추가
@@ -508,10 +508,10 @@ python -B -m unittest tests.test_research_planner_next_experiment -v
 
 주요 변경:
 
-- `kaggle_research_agent/agents/pipeline_patch_planner.py` 추가
-- `kaggle_research_agent/agents/research_planner.py`에서 patch planning 코드 제거
-- `kaggle_research_agent/cli.py` import 변경
-- `kaggle_research_agent/agents/orchestrator.py` import 변경
+- `research_agent/agents/pipeline_patch_planner.py` 추가
+- `research_agent/agents/research_planner.py`에서 patch planning 코드 제거
+- `research_agent/cli.py` import 변경
+- `research_agent/agents/orchestrator.py` import 변경
 - `tests/test_research_planner_patch_plan.py`가 새 모듈 경로를 검증하도록 변경
 - `README.md`의 agent architecture와 workflow를 역할 분리에 맞게 갱신
 
@@ -596,9 +596,9 @@ python -B -m unittest tests.test_cli_loop_core.CliLoopCoreTest.test_prepare_patc
 
 ```powershell
 python -B -m unittest discover -s tests -v
-python -B -m kaggle_research_agent.cli diagnose --competition demo --trial trial_001
-python -B -m kaggle_research_agent.cli cycle --competition demo --trial trial_001 --no-job
-python -B -m kaggle_research_agent.cli record-submission --competition demo --trial trial_001 --version-name demo_trial_001_baseline_v01 --submission-file experiments/demo/trial_001/submission.csv --cv-score 0.83 --previous-lb-score 0.80 --previous-rank 120 --submitted-lb-score 0.84 --submitted-rank 90 --objective maximize --notes "Manual leaderboard entry"
+python -B -m research_agent.cli diagnose --competition demo --trial trial_001
+python -B -m research_agent.cli cycle --competition demo --trial trial_001 --no-job
+python -B -m research_agent.cli record-submission --competition demo --trial trial_001 --version-name demo_trial_001_baseline_v01 --submission-file experiments/demo/trial_001/submission.csv --cv-score 0.83 --previous-lb-score 0.80 --previous-rank 120 --submitted-lb-score 0.84 --submitted-rank 90 --objective maximize --notes "Manual leaderboard entry"
 ```
 
 ### Next experiment planner 추가
@@ -611,11 +611,11 @@ python -B -m kaggle_research_agent.cli record-submission --competition demo --tr
 
 주요 변경:
 
-- `kaggle_research_agent/next_experiment_agent.py`
+- `research_agent/next_experiment_agent.py`
 - `plan-next` CLI 명령
 - `cycle --next-trial` CLI 옵션
 - `tests/test_next_experiment_agent.py`
-- `kaggle_research_agent/patch_planner_agent.py`
+- `research_agent/patch_planner_agent.py`
 - `prepare-patch` CLI 명령
 - `apply-patch` CLI 명령
 - `cycle --prepare-next-patch` CLI 옵션
@@ -626,14 +626,14 @@ python -B -m kaggle_research_agent.cli record-submission --competition demo --tr
 
 ```powershell
 python -B -m unittest discover -s tests -v
-python -B -m kaggle_research_agent.cli plan-next --competition demo --source-trial trial_001 --next-trial trial_002
-python -B -m kaggle_research_agent.cli prepare-patch --competition demo --source-trial trial_001 --next-trial trial_002
-python -B -m kaggle_research_agent.cli apply-patch --competition demo --trial trial_002 --run-command "python scripts/demo_train.py --config experiments/demo/trial_002/config.yaml --output experiments/demo/trial_002"
-python -B -m kaggle_research_agent.cli cycle --competition demo --trial trial_001 --no-job --next-trial trial_002
-python -B -m kaggle_research_agent.cli cycle --competition demo --trial trial_001 --no-job --next-trial trial_002 --prepare-next-patch
-python -B -m kaggle_research_agent.cli cycle --competition demo --trial trial_001 --no-job --next-trial trial_002 --prepare-next-patch --apply-next-patch --next-run-command "python scripts/demo_train.py --config experiments/demo/trial_002/config.yaml --output experiments/demo/trial_002"
-python -B -m kaggle_research_agent.cli run-local --competition demo --trial trial_002 --run-command "python scripts/demo_train.py --config experiments/demo/trial_002/config.yaml --output experiments/demo/trial_002"
-python -B -m kaggle_research_agent.cli cycle --competition demo --trial trial_002 --no-job --next-trial trial_003 --prepare-next-patch
+python -B -m research_agent.cli plan-next --competition demo --source-trial trial_001 --next-trial trial_002
+python -B -m research_agent.cli prepare-patch --competition demo --source-trial trial_001 --next-trial trial_002
+python -B -m research_agent.cli apply-patch --competition demo --trial trial_002 --run-command "python scripts/demo_train.py --config experiments/demo/trial_002/config.yaml --output experiments/demo/trial_002"
+python -B -m research_agent.cli cycle --competition demo --trial trial_001 --no-job --next-trial trial_002
+python -B -m research_agent.cli cycle --competition demo --trial trial_001 --no-job --next-trial trial_002 --prepare-next-patch
+python -B -m research_agent.cli cycle --competition demo --trial trial_001 --no-job --next-trial trial_002 --prepare-next-patch --apply-next-patch --next-run-command "python scripts/demo_train.py --config experiments/demo/trial_002/config.yaml --output experiments/demo/trial_002"
+python -B -m research_agent.cli run-local --competition demo --trial trial_002 --run-command "python scripts/demo_train.py --config experiments/demo/trial_002/config.yaml --output experiments/demo/trial_002"
+python -B -m research_agent.cli cycle --competition demo --trial trial_002 --no-job --next-trial trial_003 --prepare-next-patch
 ```
 
 ### 최소 Code Editing Agent 실행 루프 추가
@@ -647,8 +647,8 @@ python -B -m kaggle_research_agent.cli cycle --competition demo --trial trial_00
 검증:
 
 ```powershell
-python -B -m kaggle_research_agent.cli apply-patch --competition demo --trial trial_003 --run-command "python scripts/demo_train.py --config experiments/demo/trial_003/config.yaml --output experiments/demo/trial_003"
-python -B -m kaggle_research_agent.cli cycle --competition demo --trial trial_003 --no-job --next-trial trial_004 --prepare-next-patch --apply-next-patch --next-run-command "python scripts/demo_train.py --config experiments/demo/trial_004/config.yaml --output experiments/demo/trial_004"
+python -B -m research_agent.cli apply-patch --competition demo --trial trial_003 --run-command "python scripts/demo_train.py --config experiments/demo/trial_003/config.yaml --output experiments/demo/trial_003"
+python -B -m research_agent.cli cycle --competition demo --trial trial_003 --no-job --next-trial trial_004 --prepare-next-patch --apply-next-patch --next-run-command "python scripts/demo_train.py --config experiments/demo/trial_004/config.yaml --output experiments/demo/trial_004"
 python -B -m unittest discover -s tests -v
 ```
 
@@ -656,8 +656,8 @@ python -B -m unittest discover -s tests -v
 
 요약:
 
-- 세부 `*_agent.py` 모듈을 제거하고 `kaggle_research_agent/agents/` 아래 6개 상위 에이전트 모듈로 물리 통합했다.
-- 공개 Python import 경로는 `kaggle_research_agent.agents.*` 기준으로 변경했다.
+- 세부 `*_agent.py` 모듈을 제거하고 `research_agent/agents/` 아래 6개 상위 에이전트 모듈로 물리 통합했다.
+- 공개 Python import 경로는 `research_agent.agents.*` 기준으로 변경했다.
 - CLI 명령 이름과 사용자-facing 동작은 유지했다.
 - README는 6개 상위 에이전트와 infrastructure/tool 구분이 보이도록 정리했다.
 
@@ -697,7 +697,7 @@ python -B -m unittest tests.test_cli_loop_core.CliLoopCoreTest.test_submit_trial
 
 - 실제 Kaggle 연동 전에 `prepare-submission` CLI를 추가해 `submit_manifest.md/json`을 먼저 생성하도록 했다.
 - 이 준비 단계는 제출 로그, `VERSION.md`, `BEST_MARKER.md`를 변경하지 않으므로 leaderboard 제출 전 검토 지점으로 사용할 수 있다.
-- 외부 Kaggle CLI 호출을 `kaggle_research_agent/integrations/kaggle_cli.py` adapter로 분리해, 다음 단계의 실제 Kaggle submit/polling 구현이 Submission Agent 기록 규칙을 흔들지 않도록 했다.
+- 외부 Kaggle CLI 호출을 `research_agent/integrations/kaggle_cli.py` adapter로 분리해, 다음 단계의 실제 Kaggle submit/polling 구현이 Submission Agent 기록 규칙을 흔들지 않도록 했다.
 
 검증:
 
@@ -709,7 +709,7 @@ python -B -m unittest tests.test_submission_agent.SubmissionAgentTest.test_prepa
 
 요약:
 
-- `kaggle_research_agent/integrations/kaggle_cli.py`에 shell 문자열 대신 인자 리스트 기반 helper를 추가했다.
+- `research_agent/integrations/kaggle_cli.py`에 shell 문자열 대신 인자 리스트 기반 helper를 추가했다.
 - Kaggle CLI 설치 확인, 인증 설정 확인, competition submit, leaderboard 조회 명령을 모두 구조화된 결과로 반환하도록 했다.
 - 실제 Kaggle 네트워크 호출 없이 fake runner를 주입해 adapter 동작을 검증할 수 있게 했다.
 
@@ -814,14 +814,14 @@ python -B -m unittest tests.test_orchestrator_diagnosis tests.test_cli_loop_core
 
 주요 변경:
 
-- `kaggle_research_agent/agents/patch_validator.py` 추가
+- `research_agent/agents/patch_validator.py` 추가
   - `validate_patch_plan`
   - `patch_validation.json`
   - `patch_validation.md`
-- `kaggle_research_agent/cli.py`
+- `research_agent/cli.py`
   - `validate-patch` 명령 추가
   - `--user-approved` 옵션 추가
-- `kaggle_research_agent/agents/experiment_runner.py`
+- `research_agent/agents/experiment_runner.py`
   - `apply_patch_plan()` 시작 전에 patch validation 실행
   - blocked 사유를 `code_edit_result.md/json`에 함께 기록
 - `tests/test_patch_validator.py` 추가
@@ -830,7 +830,7 @@ python -B -m unittest tests.test_orchestrator_diagnosis tests.test_cli_loop_core
 검증:
 
 ```powershell
-python -B -m compileall -q kaggle_research_agent
+python -B -m compileall -q research_agent
 python -B -m unittest discover -s tests -v
 ```
 
@@ -850,9 +850,9 @@ python -B -m unittest discover -s tests -v
 
 주요 변경:
 
-- `kaggle_research_agent/agents/patch_validator.py`
+- `research_agent/agents/patch_validator.py`
   - validation 결과 decision log 기록 추가
-- `kaggle_research_agent/agents/experiment_runner.py`
+- `research_agent/agents/experiment_runner.py`
   - 중복 target/config validation 제거
   - Patch Validator 결과를 단일 gate로 사용
 - `tests/test_patch_validator.py`
@@ -863,7 +863,7 @@ python -B -m unittest discover -s tests -v
 검증:
 
 ```powershell
-python -B -m compileall -q kaggle_research_agent
+python -B -m compileall -q research_agent
 python -B -m unittest discover -s tests -v
 ```
 
@@ -898,10 +898,10 @@ python -B -m unittest discover -s tests -v
 
 주요 변경:
 
-- `kaggle_research_agent/agents/coding_handoff.py` 추가
+- `research_agent/agents/coding_handoff.py` 추가
   - `prepare_coding_handoff`
   - `render_coding_agent_request`
-- `kaggle_research_agent/cli.py`
+- `research_agent/cli.py`
   - `prepare-handoff` 명령 추가
   - `--user-approved` 옵션 지원
 - `tests/test_coding_handoff.py` 추가
@@ -913,7 +913,7 @@ python -B -m unittest discover -s tests -v
 검증:
 
 ```powershell
-python -B -m compileall -q kaggle_research_agent
+python -B -m compileall -q research_agent
 python -B -m unittest discover -s tests -v
 ```
 
@@ -950,15 +950,15 @@ python -B -m unittest discover -s tests -v
 
 주요 변경:
 
-- `kaggle_research_agent/data_onboarding.py` 추가
+- `research_agent/data_onboarding.py` 추가
   - `profile_competition_data`
   - `render_data_profile`
-- `kaggle_research_agent/paths.py`
+- `research_agent/paths.py`
   - `data_dir`
   - `competition_data_dir`
-- `kaggle_research_agent/cli.py`
+- `research_agent/cli.py`
   - `profile-data` 명령 추가
-- `kaggle_research_agent/competition_onboarding.py`
+- `research_agent/competition_onboarding.py`
   - `start-competition` 이후 `data_profile.md/json` 생성 연결
 - `tests/test_data_onboarding.py` 추가
 - `tests/test_cli_loop_core.py`
@@ -971,7 +971,7 @@ python -B -m unittest discover -s tests -v
 검증:
 
 ```powershell
-python -B -m compileall -q kaggle_research_agent
+python -B -m compileall -q research_agent
 python -B -m unittest discover -s tests -v
 ```
 
@@ -1007,10 +1007,10 @@ python -B -m unittest discover -s tests -v
 
 주요 변경:
 
-- `kaggle_research_agent/baseline_generator.py` 추가
+- `research_agent/baseline_generator.py` 추가
   - `generate_baseline_pipeline`
   - `render_baseline_plan`
-- `kaggle_research_agent/cli.py`
+- `research_agent/cli.py`
   - `generate-baseline` 명령 추가
 - `tests/test_baseline_generator.py` 추가
   - baseline pipeline 생성 테스트
@@ -1024,7 +1024,7 @@ python -B -m unittest discover -s tests -v
 검증:
 
 ```powershell
-python -B -m compileall -q kaggle_research_agent
+python -B -m compileall -q research_agent
 python -B -m unittest discover -s tests -v
 ```
 
@@ -1060,11 +1060,11 @@ python -B -m unittest discover -s tests -v
 
 주요 변경:
 
-- `kaggle_research_agent/agents/coding_handoff.py`
+- `research_agent/agents/coding_handoff.py`
   - 기존 `patch_validation.json` 재사용 로직 추가
-- `kaggle_research_agent/baseline_generator.py`
+- `research_agent/baseline_generator.py`
   - 기존 `data_profile.json` snapshot 우선 사용
-- `kaggle_research_agent/agents/pipeline_patch_planner.py`
+- `research_agent/agents/pipeline_patch_planner.py`
   - `validation_errors` 생성 제거
 - `tests/test_coding_handoff.py`
   - patch validation decision log 중복 방지 테스트 추가
@@ -1076,7 +1076,7 @@ python -B -m unittest discover -s tests -v
 검증:
 
 ```powershell
-python -B -m compileall -q kaggle_research_agent
+python -B -m compileall -q research_agent
 python -B -m unittest discover -s tests -v
 ```
 
@@ -1102,12 +1102,12 @@ python -B -m unittest discover -s tests -v
 
 주요 변경:
 
-- `kaggle_research_agent/agents/model_advisor.py` 추가
+- `research_agent/agents/model_advisor.py` 추가
   - `advise_model_candidates()` 추가
   - tabular/image/text/unknown task type별 후보 모델군 제안
   - pretrained fine-tuning vs train-from-scratch 판단
   - validation 보호축일 때 `defer_model_change`로 분기
-- `kaggle_research_agent/cli.py`
+- `research_agent/cli.py`
   - `advise-models` CLI 명령 추가
 - `tests/test_model_advisor.py` 추가
   - tabular baseline-friendly 후보 테스트
@@ -1143,14 +1143,14 @@ python -B -m unittest discover -s tests -v
   - 금지 경로
   - 실행 제약
   - `coding_result.json/md` 결과 계약 정의
-- `kaggle_research_agent/agents/coding_handoff.py`
+- `research_agent/agents/coding_handoff.py`
   - `schema_version`, `request_id`, `objective` 추가
   - `context_files`, `allowed_write_files`, `create_files`, `forbidden_paths` 추가
   - `execution_constraints`, `required_output` 추가
   - Markdown 요청서에 입력/쓰기/금지/결과 계약 섹션 추가
-- `kaggle_research_agent/agents/pipeline_patch_planner.py`
+- `research_agent/agents/pipeline_patch_planner.py`
   - 실제로 존재하지 않는 신규 코드 모듈을 `create_files`에 선언
-- `kaggle_research_agent/agents/patch_validator.py`
+- `research_agent/agents/patch_validator.py`
   - `create_files`에 선언된 누락 target만 허용
   - 선언되지 않은 누락 target은 기존처럼 차단
 - 테스트
@@ -1168,7 +1168,7 @@ python -B -m unittest discover -s tests -v
 검증:
 
 ```powershell
-python -B -m compileall -q kaggle_research_agent
+python -B -m compileall -q research_agent
 python -B -m unittest discover -s tests -v
 ```
 
@@ -1187,11 +1187,11 @@ python -B -m unittest discover -s tests -v
 
 주요 변경:
 
-- `kaggle_research_agent/graph/` 패키지 추가
+- `research_agent/graph/` 패키지 추가
   - `state.py`: graph state schema
   - `nodes.py`: 기존 Python 도구를 감싼 node 함수와 routing 함수
   - `research_graph.py`: `StateGraph`, `START`, `END`, conditional edge wiring
-- `kaggle_research_agent/cli.py`
+- `research_agent/cli.py`
   - `run-graph-cycle` 명령 추가
 - `requirements.txt`
   - `langgraph>=1.0.5` 추가
@@ -1251,12 +1251,12 @@ python -B -m unittest discover -s tests -v
   - `What is included`를 5개 top-level agent 기준으로 재작성
   - `Current Status`의 세부 agent 명칭을 internal tool 표현으로 변경
   - `Agent Architecture`를 5-agent 구조로 재작성
-  - `kaggle_research_agent/agents/` 설명을 top-level agent module이 아니라 internal tools로 정정
+  - `research_agent/agents/` 설명을 top-level agent module이 아니라 internal tools로 정정
 
 검증:
 
 ```powershell
-python -B -m compileall -q kaggle_research_agent
+python -B -m compileall -q research_agent
 python -B -m unittest discover -s tests -v
 ```
 
@@ -1275,7 +1275,7 @@ python -B -m unittest discover -s tests -v
 
 주요 변경:
 
-- `kaggle_research_agent/agents/coding_result_validator.py` 추가
+- `research_agent/agents/coding_result_validator.py` 추가
   - `validate_coding_result`
   - `create_dry_run_coding_result`
   - `render_coding_result_validation`
@@ -1314,7 +1314,7 @@ python -B -m unittest discover -s tests -v
 
 주요 변경:
 
-- `kaggle_research_agent/agents/code_writer_adapter.py` 추가
+- `research_agent/agents/code_writer_adapter.py` 추가
   - `run_code_writer`
   - `build_code_writer_payload`
   - `OpenAIResponsesClient`
@@ -1323,7 +1323,7 @@ python -B -m unittest discover -s tests -v
   - `--mock-response-file`로 외부 API 없이 adapter 경로 검증
   - `--allow-api`가 있을 때만 실제 API client 사용
   - `--model` 기본값은 `gpt-5`
-- `configs/policies/token_policy.yaml`, `kaggle_research_agent/policies.py`
+- `configs/policies/token_policy.yaml`, `research_agent/policies.py`
   - `code_writing` LLM 호출 사유 추가
 - `coding_result_validator.py`
   - `file_updates.path`도 `allowed_write_files` / `create_files` / `forbidden_paths` 기준으로 검증
@@ -1351,7 +1351,7 @@ python -B -m unittest discover -s tests -v
 
 주요 변경:
 
-- `kaggle_research_agent/agents/validation_command_runner.py` 추가
+- `research_agent/agents/validation_command_runner.py` 추가
   - `run_validation_commands`
   - `render_validation_run`
 - `run-validation-commands` CLI 추가
@@ -1381,7 +1381,7 @@ python -B -m unittest discover -s tests -v
 
 주요 변경:
 
-- `kaggle_research_agent/agents/post_validation_executor.py` 추가
+- `research_agent/agents/post_validation_executor.py` 추가
   - `run_after_validation`
   - `render_post_validation_execution`
 - `run-after-validation` CLI 추가
@@ -1413,7 +1413,7 @@ python -B -m unittest discover -s tests -v
 
 주요 변경:
 
-- `kaggle_research_agent/agents/safe_execution_chain.py` 추가
+- `research_agent/agents/safe_execution_chain.py` 추가
   - `run_safe_execution_chain`
   - `render_safe_execution_chain`
 - `run-safe-execution-chain` CLI 추가
@@ -1531,7 +1531,7 @@ python -B -m unittest tests.test_etri_onboarding.EtriOnboardingTest.test_etri_co
 
 주요 변경:
 
-- `kaggle_research_agent/agents/research_protocol.py` 추가
+- `research_agent/agents/research_protocol.py` 추가
   - `build_research_protocol`
   - `render_research_protocol`
 - `research-protocol` CLI 추가
@@ -1554,7 +1554,7 @@ python -B -m unittest tests.test_etri_onboarding.EtriOnboardingTest.test_etri_co
 ```powershell
 python -B -m unittest tests.test_research_protocol -v
 python -B -m unittest tests.test_research_planner_next_experiment -v
-python -B -m kaggle_research_agent.cli research-protocol --competition etri_human_understanding --trial trial_v16_causal_rolling_baseline --next-trial trial_v17_target_chain_stacking
+python -B -m research_agent.cli research-protocol --competition etri_human_understanding --trial trial_v16_causal_rolling_baseline --next-trial trial_v17_target_chain_stacking
 ```
 
 ETRI V16 결과:
@@ -1575,15 +1575,15 @@ ETRI V16 결과:
 
 주요 변경:
 
-- `kaggle_research_agent/agents/policy_gate.py`
+- `research_agent/agents/policy_gate.py`
   - `count_llm_calls_from_decision_log` 추가
   - `should_call_llm`이 competition/trial_id를 받으면 자동 집계 사용
   - `log_llm_decision`이 자동 집계 결과를 evidence에 기록
-- `kaggle_research_agent/agents/code_writer_adapter.py`
+- `research_agent/agents/code_writer_adapter.py`
   - code writing LLM 호출 전 자동 집계 기반 token gate 사용
-- `kaggle_research_agent/agents/safe_execution_chain.py`
+- `research_agent/agents/safe_execution_chain.py`
   - safe chain의 LLM call counter 인자를 optional로 변경
-- `kaggle_research_agent/cli.py`
+- `research_agent/cli.py`
   - LLM call counter CLI 기본값을 `None`으로 변경하여 생략 시 자동 집계 활성화
 - `tests/test_policy_gate.py`
   - decision log 자동 집계 테스트 추가
@@ -1619,11 +1619,11 @@ python -B -m pytest -q
 
 주요 변경:
 
-- `kaggle_research_agent/agents/memory.py`
+- `research_agent/agents/memory.py`
   - `log_token_usage` 추가
   - `normalize_token_usage` 추가
   - OpenAI Responses 형식(`input_tokens`, `output_tokens`, `total_tokens`)과 Chat Completions식 형식(`prompt_tokens`, `completion_tokens`)을 모두 정규화
-- `kaggle_research_agent/agents/code_writer_adapter.py`
+- `research_agent/agents/code_writer_adapter.py`
   - code writer API 응답 저장 후 usage가 있으면 token usage log 기록
   - code writer decision evidence에 `token_usage` 추가
 - `tests/test_code_writer_adapter.py`
@@ -1689,7 +1689,7 @@ Execution Plan
 
 주요 변경:
 
-- `kaggle_research_agent/execution_profile.py`
+- `research_agent/execution_profile.py`
   - profile load
   - 필수 필드 검증
   - 절대 project/Python 경로 검증
@@ -1729,7 +1729,7 @@ competitions/<workspace>/execution_profile_validation.md
 CLI:
 
 ```powershell
-python -B -m kaggle_research_agent.cli prepare-workspace --competition <workspace> --source-path "<path>" --topic "<objective>"
+python -B -m research_agent.cli prepare-workspace --competition <workspace> --source-path "<path>" --topic "<objective>"
 ```
 
 산출물:
@@ -1755,8 +1755,8 @@ execution_profile_validation.json/md
 CLI:
 
 ```powershell
-python -B -m kaggle_research_agent.cli run-workspace-pipeline --competition <workspace> --trial trial_001
-python -B -m kaggle_research_agent.cli run-workspace-pipeline --competition <workspace> --trial trial_001 --run-now
+python -B -m research_agent.cli run-workspace-pipeline --competition <workspace> --trial trial_001
+python -B -m research_agent.cli run-workspace-pipeline --competition <workspace> --trial trial_001 --run-now
 ```
 
 주요 산출물:
@@ -1794,7 +1794,7 @@ memory/<workspace>/decision_log.jsonl
 CLI:
 
 ```powershell
-python -B -m kaggle_research_agent.cli collect-workspace-metrics --competition <workspace> --trial trial_001
+python -B -m research_agent.cli collect-workspace-metrics --competition <workspace> --trial trial_001
 ```
 
 상태:
@@ -1834,7 +1834,7 @@ memory/<workspace>/decision_log.jsonl
 CLI:
 
 ```powershell
-python -B -m kaggle_research_agent.cli process-workspace-result --competition <workspace> --trial trial_001
+python -B -m research_agent.cli process-workspace-result --competition <workspace> --trial trial_001
 ```
 
 상태:
@@ -1867,7 +1867,7 @@ memory/<competition>/deferred_review_queue.json
 
 주요 파일:
 
-- `kaggle_research_agent/workspace_next_gate.py`
+- `research_agent/workspace_next_gate.py`
 - `tests/test_workspace_next_gate.py`
 - `docs/workspace_next_experiment_gate.ko.md`
 - `docs/superpowers/plans/2026-07-09-workspace-next-experiment-gate.md`
@@ -1875,7 +1875,7 @@ memory/<competition>/deferred_review_queue.json
 CLI:
 
 ```powershell
-python -B -m kaggle_research_agent.cli plan-next-workspace-trial --competition <workspace> --source-trial trial_001 --next-trial trial_002
+python -B -m research_agent.cli plan-next-workspace-trial --competition <workspace> --source-trial trial_001 --next-trial trial_002
 ```
 
 산출물:
@@ -1914,7 +1914,7 @@ memory/<workspace>/decision_log.jsonl
 
 주요 파일:
 
-- `kaggle_research_agent/workspace_coding_handoff.py`
+- `research_agent/workspace_coding_handoff.py`
 - `tests/test_workspace_coding_handoff.py`
 - `docs/workspace_coding_handoff.ko.md`
 - `docs/superpowers/plans/2026-07-09-workspace-coding-handoff.md`
@@ -1922,7 +1922,7 @@ memory/<workspace>/decision_log.jsonl
 CLI:
 
 ```powershell
-python -B -m kaggle_research_agent.cli prepare-workspace-handoff --competition <workspace> --trial trial_002
+python -B -m research_agent.cli prepare-workspace-handoff --competition <workspace> --trial trial_002
 ```
 
 산출물:
@@ -1950,7 +1950,7 @@ memory/<workspace>/decision_log.jsonl
 
 주요 파일:
 
-- `kaggle_research_agent/workspace_code_writer.py`
+- `research_agent/workspace_code_writer.py`
 - `tests/test_workspace_code_writer.py`
 - `docs/workspace_code_writer.ko.md`
 - `docs/superpowers/plans/2026-07-09-workspace-code-writer.md`
@@ -1958,8 +1958,8 @@ memory/<workspace>/decision_log.jsonl
 CLI:
 
 ```powershell
-python -B -m kaggle_research_agent.cli run-workspace-code-writer --competition <workspace> --trial trial_002 --mock-response-file mock_response.json
-python -B -m kaggle_research_agent.cli validate-workspace-coding-result --competition <workspace> --trial trial_002
+python -B -m research_agent.cli run-workspace-code-writer --competition <workspace> --trial trial_002 --mock-response-file mock_response.json
+python -B -m research_agent.cli validate-workspace-coding-result --competition <workspace> --trial trial_002
 ```
 
 산출물:
@@ -1991,7 +1991,7 @@ memory/<workspace>/token_usage.jsonl
 
 주요 파일:
 
-- `kaggle_research_agent/workspace_after_coding.py`
+- `research_agent/workspace_after_coding.py`
 - `tests/test_workspace_after_coding.py`
 - `docs/workspace_after_coding_cycle.ko.md`
 - `docs/superpowers/plans/2026-07-09-workspace-after-coding-cycle.md`
@@ -1999,8 +1999,8 @@ memory/<workspace>/token_usage.jsonl
 CLI:
 
 ```powershell
-python -B -m kaggle_research_agent.cli run-workspace-after-coding --competition <workspace> --trial trial_002
-python -B -m kaggle_research_agent.cli run-workspace-after-coding --competition <workspace> --trial trial_002 --run-now
+python -B -m research_agent.cli run-workspace-after-coding --competition <workspace> --trial trial_002
+python -B -m research_agent.cli run-workspace-after-coding --competition <workspace> --trial trial_002 --run-now
 ```
 
 산출물:

@@ -374,7 +374,7 @@ submission completed
 
 ### 2단계: SQLite 저장소 추가
 
-- `kaggle_research_agent/state_db.py` 추가
+- `research_agent/state_db.py` 추가
 - DB 기본 경로: `memory/research_agent.sqlite3`
 - schema migration 함수 추가
 - upsert 함수 추가
@@ -388,8 +388,8 @@ submission completed
 
 구현 상태:
 
-- `kaggle_research_agent/state_db_sync.py` 추가
-- `kaggle_research_agent/state_db_auto.py` 추가
+- `research_agent/state_db_sync.py` 추가
+- `research_agent/state_db_auto.py` 추가
 - `sync-state-db` CLI 명령 추가
 - `demo_one_cycle._finish()`와 `workspace_result_cycle._finish()`에서 best-effort 자동 sync 수행
 - 동기화 대상:
@@ -413,7 +413,7 @@ python -m research_agent.cli sync-state-db
 
 구현 상태:
 
-- `kaggle_research_agent/state_query.py` 추가
+- `research_agent/state_query.py` 추가
 - SQLite를 읽어 UI/메신저가 재사용할 수 있는 summary dict 생성
 - CMD 확인용 renderer 추가
 - `--json` 옵션으로 구조화 출력 지원

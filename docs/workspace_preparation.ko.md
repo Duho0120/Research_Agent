@@ -5,7 +5,7 @@
 기존 프로젝트 경로를 준비하는 예시:
 
 ```powershell
-python -B -m kaggle_research_agent.cli prepare-workspace `
+python -B -m research_agent.cli prepare-workspace `
   --competition my_workspace `
   --source-path "C:\path\to\project" `
   --topic "Predict the target from the supplied data" `
@@ -17,7 +17,7 @@ python -B -m kaggle_research_agent.cli prepare-workspace `
 연구 주제만 먼저 등록하는 예시:
 
 ```powershell
-python -B -m kaggle_research_agent.cli prepare-workspace `
+python -B -m research_agent.cli prepare-workspace `
   --competition energy_forecasting `
   --topic "Forecast hourly energy demand"
 ```
@@ -55,7 +55,7 @@ competitions/<workspace>/execution_profile_validation.json
 Create a new local workspace scaffold:
 
 ```powershell
-python -B -m kaggle_research_agent.cli prepare-workspace `
+python -B -m research_agent.cli prepare-workspace `
   --competition titanic_demo `
   --topic "Titanic survival prediction" `
   --platform kaggle `

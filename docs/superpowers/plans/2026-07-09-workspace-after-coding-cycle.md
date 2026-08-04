@@ -23,7 +23,7 @@
 ### Task 2: After-Coding Runner Module
 
 **Files:**
-- Create: `kaggle_research_agent/workspace_after_coding.py`
+- Create: `research_agent/workspace_after_coding.py`
 
 - [ ] Implement `run_workspace_after_coding(competition, trial_id, run_now=False)`.
 - [ ] Read `workspace_coding_result_validation.json`.
@@ -36,7 +36,7 @@
 ### Task 3: CLI
 
 **Files:**
-- Modify: `kaggle_research_agent/cli.py`
+- Modify: `research_agent/cli.py`
 
 - [ ] Add `run-workspace-after-coding --competition --trial [--run-now]`.
 - [ ] Return success for dry-run planned and completed/processed states; return nonzero for blocked/failure states.
@@ -56,5 +56,5 @@
 **Commands:**
 - `python -B -m unittest tests.test_workspace_after_coding -v`
 - `python -B -m unittest discover -s tests -v`
-- `python -B -m compileall -q kaggle_research_agent tests`
+- `python -B -m compileall -q research_agent tests`
 - `git diff --check`

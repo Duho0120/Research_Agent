@@ -47,7 +47,7 @@ Markdown 원문은 앱 안에서 제목, 표, 불릿을 단순한 읽기 화면�
 
 ## 설계 의도
 
-로컬 앱은 CLI 출력 문자열을 파싱하지 않는다. `kaggle_research_agent.interface_contract`의 공통 operation을 호출해서 상태를 가져온다.
+로컬 앱은 CLI 출력 문자열을 파싱하지 않는다. `research_agent.interface_contract`의 공통 operation을 호출해서 상태를 가져온다.
 
 따라서 나중에 웹 UI나 Slack/카카오톡형 메신저를 추가하더라도 동일한 operation을 재사용할 수 있다.
 

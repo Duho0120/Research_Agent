@@ -340,9 +340,9 @@ docs/policies/review_pack_schema.ko.md
 - `configs/policies/token_policy.yaml`
 - `configs/policies/execution_policy.yaml`
 - `configs/policies/human_review_policy.yaml`
-- `kaggle_research_agent/policies.py`
-- `kaggle_research_agent/agents/policy_gate.py`
-- `kaggle_research_agent/agents/review_pack.py`
+- `research_agent/policies.py`
+- `research_agent/agents/policy_gate.py`
+- `research_agent/agents/review_pack.py`
 
 구현된 판단:
 

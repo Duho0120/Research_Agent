@@ -231,32 +231,32 @@ Machine-readable policy files live under `configs/policies/`:
 - `research_operating_policy.yaml`
 - `model_policy.yaml`
 
-The first rule-based policy gate is implemented in `kaggle_research_agent/agents/policy_gate.py`, and review pack creation is implemented in `kaggle_research_agent/agents/review_pack.py`.
+The first rule-based policy gate is implemented in `research_agent/agents/policy_gate.py`, and review pack creation is implemented in `research_agent/agents/review_pack.py`.
 
 Useful policy commands:
 
 ```powershell
-python -B -m kaggle_research_agent.cli decide-llm --competition demo --trial trial_001 --reason human_review_needed
-python -B -m kaggle_research_agent.cli request-review --competition demo --trial trial_001
-python -B -m kaggle_research_agent.cli research-protocol --competition demo --trial trial_001 --next-trial trial_002
-python -B -m kaggle_research_agent.cli prepare-workspace --competition my_workspace --source-path "C:\path\to\project" --topic "Research objective"
-python -B -m kaggle_research_agent.cli prepare-workspace --competition titanic_demo --topic "Titanic survival prediction" --platform kaggle --metric accuracy --objective maximize --create-workspace --target-column Survived --id-column PassengerId --required-data-file train.csv --required-data-file test.csv --required-data-file gender_submission.csv
-python -B -m kaggle_research_agent.cli validate-execution-profile --competition demo
-python -B -m kaggle_research_agent.cli run-workspace-pipeline --competition demo --trial trial_001
-python -B -m kaggle_research_agent.cli run-workspace-pipeline --competition demo --trial trial_001 --run-now
-python -B -m kaggle_research_agent.cli collect-workspace-metrics --competition demo --trial trial_001
-python -B -m kaggle_research_agent.cli process-workspace-result --competition demo --trial trial_001
-python -B -m kaggle_research_agent.cli plan-next-workspace-trial --competition demo --source-trial trial_001 --next-trial trial_002
-python -B -m kaggle_research_agent.cli prepare-workspace-handoff --competition demo --trial trial_002
-python -B -m kaggle_research_agent.cli run-workspace-code-writer --competition demo --trial trial_002 --mock-response-file mock_response.json
-python -B -m kaggle_research_agent.cli run-workspace-after-coding --competition demo --trial trial_002 --run-now
-python -B -m kaggle_research_agent.cli demo-one-cycle --competition demo --trial trial_001 --mock-plan-file mock_plan_response.json --mock-response-file mock_code_response.json --run-now --show-progress
-python -B -m kaggle_research_agent.cli demo-guide
-python -B -m kaggle_research_agent.cli watch-demo-cycle --competition demo --trial trial_001
-python -B -m kaggle_research_agent.cli watch-demo-cycle --competition demo --trial trial_001 --follow
-python -B -m kaggle_research_agent.cli organize-trial-artifacts --competition demo --trial trial_001
-python -B -m kaggle_research_agent.cli plan-improvement --competition demo --trial trial_001
-python -B -m kaggle_research_agent.cli advise-models --competition demo --trial trial_001
+python -B -m research_agent.cli decide-llm --competition demo --trial trial_001 --reason human_review_needed
+python -B -m research_agent.cli request-review --competition demo --trial trial_001
+python -B -m research_agent.cli research-protocol --competition demo --trial trial_001 --next-trial trial_002
+python -B -m research_agent.cli prepare-workspace --competition my_workspace --source-path "C:\path\to\project" --topic "Research objective"
+python -B -m research_agent.cli prepare-workspace --competition titanic_demo --topic "Titanic survival prediction" --platform kaggle --metric accuracy --objective maximize --create-workspace --target-column Survived --id-column PassengerId --required-data-file train.csv --required-data-file test.csv --required-data-file gender_submission.csv
+python -B -m research_agent.cli validate-execution-profile --competition demo
+python -B -m research_agent.cli run-workspace-pipeline --competition demo --trial trial_001
+python -B -m research_agent.cli run-workspace-pipeline --competition demo --trial trial_001 --run-now
+python -B -m research_agent.cli collect-workspace-metrics --competition demo --trial trial_001
+python -B -m research_agent.cli process-workspace-result --competition demo --trial trial_001
+python -B -m research_agent.cli plan-next-workspace-trial --competition demo --source-trial trial_001 --next-trial trial_002
+python -B -m research_agent.cli prepare-workspace-handoff --competition demo --trial trial_002
+python -B -m research_agent.cli run-workspace-code-writer --competition demo --trial trial_002 --mock-response-file mock_response.json
+python -B -m research_agent.cli run-workspace-after-coding --competition demo --trial trial_002 --run-now
+python -B -m research_agent.cli demo-one-cycle --competition demo --trial trial_001 --mock-plan-file mock_plan_response.json --mock-response-file mock_code_response.json --run-now --show-progress
+python -B -m research_agent.cli demo-guide
+python -B -m research_agent.cli watch-demo-cycle --competition demo --trial trial_001
+python -B -m research_agent.cli watch-demo-cycle --competition demo --trial trial_001 --follow
+python -B -m research_agent.cli organize-trial-artifacts --competition demo --trial trial_001
+python -B -m research_agent.cli plan-improvement --competition demo --trial trial_001
+python -B -m research_agent.cli advise-models --competition demo --trial trial_001
 ```
 
 Korean CMD/PowerShell demo output:
@@ -272,7 +272,7 @@ Legacy package path still works:
 ```powershell
 chcp 65001
 $env:PYTHONUTF8="1"
-python -m kaggle_research_agent.cli demo-guide
+python -m research_agent.cli demo-guide
 ```
 
 For non-demo commands, use the neutral module path as well:
@@ -290,7 +290,7 @@ If Korean text still looks broken, use Windows Terminal or PowerShell 7 and choo
 Human feedback closes the review loop:
 
 ```powershell
-python -B -m kaggle_research_agent.cli record-feedback --competition demo --trial trial_001 --topic validation --question "Is this split appropriate?" --feedback "Use group split before large model changes." --decision change_validation --follow-up-action "Plan a validation review trial"
+python -B -m research_agent.cli record-feedback --competition demo --trial trial_001 --topic validation --question "Is this split appropriate?" --feedback "Use group split before large model changes." --decision change_validation --follow-up-action "Plan a validation review trial"
 ```
 
 This writes `user_feedback.jsonl`, updates `review_pack/manifest.json` to `feedback_recorded`, writes `review_pack/human_feedback.md/json`, and logs a `human_feedback` decision with `user_input_used=true`.
@@ -298,39 +298,39 @@ This writes `user_feedback.jsonl`, updates `review_pack/manifest.json` to `feedb
 ## Quick start
 
 ```powershell
-python -m kaggle_research_agent.cli init --competition playground
-python -m kaggle_research_agent.cli plan --competition playground
-python -m kaggle_research_agent.cli create-job --competition playground --trial trial_001
+python -m research_agent.cli init --competition playground
+python -m research_agent.cli plan --competition playground
+python -m research_agent.cli create-job --competition playground --trial trial_001
 ```
 
 Or run the conservative one-trial cycle:
 
 ```powershell
-python -m kaggle_research_agent.cli cycle --competition playground --trial trial_001
+python -m research_agent.cli cycle --competition playground --trial trial_001
 ```
 
 Or run the same one-trial cycle through the LangGraph orchestration layer:
 
 ```powershell
-python -m kaggle_research_agent.cli run-graph-cycle --competition playground --trial trial_001
+python -m research_agent.cli run-graph-cycle --competition playground --trial trial_001
 ```
 
 By default, jobs are local jobs. Use Colab only when you explicitly need it:
 
 ```powershell
-python -m kaggle_research_agent.cli create-job --competition playground --trial trial_001 --backend colab
+python -m research_agent.cli create-job --competition playground --trial trial_001 --backend colab
 ```
 
 If the trial can run locally, execute it directly:
 
 ```powershell
-python -m kaggle_research_agent.cli run-local --competition playground --trial trial_001 --run-command "python train.py --config experiments/playground/trial_001/config.yaml --output experiments/playground/trial_001"
+python -m research_agent.cli run-local --competition playground --trial trial_001 --run-command "python train.py --config experiments/playground/trial_001/config.yaml --output experiments/playground/trial_001"
 ```
 
 Or plan, validate, run locally, evaluate, and remember in one cycle:
 
 ```powershell
-python -m kaggle_research_agent.cli cycle --competition playground --trial trial_001 --run-now --run-command "python train.py --config experiments/playground/trial_001/config.yaml --output experiments/playground/trial_001"
+python -m research_agent.cli cycle --competition playground --trial trial_001 --run-now --run-command "python train.py --config experiments/playground/trial_001/config.yaml --output experiments/playground/trial_001"
 ```
 
 After training in Colab, place `metrics.json` and optional `submission.csv` under:
@@ -342,14 +342,14 @@ experiments/playground/trial_001/
 Then evaluate and update memory:
 
 ```powershell
-python -m kaggle_research_agent.cli evaluate --competition playground --trial trial_001
-python -m kaggle_research_agent.cli remember --competition playground --trial trial_001
+python -m research_agent.cli evaluate --competition playground --trial trial_001
+python -m research_agent.cli remember --competition playground --trial trial_001
 ```
 
 If you need a custom Colab command:
 
 ```powershell
-python -m kaggle_research_agent.cli create-job --competition playground --trial trial_001 --run-command "python train.py --config experiments/playground/trial_001/config.yaml"
+python -m research_agent.cli create-job --competition playground --trial trial_001 --run-command "python train.py --config experiments/playground/trial_001/config.yaml"
 ```
 
 ## Research loop core dry-run
@@ -357,7 +357,7 @@ python -m kaggle_research_agent.cli create-job --competition playground --trial 
 Inspect a Kaggle competition link or slug before starting work:
 
 ```powershell
-python -B -m kaggle_research_agent.cli inspect-competition --competition https://www.kaggle.com/competitions/titanic
+python -B -m research_agent.cli inspect-competition --competition https://www.kaggle.com/competitions/titanic
 ```
 
 This writes:
@@ -370,7 +370,7 @@ competitions/<competition_slug>/competition_inspection.json
 Start a competition workspace from a Kaggle link or slug:
 
 ```powershell
-python -B -m kaggle_research_agent.cli start-competition --competition https://www.kaggle.com/competitions/titanic --metric accuracy --objective maximize
+python -B -m research_agent.cli start-competition --competition https://www.kaggle.com/competitions/titanic --metric accuracy --objective maximize
 ```
 
 This runs inspection, initializes the competition workspace, writes onboarding notes, and creates the first `trial_001` plan/config.
@@ -378,7 +378,7 @@ This runs inspection, initializes the competition workspace, writes onboarding n
 Profile local competition data after downloading files into `data/<competition>/`:
 
 ```powershell
-python -B -m kaggle_research_agent.cli profile-data --competition titanic
+python -B -m research_agent.cli profile-data --competition titanic
 ```
 
 This writes:
@@ -391,7 +391,7 @@ competitions/<competition>/data_profile.json
 Generate the first local baseline pipeline from the data profile:
 
 ```powershell
-python -B -m kaggle_research_agent.cli generate-baseline --competition titanic --trial trial_001
+python -B -m research_agent.cli generate-baseline --competition titanic --trial trial_001
 ```
 
 Then run the generated command from `baseline_pipeline.json` or `baseline_plan.md` to create `metrics.json` and `submission.csv`.
@@ -399,52 +399,52 @@ Then run the generated command from `baseline_pipeline.json` or `baseline_plan.m
 Diagnose a completed trial:
 
 ```powershell
-python -B -m kaggle_research_agent.cli diagnose --competition demo --trial trial_001
+python -B -m research_agent.cli diagnose --competition demo --trial trial_001
 ```
 
 Run the conservative cycle on a completed trial to evaluate, diagnose, record a decision log, and remember:
 
 ```powershell
-python -B -m kaggle_research_agent.cli cycle --competition demo --trial trial_001 --no-job
+python -B -m research_agent.cli cycle --competition demo --trial trial_001 --no-job
 ```
 
 Create a user review request when the diagnosis needs human input:
 
 ```powershell
-python -B -m kaggle_research_agent.cli request-review --competition demo --trial trial_001
+python -B -m research_agent.cli request-review --competition demo --trial trial_001
 ```
 
 Record user feedback:
 
 ```powershell
-python -B -m kaggle_research_agent.cli record-feedback --competition demo --trial trial_001 --topic validation --question "Is this split appropriate?" --feedback "Use group split before large model changes." --decision change_validation --follow-up-action "Plan a validation review trial"
+python -B -m research_agent.cli record-feedback --competition demo --trial trial_001 --topic validation --question "Is this split appropriate?" --feedback "Use group split before large model changes." --decision change_validation --follow-up-action "Plan a validation review trial"
 ```
 
 Record a manual submission result without calling Kaggle:
 
 ```powershell
-python -B -m kaggle_research_agent.cli record-submission --competition demo --trial trial_001 --version-name demo_trial_001_baseline_v01 --submission-file experiments/demo/trial_001/submission.csv --cv-score 0.83 --previous-lb-score 0.80 --previous-rank 120 --submitted-lb-score 0.84 --submitted-rank 90 --objective maximize --notes "Manual leaderboard entry"
+python -B -m research_agent.cli record-submission --competition demo --trial trial_001 --version-name demo_trial_001_baseline_v01 --submission-file experiments/demo/trial_001/submission.csv --cv-score 0.83 --previous-lb-score 0.80 --previous-rank 120 --submitted-lb-score 0.84 --submitted-rank 90 --objective maximize --notes "Manual leaderboard entry"
 ```
 
 Prepare a submission manifest before any real leaderboard action. This is the safe approval gate and does not update `submission_log.jsonl`, `VERSION.md`, or `BEST_MARKER.md`.
 
 ```powershell
-python -B -m kaggle_research_agent.cli prepare-submission --competition demo --trial trial_001 --version-name demo_trial_001_v01 --submission-file experiments/demo/trial_001/submission.csv --objective maximize --notes "Ready for approval"
+python -B -m research_agent.cli prepare-submission --competition demo --trial trial_001 --version-name demo_trial_001_v01 --submission-file experiments/demo/trial_001/submission.csv --objective maximize --notes "Ready for approval"
 ```
 
 Run the submission workflow for a trial. Without `--submit-command`, this records a submission run and preserves the before/after leaderboard evidence; with command hooks, it can also execute external Kaggle CLI/API wrappers later.
 
 ```powershell
-python -B -m kaggle_research_agent.cli submit-trial --competition demo --trial trial_001 --version-name demo_trial_001_v01 --submission-file experiments/demo/trial_001/submission.csv --before-score 0.80 --before-rank 120 --after-score 0.84 --after-rank 90 --objective maximize --notes "Manual leaderboard entry"
+python -B -m research_agent.cli submit-trial --competition demo --trial trial_001 --version-name demo_trial_001_v01 --submission-file experiments/demo/trial_001/submission.csv --before-score 0.80 --before-rank 120 --after-score 0.84 --after-rank 90 --objective maximize --notes "Manual leaderboard entry"
 ```
 
 Run the submission workflow with the Kaggle CLI adapter after approving the manifest:
 
 ```powershell
-python -B -m kaggle_research_agent.cli submit-trial --competition demo --trial trial_001 --version-name demo_trial_001_v01 --submission-file experiments/demo/trial_001/submission.csv --kaggle-competition-slug demo-competition --kaggle-team-name "my team" --kaggle-message "demo_trial_001_v01" --poll-leaderboard --poll-attempts 5 --poll-interval-seconds 30 --objective maximize --notes "Kaggle CLI submission"
+python -B -m research_agent.cli submit-trial --competition demo --trial trial_001 --version-name demo_trial_001_v01 --submission-file experiments/demo/trial_001/submission.csv --kaggle-competition-slug demo-competition --kaggle-team-name "my team" --kaggle-message "demo_trial_001_v01" --poll-leaderboard --poll-attempts 5 --poll-interval-seconds 30 --objective maximize --notes "Kaggle CLI submission"
 ```
 
-The Kaggle CLI adapter lives under `kaggle_research_agent/integrations/kaggle_cli.py`. It exposes structured helpers for:
+The Kaggle CLI adapter lives under `research_agent/integrations/kaggle_cli.py`. It exposes structured helpers for:
 
 ```text
 check_cli_available
@@ -458,127 +458,127 @@ poll_leaderboard
 Research Planner low-level command: plan the next experiment from the latest diagnosis and submission evidence.
 
 ```powershell
-python -B -m kaggle_research_agent.cli plan-next --competition demo --source-trial trial_001 --next-trial trial_002
+python -B -m research_agent.cli plan-next --competition demo --source-trial trial_001 --next-trial trial_002
 ```
 
 Research Planner low-level command: prepare an executable code/config patch plan for that next experiment.
 
 ```powershell
-python -B -m kaggle_research_agent.cli prepare-patch --competition demo --source-trial trial_001 --next-trial trial_002
+python -B -m research_agent.cli prepare-patch --competition demo --source-trial trial_001 --next-trial trial_002
 ```
 
 Validate a prepared patch plan before applying it:
 
 ```powershell
-python -B -m kaggle_research_agent.cli validate-patch --competition demo --trial trial_002
+python -B -m research_agent.cli validate-patch --competition demo --trial trial_002
 ```
 
 If the patch plan intentionally changes a protected or expensive area that requires approval:
 
 ```powershell
-python -B -m kaggle_research_agent.cli validate-patch --competition demo --trial trial_002 --user-approved
+python -B -m research_agent.cli validate-patch --competition demo --trial trial_002 --user-approved
 ```
 
 Prepare a coding-agent handoff request from a validated patch plan:
 
 ```powershell
-python -B -m kaggle_research_agent.cli prepare-handoff --competition demo --trial trial_002
+python -B -m research_agent.cli prepare-handoff --competition demo --trial trial_002
 ```
 
 Create a dry-run coding result without calling an external coding API:
 
 ```powershell
-python -B -m kaggle_research_agent.cli write-code-dry-run --competition demo --trial trial_002
+python -B -m research_agent.cli write-code-dry-run --competition demo --trial trial_002
 ```
 
 Run the Code Writer Adapter with a local mock response file:
 
 ```powershell
-python -B -m kaggle_research_agent.cli run-code-writer --competition demo --trial trial_002 --mock-response-file mock_response.json
+python -B -m research_agent.cli run-code-writer --competition demo --trial trial_002 --mock-response-file mock_response.json
 ```
 
 Run the Code Writer Adapter and immediately execute accepted validation commands:
 
 ```powershell
-python -B -m kaggle_research_agent.cli run-code-writer --competition demo --trial trial_002 --mock-response-file mock_response.json --run-validation-commands
+python -B -m research_agent.cli run-code-writer --competition demo --trial trial_002 --mock-response-file mock_response.json --run-validation-commands
 ```
 
 Run the Code Writer Adapter with the OpenAI Responses API only when you explicitly approve an API call:
 
 ```powershell
-python -B -m kaggle_research_agent.cli run-code-writer --competition demo --trial trial_002 --model gpt-5 --allow-api
+python -B -m research_agent.cli run-code-writer --competition demo --trial trial_002 --model gpt-5 --allow-api
 ```
 
 Validate a coding-agent result before downstream execution:
 
 ```powershell
-python -B -m kaggle_research_agent.cli validate-coding-result --competition demo --trial trial_002
+python -B -m research_agent.cli validate-coding-result --competition demo --trial trial_002
 ```
 
 Execute validation commands after an accepted coding result:
 
 ```powershell
-python -B -m kaggle_research_agent.cli run-validation-commands --competition demo --trial trial_002
+python -B -m research_agent.cli run-validation-commands --competition demo --trial trial_002
 ```
 
 Continue from passed validation into the execution policy:
 
 ```powershell
-python -B -m kaggle_research_agent.cli run-after-validation --competition demo --trial trial_002 --run-command "python scripts/demo_train.py --config experiments/demo/trial_002/config.yaml --output experiments/demo/trial_002"
+python -B -m research_agent.cli run-after-validation --competition demo --trial trial_002 --run-command "python scripts/demo_train.py --config experiments/demo/trial_002/config.yaml --output experiments/demo/trial_002"
 ```
 
 Run locally immediately only when requested:
 
 ```powershell
-python -B -m kaggle_research_agent.cli run-after-validation --competition demo --trial trial_002 --run-now --run-command "python scripts/demo_train.py --config experiments/demo/trial_002/config.yaml --output experiments/demo/trial_002"
+python -B -m research_agent.cli run-after-validation --competition demo --trial trial_002 --run-now --run-command "python scripts/demo_train.py --config experiments/demo/trial_002/config.yaml --output experiments/demo/trial_002"
 ```
 
 Run the guarded end-to-end code-to-execution chain:
 
 ```powershell
-python -B -m kaggle_research_agent.cli run-safe-execution-chain --competition demo --trial trial_002 --mock-response-file mock_response.json --run-command "python scripts/demo_train.py --config experiments/demo/trial_002/config.yaml --output experiments/demo/trial_002"
+python -B -m research_agent.cli run-safe-execution-chain --competition demo --trial trial_002 --mock-response-file mock_response.json --run-command "python scripts/demo_train.py --config experiments/demo/trial_002/config.yaml --output experiments/demo/trial_002"
 ```
 
 Run that same guarded chain from the normal cycle only when explicitly requested:
 
 ```powershell
-python -B -m kaggle_research_agent.cli cycle --competition demo --trial trial_002 --run-safe-chain --mock-response-file mock_response.json --run-command "python scripts/demo_train.py --config experiments/demo/trial_002/config.yaml --output experiments/demo/trial_002"
+python -B -m research_agent.cli cycle --competition demo --trial trial_002 --run-safe-chain --mock-response-file mock_response.json --run-command "python scripts/demo_train.py --config experiments/demo/trial_002/config.yaml --output experiments/demo/trial_002"
 ```
 
 The LangGraph one-trial cycle supports the same guarded branch:
 
 ```powershell
-python -B -m kaggle_research_agent.cli run-graph-cycle --competition demo --trial trial_002 --run-safe-chain --mock-response-file mock_response.json --run-command "python scripts/demo_train.py --config experiments/demo/trial_002/config.yaml --output experiments/demo/trial_002"
+python -B -m research_agent.cli run-graph-cycle --competition demo --trial trial_002 --run-safe-chain --mock-response-file mock_response.json --run-command "python scripts/demo_train.py --config experiments/demo/trial_002/config.yaml --output experiments/demo/trial_002"
 ```
 
 Or let the cycle create the next-experiment recommendation immediately after diagnosis and memory update:
 
 ```powershell
-python -B -m kaggle_research_agent.cli cycle --competition demo --trial trial_001 --no-job --next-trial trial_002
+python -B -m research_agent.cli cycle --competition demo --trial trial_001 --no-job --next-trial trial_002
 ```
 
 To create the next-experiment recommendation and patch plan in the same cycle:
 
 ```powershell
-python -B -m kaggle_research_agent.cli cycle --competition demo --trial trial_001 --no-job --next-trial trial_002 --prepare-next-patch
+python -B -m research_agent.cli cycle --competition demo --trial trial_001 --no-job --next-trial trial_002 --prepare-next-patch
 ```
 
 Run a bounded safe auto loop. By default this does not submit to Kaggle.
 
 ```powershell
-python -B -m kaggle_research_agent.cli run-auto-loop --competition demo --start-trial trial_001 --max-trials 3 --submit-policy never --stop-no-improvement 3
+python -B -m research_agent.cli run-auto-loop --competition demo --start-trial trial_001 --max-trials 3 --submit-policy never --stop-no-improvement 3
 ```
 
 Experiment Runner low-level command: apply a prepared patch plan and optionally run the next trial.
 
 ```powershell
-python -B -m kaggle_research_agent.cli apply-patch --competition demo --trial trial_002 --run-command "python scripts/demo_train.py --config experiments/demo/trial_002/config.yaml --output experiments/demo/trial_002"
+python -B -m research_agent.cli apply-patch --competition demo --trial trial_002 --run-command "python scripts/demo_train.py --config experiments/demo/trial_002/config.yaml --output experiments/demo/trial_002"
 ```
 
 Or let the cycle prepare and apply the next patch in one pass:
 
 ```powershell
-python -B -m kaggle_research_agent.cli cycle --competition demo --trial trial_001 --no-job --next-trial trial_002 --prepare-next-patch --apply-next-patch --next-run-command "python scripts/demo_train.py --config experiments/demo/trial_002/config.yaml --output experiments/demo/trial_002"
+python -B -m research_agent.cli cycle --competition demo --trial trial_001 --no-job --next-trial trial_002 --prepare-next-patch --apply-next-patch --next-run-command "python scripts/demo_train.py --config experiments/demo/trial_002/config.yaml --output experiments/demo/trial_002"
 ```
 
 ## Main workflow
@@ -618,9 +618,9 @@ init competition
 ## Folder map
 
 ```text
-kaggle_research_agent/  Python package and CLI
-kaggle_research_agent/agents/  Internal tools for planning, execution, evaluation, memory, and decisions
-kaggle_research_agent/integrations/  External service adapters such as Kaggle CLI
+research_agent/  Python package and CLI
+research_agent/agents/  Internal tools for planning, execution, evaluation, memory, and decisions
+research_agent/integrations/  External service adapters such as Kaggle CLI
 competitions/           Competition profiles and state
 data/<competition>/      Local downloaded competition data
 experiments/            Trial artifacts

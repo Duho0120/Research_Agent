@@ -14,7 +14,7 @@
 
 **Files:**
 - Create: `tests/test_workspace_metrics_collector.py`
-- Create: `kaggle_research_agent/workspace_metrics_collector.py`
+- Create: `research_agent/workspace_metrics_collector.py`
 
 - [x] Write a test that supplies a completed workspace run and source JSON containing numeric `cv_score`, then expects a trial `metrics.json` with preserved source fields.
 - [x] Run `python -B -m unittest tests.test_workspace_metrics_collector.WorkspaceMetricsCollectorTest.test_collects_existing_cv_score_without_changing_source -v` and confirm the missing module fails.
@@ -25,9 +25,9 @@
 
 **Files:**
 - Modify: `tests/test_workspace_metrics_collector.py`
-- Modify: `kaggle_research_agent/workspace_metrics_collector.py`
+- Modify: `research_agent/workspace_metrics_collector.py`
 - Modify: `tests/test_execution_profile.py`
-- Modify: `kaggle_research_agent/execution_profile.py`
+- Modify: `research_agent/execution_profile.py`
 
 - [x] Add tests for nested `metrics_contract.source_key` resolution and invalid mapping validation.
 - [x] Run both focused test modules and confirm the mapping assertions fail.
@@ -38,7 +38,7 @@
 
 **Files:**
 - Modify: `tests/test_workspace_metrics_collector.py`
-- Modify: `kaggle_research_agent/workspace_metrics_collector.py`
+- Modify: `research_agent/workspace_metrics_collector.py`
 
 - [x] Add tests for missing mapping, invalid JSON, and non-completed workspace runs.
 - [x] Run the focused collector tests and confirm the new status assertions fail.
@@ -49,7 +49,7 @@
 
 **Files:**
 - Modify: `tests/test_workspace_metrics_collector.py`
-- Modify: `kaggle_research_agent/cli.py`
+- Modify: `research_agent/cli.py`
 - Modify: `configs/execution_profile.example.yaml`
 - Create: `docs/workspace_metrics_collection.ko.md`
 - Modify: `README.md`
@@ -65,7 +65,7 @@
 **Files:**
 - Verify all changed files without reverting unrelated worktree changes.
 
-- [x] Run `python -B -m compileall -q kaggle_research_agent tests` and require exit code 0.
+- [x] Run `python -B -m compileall -q research_agent tests` and require exit code 0.
 - [x] Run `python -B -m unittest discover -s tests -v` and require zero failures.
 - [x] Run `git diff --check` and require no whitespace errors.
 - [x] Review `git status --short` and keep all prior uncommitted work intact.

@@ -5,7 +5,7 @@
 ## 실행 전 확인
 
 ```powershell
-python -B -m kaggle_research_agent.cli validate-execution-profile `
+python -B -m research_agent.cli validate-execution-profile `
   --competition <workspace>
 ```
 
@@ -14,7 +14,7 @@ validation 상태가 `ready`가 아니면 외부 명령은 실행되지 않는�
 ## 실행 계획 기록
 
 ```powershell
-python -B -m kaggle_research_agent.cli run-workspace-pipeline `
+python -B -m research_agent.cli run-workspace-pipeline `
   --competition <workspace> `
   --trial trial_001
 ```
@@ -24,7 +24,7 @@ python -B -m kaggle_research_agent.cli run-workspace-pipeline `
 ## 명시적 실행 승인
 
 ```powershell
-python -B -m kaggle_research_agent.cli run-workspace-pipeline `
+python -B -m research_agent.cli run-workspace-pipeline `
   --competition <workspace> `
   --trial trial_001 `
   --run-now

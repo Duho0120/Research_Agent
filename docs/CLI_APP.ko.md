@@ -146,10 +146,10 @@ AWS에서는 이 경로를 EFS 같은 지속 공유 볼륨으로 지정하는 �
 사용하는 세부 명령입니다.
 
 ```bat
-python -B -m kaggle_research_agent.cli status --competition titanic --sync
-python -B -m kaggle_research_agent.cli run-next-trial --competition titanic --trial trial_004 --run-now
-python -B -m kaggle_research_agent.cli record-submission --competition titanic --trial trial_004 ...
-python -B -m kaggle_research_agent.cli prepare-workspace --competition <id> ...
+python -B -m research_agent.cli status --competition titanic --sync
+python -B -m research_agent.cli run-next-trial --competition titanic --trial trial_004 --run-now
+python -B -m research_agent.cli record-submission --competition titanic --trial trial_004 ...
+python -B -m research_agent.cli prepare-workspace --competition <id> ...
 ```
 
 문제가 생겼을 때 원인을 좁히거나, 자동 루프 없이 특정 단계만 검증할 때 사용합니다.

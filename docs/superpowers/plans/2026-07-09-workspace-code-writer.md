@@ -23,7 +23,7 @@
 ### Task 2: Workspace Code Writer Module
 
 **Files:**
-- Create: `kaggle_research_agent/workspace_code_writer.py`
+- Create: `research_agent/workspace_code_writer.py`
 
 - [ ] Implement `run_workspace_code_writer`.
 - [ ] Implement `validate_workspace_coding_result`.
@@ -35,7 +35,7 @@
 ### Task 3: CLI
 
 **Files:**
-- Modify: `kaggle_research_agent/cli.py`
+- Modify: `research_agent/cli.py`
 
 - [ ] Add `run-workspace-code-writer`.
 - [ ] Add `validate-workspace-coding-result`.
@@ -56,5 +56,5 @@
 **Commands:**
 - `python -B -m unittest tests.test_workspace_code_writer -v`
 - `python -B -m unittest discover -s tests -v`
-- `python -B -m compileall -q kaggle_research_agent tests`
+- `python -B -m compileall -q research_agent tests`
 - `git diff --check`

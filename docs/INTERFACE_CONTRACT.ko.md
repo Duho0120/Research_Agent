@@ -2,7 +2,7 @@
 
 이 문서는 자율 ML 연구 에이전트를 CLI, UI, Slack/카카오톡형 메신저에서 같은 방식으로 다루기 위한 공통 계약을 정의한다.
 
-핵심 원칙은 인터페이스가 내부 구현에 직접 의존하지 않는 것이다. CLI와 UI는 LangGraph 노드, 파일 구조, SQLite 테이블을 직접 조합하지 않고 `kaggle_research_agent.interface_contract`의 operation 함수를 호출한다.
+핵심 원칙은 인터페이스가 내부 구현에 직접 의존하지 않는 것이다. CLI와 UI는 LangGraph 노드, 파일 구조, SQLite 테이블을 직접 조합하지 않고 `research_agent.interface_contract`의 operation 함수를 호출한다.
 
 ## 계층 구조
 

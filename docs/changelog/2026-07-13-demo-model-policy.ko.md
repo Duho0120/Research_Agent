@@ -13,10 +13,10 @@
 
 - `configs/policies/model_policy.yaml`
 - `docs/policies/model_policy.ko.md`
-- `kaggle_research_agent/policies.py`
-- `kaggle_research_agent/demo_one_cycle.py`
-- `kaggle_research_agent/agents/code_writer_adapter.py`
-- `kaggle_research_agent/workspace_code_writer.py`
+- `research_agent/policies.py`
+- `research_agent/demo_one_cycle.py`
+- `research_agent/agents/code_writer_adapter.py`
+- `research_agent/workspace_code_writer.py`
 - `tests/test_demo_one_cycle.py`
 - `tests/test_code_writer_adapter.py`
 - `tests/test_policy_gate.py`
@@ -25,7 +25,7 @@
 
 ```powershell
 python -B -m unittest discover -s tests -v
-python -B -m compileall -q kaggle_research_agent tests
+python -B -m compileall -q research_agent tests
 git diff --check
 ```
 

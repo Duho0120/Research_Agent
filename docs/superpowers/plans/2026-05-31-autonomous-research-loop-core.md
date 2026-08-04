@@ -6,7 +6,7 @@
 
 **Architecture:** Keep the current file-based architecture and add focused modules with small responsibilities. The first implementation does not call Kaggle APIs or edit model code; it creates the artifacts and decisions those later nodes will depend on.
 
-**Tech Stack:** Python standard library, existing `kaggle_research_agent` package, existing `simple_yaml`, JSON/JSONL files, Markdown artifacts, PowerShell command verification.
+**Tech Stack:** Python standard library, existing `research_agent` package, existing `simple_yaml`, JSON/JSONL files, Markdown artifacts, PowerShell command verification.
 
 ---
 
@@ -32,31 +32,31 @@ This plan does not implement:
 
 ## File Structure
 
-- Create `kaggle_research_agent/decision_logger.py`
+- Create `research_agent/decision_logger.py`
   - Appends structured decisions to `memory/<competition>/decision_log.jsonl`.
 
-- Create `kaggle_research_agent/diagnosis_agent.py`
+- Create `research_agent/diagnosis_agent.py`
   - Reads metrics, state, evaluation, and recent trial memory.
   - Writes `experiments/<competition>/<trial>/diagnosis.md`.
   - Returns a structured diagnosis with improvement, CV/LB gap, risks, user questions, and escalation recommendation.
 
-- Create `kaggle_research_agent/user_review_agent.py`
+- Create `research_agent/user_review_agent.py`
   - Decides whether user review is needed from diagnosis.
   - Writes `user_review_request.md`.
   - Appends user feedback entries to `memory/<competition>/user_feedback.jsonl`.
 
-- Create `kaggle_research_agent/submission_tracker.py`
+- Create `research_agent/submission_tracker.py`
   - Creates version metadata.
   - Records simulated/manual submission results in `submissions/<competition>/submission_log.jsonl`.
   - Updates `experiments/<competition>/BEST_TRIAL.md`, `memory/<competition>/best_trial.json`, and optional `BEST_MARKER.md`.
 
-- Modify `kaggle_research_agent/paths.py`
+- Modify `research_agent/paths.py`
   - Add helpers for `submissions_dir()` and `competition_submissions_dir()`.
 
-- Modify `kaggle_research_agent/cli.py`
+- Modify `research_agent/cli.py`
   - Add `diagnose`, `request-review`, `record-feedback`, and `record-submission` commands.
 
-- Modify `kaggle_research_agent/main_agent.py`
+- Modify `research_agent/main_agent.py`
   - After evaluation/remembering, call diagnosis and decision logging in the conservative cycle when metrics exist.
 
 - Create `tests/test_diagnosis_agent.py`
@@ -71,8 +71,8 @@ If no test runner is installed, run tests with `python -B -m unittest discover -
 ### Task 1: Path Helpers And Decision Logger
 
 **Files:**
-- Modify: `kaggle_research_agent/paths.py`
-- Create: `kaggle_research_agent/decision_logger.py`
+- Modify: `research_agent/paths.py`
+- Create: `research_agent/decision_logger.py`
 - Test: `tests/test_decision_logger.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -86,14 +86,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.decision_logger import log_decision
+from research_agent.decision_logger import log_decision
 
 
 class DecisionLoggerTest(unittest.TestCase):
     def test_log_decision_appends_competition_scoped_jsonl(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 row = log_decision(
                     "demo",
                     "trial_010",
@@ -131,11 +131,11 @@ Run:
 python -B -m unittest tests.test_decision_logger -v
 ```
 
-Expected: FAIL with `ModuleNotFoundError: No module named 'kaggle_research_agent.decision_logger'`.
+Expected: FAIL with `ModuleNotFoundError: No module named 'research_agent.decision_logger'`.
 
 - [ ] **Step 3: Add submission path helpers**
 
-Modify `kaggle_research_agent/paths.py` by adding:
+Modify `research_agent/paths.py` by adding:
 
 ```python
 def submissions_dir() -> Path:
@@ -148,7 +148,7 @@ def competition_submissions_dir(competition: str) -> Path:
 
 - [ ] **Step 4: Implement the decision logger**
 
-Create `kaggle_research_agent/decision_logger.py`:
+Create `research_agent/decision_logger.py`:
 
 ```python
 from __future__ import annotations
@@ -210,7 +210,7 @@ git status --short
 Expected in this workspace today: `fatal: not a git repository...`. If the project has been initialized as a git repository by then, commit:
 
 ```powershell
-git add kaggle_research_agent/paths.py kaggle_research_agent/decision_logger.py tests/test_decision_logger.py
+git add research_agent/paths.py research_agent/decision_logger.py tests/test_decision_logger.py
 git commit -m "feat: add decision logging"
 ```
 
@@ -219,7 +219,7 @@ git commit -m "feat: add decision logging"
 ### Task 2: Diagnosis Agent
 
 **Files:**
-- Create: `kaggle_research_agent/diagnosis_agent.py`
+- Create: `research_agent/diagnosis_agent.py`
 - Test: `tests/test_diagnosis_agent.py`
 
 - [ ] **Step 1: Write the failing tests**
@@ -233,7 +233,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.diagnosis_agent import diagnose_trial
+from research_agent.diagnosis_agent import diagnose_trial
 
 
 class DiagnosisAgentTest(unittest.TestCase):
@@ -262,7 +262,7 @@ class DiagnosisAgentTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = diagnose_trial("demo", "trial_001")
 
             self.assertEqual(result["trial_id"], "trial_001")
@@ -293,7 +293,7 @@ Expected: FAIL with missing `diagnosis_agent`.
 
 - [ ] **Step 3: Implement diagnosis agent**
 
-Create `kaggle_research_agent/diagnosis_agent.py`:
+Create `research_agent/diagnosis_agent.py`:
 
 ```python
 from __future__ import annotations
@@ -430,7 +430,7 @@ git status --short
 Expected in current workspace: not a git repository. If git is initialized, commit:
 
 ```powershell
-git add kaggle_research_agent/diagnosis_agent.py tests/test_diagnosis_agent.py
+git add research_agent/diagnosis_agent.py tests/test_diagnosis_agent.py
 git commit -m "feat: add trial diagnosis"
 ```
 
@@ -439,7 +439,7 @@ git commit -m "feat: add trial diagnosis"
 ### Task 3: User Review Requests And Feedback Memory
 
 **Files:**
-- Create: `kaggle_research_agent/user_review_agent.py`
+- Create: `research_agent/user_review_agent.py`
 - Test: `tests/test_user_review_agent.py`
 
 - [ ] **Step 1: Write failing tests**
@@ -453,7 +453,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.user_review_agent import record_user_feedback, request_user_review
+from research_agent.user_review_agent import record_user_feedback, request_user_review
 
 
 class UserReviewAgentTest(unittest.TestCase):
@@ -469,7 +469,7 @@ class UserReviewAgentTest(unittest.TestCase):
                 "improvement_candidates": ["Try a model-family change."],
             }
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 path = request_user_review("demo", "trial_001", diagnosis)
 
             self.assertTrue(path.exists())
@@ -480,7 +480,7 @@ class UserReviewAgentTest(unittest.TestCase):
     def test_record_user_feedback_appends_jsonl(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 row = record_user_feedback(
                     "demo",
                     "trial_001",
@@ -515,7 +515,7 @@ Expected: FAIL with missing `user_review_agent`.
 
 - [ ] **Step 3: Implement user review agent**
 
-Create `kaggle_research_agent/user_review_agent.py`:
+Create `research_agent/user_review_agent.py`:
 
 ```python
 from __future__ import annotations
@@ -627,7 +627,7 @@ git status --short
 Expected in current workspace: not a git repository. If git is initialized, commit:
 
 ```powershell
-git add kaggle_research_agent/user_review_agent.py tests/test_user_review_agent.py
+git add research_agent/user_review_agent.py tests/test_user_review_agent.py
 git commit -m "feat: add user review memory"
 ```
 
@@ -636,7 +636,7 @@ git commit -m "feat: add user review memory"
 ### Task 4: Submission Tracker And Best Trial Markers
 
 **Files:**
-- Create: `kaggle_research_agent/submission_tracker.py`
+- Create: `research_agent/submission_tracker.py`
 - Test: `tests/test_submission_tracker.py`
 
 - [ ] **Step 1: Write failing tests**
@@ -650,7 +650,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.submission_tracker import record_submission_result
+from research_agent.submission_tracker import record_submission_result
 
 
 class SubmissionTrackerTest(unittest.TestCase):
@@ -661,7 +661,7 @@ class SubmissionTrackerTest(unittest.TestCase):
             trial.mkdir(parents=True)
             (trial / "submission.csv").write_text("id,target\n1,0.9\n", encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 row = record_submission_result(
                     competition="demo",
                     trial_id="trial_001",
@@ -704,7 +704,7 @@ Expected: FAIL with missing `submission_tracker`.
 
 - [ ] **Step 3: Implement submission tracker**
 
-Create `kaggle_research_agent/submission_tracker.py`:
+Create `research_agent/submission_tracker.py`:
 
 ```python
 from __future__ import annotations
@@ -863,7 +863,7 @@ git status --short
 Expected in current workspace: not a git repository. If git is initialized, commit:
 
 ```powershell
-git add kaggle_research_agent/submission_tracker.py tests/test_submission_tracker.py
+git add research_agent/submission_tracker.py tests/test_submission_tracker.py
 git commit -m "feat: track submissions and best trial"
 ```
 
@@ -872,7 +872,7 @@ git commit -m "feat: track submissions and best trial"
 ### Task 5: CLI Commands
 
 **Files:**
-- Modify: `kaggle_research_agent/cli.py`
+- Modify: `research_agent/cli.py`
 - Test: `tests/test_cli_loop_core.py`
 
 - [ ] **Step 1: Write failing CLI tests**
@@ -886,7 +886,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.cli import main
+from research_agent.cli import main
 
 
 class CliLoopCoreTest(unittest.TestCase):
@@ -901,7 +901,7 @@ class CliLoopCoreTest(unittest.TestCase):
                 "competition:\n  objective: maximize\ncurrent_state:\n  consecutive_failures: 0\n",
                 encoding="utf-8",
             )
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 code = main(["diagnose", "--competition", "demo", "--trial", "trial_001"])
             self.assertEqual(code, 0)
             self.assertTrue((trial / "diagnosis.md").exists())
@@ -910,7 +910,7 @@ class CliLoopCoreTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "experiments" / "demo" / "trial_001").mkdir(parents=True)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 code = main(
                     [
                         "record-submission",
@@ -954,7 +954,7 @@ Expected: FAIL because CLI commands do not exist.
 
 - [ ] **Step 3: Add imports**
 
-Modify top of `kaggle_research_agent/cli.py`:
+Modify top of `research_agent/cli.py`:
 
 ```python
 from .diagnosis_agent import diagnose_trial
@@ -1076,7 +1076,7 @@ git status --short
 Expected in current workspace: not a git repository. If git is initialized, commit:
 
 ```powershell
-git add kaggle_research_agent/cli.py tests/test_cli_loop_core.py
+git add research_agent/cli.py tests/test_cli_loop_core.py
 git commit -m "feat: expose research loop core CLI"
 ```
 
@@ -1085,7 +1085,7 @@ git commit -m "feat: expose research loop core CLI"
 ### Task 6: Integrate Diagnosis Into Conservative Cycle
 
 **Files:**
-- Modify: `kaggle_research_agent/main_agent.py`
+- Modify: `research_agent/main_agent.py`
 - Test: `tests/test_main_agent_diagnosis.py`
 
 - [ ] **Step 1: Write failing integration test**
@@ -1099,7 +1099,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.main_agent import run_cycle
+from research_agent.main_agent import run_cycle
 
 
 class MainAgentDiagnosisTest(unittest.TestCase):
@@ -1126,7 +1126,7 @@ class MainAgentDiagnosisTest(unittest.TestCase):
             )
             (trial / "metrics.json").write_text(json.dumps({"cv_score": 0.72, "objective": "maximize"}), encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_cycle("demo", "trial_001", create_job_request=False)
 
             self.assertIn("diagnosed", result["steps"])
@@ -1150,7 +1150,7 @@ Expected: FAIL because `run_cycle` does not call diagnosis/logging yet.
 
 - [ ] **Step 3: Add imports to main_agent.py**
 
-Modify `kaggle_research_agent/main_agent.py`:
+Modify `research_agent/main_agent.py`:
 
 ```python
 from .decision_logger import log_decision
@@ -1214,7 +1214,7 @@ git status --short
 Expected in current workspace: not a git repository. If git is initialized, commit:
 
 ```powershell
-git add kaggle_research_agent/main_agent.py tests/test_main_agent_diagnosis.py
+git add research_agent/main_agent.py tests/test_main_agent_diagnosis.py
 git commit -m "feat: diagnose completed cycles"
 ```
 
@@ -1236,25 +1236,25 @@ Add a section to `README.md` after evaluation/remember usage:
 Diagnose a completed trial:
 
 ```powershell
-python -B -m kaggle_research_agent.cli diagnose --competition demo --trial trial_001
+python -B -m research_agent.cli diagnose --competition demo --trial trial_001
 ```
 
 Create a user review request when the diagnosis needs human input:
 
 ```powershell
-python -B -m kaggle_research_agent.cli request-review --competition demo --trial trial_001
+python -B -m research_agent.cli request-review --competition demo --trial trial_001
 ```
 
 Record user feedback:
 
 ```powershell
-python -B -m kaggle_research_agent.cli record-feedback --competition demo --trial trial_001 --topic validation --question "Is this split appropriate?" --feedback "Use group split before large model changes." --decision change_validation --follow-up-action "Plan a validation review trial"
+python -B -m research_agent.cli record-feedback --competition demo --trial trial_001 --topic validation --question "Is this split appropriate?" --feedback "Use group split before large model changes." --decision change_validation --follow-up-action "Plan a validation review trial"
 ```
 
 Record a manual submission result without calling Kaggle:
 
 ```powershell
-python -B -m kaggle_research_agent.cli record-submission --competition demo --trial trial_001 --version-name demo_trial_001_baseline_v01 --submission-file experiments/demo/trial_001/submission.csv --cv-score 0.83 --previous-lb-score 0.80 --previous-rank 120 --submitted-lb-score 0.84 --submitted-rank 90 --objective maximize --notes "Manual leaderboard entry"
+python -B -m research_agent.cli record-submission --competition demo --trial trial_001 --version-name demo_trial_001_baseline_v01 --submission-file experiments/demo/trial_001/submission.csv --cv-score 0.83 --previous-lb-score 0.80 --previous-rank 120 --submitted-lb-score 0.84 --submitted-rank 90 --objective maximize --notes "Manual leaderboard entry"
 ```
 ```
 
@@ -1283,10 +1283,10 @@ Append to `PROJECT_CHANGELOG.ko.md`:
 Run:
 
 ```powershell
-python -B -m kaggle_research_agent.cli validate-config --competition demo --trial trial_001
-python -B -m kaggle_research_agent.cli evaluate --competition demo --trial trial_001
-python -B -m kaggle_research_agent.cli remember --competition demo --trial trial_001
-python -B -m kaggle_research_agent.cli diagnose --competition demo --trial trial_001
+python -B -m research_agent.cli validate-config --competition demo --trial trial_001
+python -B -m research_agent.cli evaluate --competition demo --trial trial_001
+python -B -m research_agent.cli remember --competition demo --trial trial_001
+python -B -m research_agent.cli diagnose --competition demo --trial trial_001
 ```
 
 Expected:

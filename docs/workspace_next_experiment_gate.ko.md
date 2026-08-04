@@ -5,7 +5,7 @@
 ## 실행
 
 ```powershell
-python -B -m kaggle_research_agent.cli plan-next-workspace-trial `
+python -B -m research_agent.cli plan-next-workspace-trial `
   --competition <workspace> `
   --source-trial trial_001 `
   --next-trial trial_002

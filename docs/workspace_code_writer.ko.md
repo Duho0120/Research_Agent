@@ -7,7 +7,7 @@
 mock 응답 사용:
 
 ```powershell
-python -B -m kaggle_research_agent.cli run-workspace-code-writer `
+python -B -m research_agent.cli run-workspace-code-writer `
   --competition <workspace> `
   --trial trial_002 `
   --mock-response-file mock_response.json
@@ -16,7 +16,7 @@ python -B -m kaggle_research_agent.cli run-workspace-code-writer `
 API 호출 사용:
 
 ```powershell
-python -B -m kaggle_research_agent.cli run-workspace-code-writer `
+python -B -m research_agent.cli run-workspace-code-writer `
   --competition <workspace> `
   --trial trial_002 `
   --model gpt-5 `
@@ -26,7 +26,7 @@ python -B -m kaggle_research_agent.cli run-workspace-code-writer `
 결과 검증만 다시 실행:
 
 ```powershell
-python -B -m kaggle_research_agent.cli validate-workspace-coding-result `
+python -B -m research_agent.cli validate-workspace-coding-result `
   --competition <workspace> `
   --trial trial_002
 ```

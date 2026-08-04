@@ -57,7 +57,7 @@ metrics_contract:
 검증 명령:
 
 ```powershell
-python -B -m kaggle_research_agent.cli validate-execution-profile --competition <workspace>
+python -B -m research_agent.cli validate-execution-profile --competition <workspace>
 ```
 
 검증 결과:

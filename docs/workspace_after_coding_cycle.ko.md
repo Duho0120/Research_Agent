@@ -9,7 +9,7 @@
 dry-run:
 
 ```powershell
-python -B -m kaggle_research_agent.cli run-workspace-after-coding `
+python -B -m research_agent.cli run-workspace-after-coding `
   --competition <workspace> `
   --trial trial_002
 ```
@@ -17,7 +17,7 @@ python -B -m kaggle_research_agent.cli run-workspace-after-coding `
 실제 실행:
 
 ```powershell
-python -B -m kaggle_research_agent.cli run-workspace-after-coding `
+python -B -m research_agent.cli run-workspace-after-coding `
   --competition <workspace> `
   --trial trial_002 `
   --run-now

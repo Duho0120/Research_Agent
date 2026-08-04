@@ -5,12 +5,12 @@
 ## 기본 흐름
 
 ```powershell
-python -B -m kaggle_research_agent.cli run-workspace-pipeline `
+python -B -m research_agent.cli run-workspace-pipeline `
   --competition <workspace> `
   --trial trial_001 `
   --run-now
 
-python -B -m kaggle_research_agent.cli collect-workspace-metrics `
+python -B -m research_agent.cli collect-workspace-metrics `
   --competition <workspace> `
   --trial trial_001
 ```

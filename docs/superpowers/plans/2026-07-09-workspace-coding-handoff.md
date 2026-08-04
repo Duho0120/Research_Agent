@@ -23,7 +23,7 @@
 ### Task 2: Workspace Handoff Module
 
 **Files:**
-- Create: `kaggle_research_agent/workspace_coding_handoff.py`
+- Create: `research_agent/workspace_coding_handoff.py`
 
 - [ ] Implement `prepare_workspace_coding_handoff(competition, trial_id)`.
 - [ ] Load and validate Execution Profile.
@@ -34,7 +34,7 @@
 ### Task 3: CLI
 
 **Files:**
-- Modify: `kaggle_research_agent/cli.py`
+- Modify: `research_agent/cli.py`
 
 - [ ] Add `prepare-workspace-handoff --competition --trial`.
 - [ ] Return nonzero for blocked status.
@@ -54,5 +54,5 @@
 **Commands:**
 - `python -B -m unittest tests.test_workspace_coding_handoff -v`
 - `python -B -m unittest discover -s tests -v`
-- `python -B -m compileall -q kaggle_research_agent tests`
+- `python -B -m compileall -q research_agent tests`
 - `git diff --check`

@@ -457,9 +457,9 @@ docs/policies/review_pack_schema.ko.md
 현재 구현:
 
 - 정책 yaml 3종을 `configs/policies/`에 추가했다.
-- `kaggle_research_agent/policies.py`에서 정책을 로딩한다.
-- `kaggle_research_agent/agents/policy_gate.py`에서 execution decision, human review decision, token gate, local failure classification을 처리한다.
-- `kaggle_research_agent/agents/review_pack.py`에서 표준 review pack 파일을 생성한다.
+- `research_agent/policies.py`에서 정책을 로딩한다.
+- `research_agent/agents/policy_gate.py`에서 execution decision, human review decision, token gate, local failure classification을 처리한다.
+- `research_agent/agents/review_pack.py`에서 표준 review pack 파일을 생성한다.
 - `run_cycle()`에 execution decision과 human review policy 판단을 연결했다.
 
 추가 구현:

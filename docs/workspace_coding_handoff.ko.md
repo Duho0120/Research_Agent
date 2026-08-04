@@ -7,7 +7,7 @@
 ## 실행
 
 ```powershell
-python -B -m kaggle_research_agent.cli prepare-workspace-handoff `
+python -B -m research_agent.cli prepare-workspace-handoff `
   --competition <workspace> `
   --trial trial_002
 ```

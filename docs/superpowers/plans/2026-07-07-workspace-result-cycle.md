@@ -14,8 +14,8 @@
 
 **Files:**
 - Modify: `tests/test_policy_gate.py`
-- Modify: `kaggle_research_agent/agents/policy_gate.py`
-- Modify: `kaggle_research_agent/policies.py`
+- Modify: `research_agent/agents/policy_gate.py`
+- Modify: `research_agent/policies.py`
 - Modify: `configs/policies/human_review_policy.yaml`
 
 - [x] Add failing tests proving a nonurgent review defers before maturity, releases after two completed trials, and leakage requests immediately.
@@ -27,7 +27,7 @@
 
 **Files:**
 - Create: `tests/test_workspace_result_cycle.py`
-- Create: `kaggle_research_agent/workspace_result_cycle.py`
+- Create: `research_agent/workspace_result_cycle.py`
 
 - [x] Add a failing test that processes a first successful trial with a nonurgent diagnosis, remembers it, and queues review instead of creating a pack.
 - [x] Run the focused test and confirm the missing module fails.
@@ -38,7 +38,7 @@
 
 **Files:**
 - Modify: `tests/test_workspace_result_cycle.py`
-- Modify: `kaggle_research_agent/workspace_result_cycle.py`
+- Modify: `research_agent/workspace_result_cycle.py`
 
 - [x] Add failing tests for second-trial queue release, immediate leakage review, no-review completion, blocked collection, and duplicate-memory protection.
 - [x] Run the focused tests and confirm the new assertions fail.
@@ -49,7 +49,7 @@
 
 **Files:**
 - Modify: `tests/test_workspace_result_cycle.py`
-- Modify: `kaggle_research_agent/cli.py`
+- Modify: `research_agent/cli.py`
 - Create: `docs/workspace_result_cycle.ko.md`
 - Modify: `README.md`
 - Modify: `PROJECT_CHANGELOG.ko.md`
@@ -64,7 +64,7 @@
 **Files:**
 - Verify all changes without reverting prior uncommitted work.
 
-- [x] Run `python -B -m compileall -q kaggle_research_agent tests` and require exit code 0.
+- [x] Run `python -B -m compileall -q research_agent tests` and require exit code 0.
 - [x] Run `python -B -m unittest discover -s tests -v` and require zero failures.
 - [x] Run `git diff --check` and require no whitespace errors.
 - [x] Review `git status --short` and preserve all earlier phase changes.
