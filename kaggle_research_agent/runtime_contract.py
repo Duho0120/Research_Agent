@@ -243,6 +243,42 @@ def run_scoring_perturbation_probe(
     bypassed by hardcoding the score key and by substituting format checks
     for scoring; neither of those reacts to the predictions changing.
     """
+    # The probe runs the real harness, which writes the real metrics
+    # artifact -- including on the perturbed pass, whose score is deliberate
+    # nonsense. Leaving that behind would let a detection device become a
+    # source of exactly the fabricated score it exists to catch, so the
+    # artifact is restored to its pre-probe state no matter how this exits.
+    metrics_file = Path(metrics_path)
+    before = metrics_file.read_bytes() if metrics_file.is_file() else None
+    try:
+        return _run_perturbation_passes(
+            project_root,
+            python,
+            harness_module=harness_module,
+            predict_module=predict_module,
+            metrics_path=metrics_path,
+            score_key=score_key,
+            timeout=timeout,
+        )
+    finally:
+        if before is None:
+            if metrics_file.is_file():
+                metrics_file.unlink()
+        else:
+            metrics_file.parent.mkdir(parents=True, exist_ok=True)
+            metrics_file.write_bytes(before)
+
+
+def _run_perturbation_passes(
+    project_root: Path,
+    python: str,
+    *,
+    harness_module: str,
+    predict_module: str,
+    metrics_path: Path | str,
+    score_key: str,
+    timeout: int,
+) -> dict[str, Any]:
     results: dict[str, Any] = {}
     for label, perturb in (("baseline", "0"), ("perturbed", "1")):
         with tempfile.TemporaryDirectory() as tmp:

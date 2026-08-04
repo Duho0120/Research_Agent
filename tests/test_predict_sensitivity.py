@@ -87,5 +87,64 @@ class ConstantPredictorGateTest(unittest.TestCase):
         self.assertTrue(issues[0].startswith("predict_probe_error"))
         self.assertEqual([], [i for i in issues if i.startswith("predict_ignores_input")])
 
+
+
+class PerturbationDoesNotPolluteMetricsTest(unittest.TestCase):
+    """The probe runs the real harness, which writes the real metrics
+    artifact -- including on the perturbed pass, whose score is deliberate
+    nonsense. Real incident: 1732.01 (a wrecked-prediction score) was left
+    sitting in outputs/metrics.json, so the device built to catch fabricated
+    scores had become a source of one."""
+
+    HARNESS = (
+        "import json, os\n"
+        "from predict_step import predict\n"
+        "if __name__ == '__main__':\n"
+        "    p = predict({'x': 1.0})['y']\n"
+        "    os.makedirs('outputs', exist_ok=True)\n"
+        "    json.dump({'cv_score': abs(p - 1.0)}, open('outputs/metrics.json', 'w'))\n"
+    )
+
+    def _workspace(self, root: Path):
+        (root / "predict_step.py").write_text(
+            "def predict(sample):\n    return {'y': sample['x'] * 2}\n", encoding="utf-8"
+        )
+        (root / "outputs").mkdir(exist_ok=True)
+        (root / "scoring_harness.py").write_text(self.HARNESS, encoding="utf-8")
+
+    def _probe(self, root: Path):
+        from kaggle_research_agent.runtime_contract import run_scoring_perturbation_probe
+
+        return run_scoring_perturbation_probe(
+            root,
+            sys.executable,
+            harness_module="scoring_harness",
+            predict_module="predict_step",
+            metrics_path=root / "outputs" / "metrics.json",
+            score_key="cv_score",
+            timeout=120,
+        )
+
+    def test_pre_existing_metrics_are_restored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._workspace(root)
+            original = '{"cv_score": 0.5, "metric": "real"}'
+            (root / "outputs" / "metrics.json").write_text(original, encoding="utf-8")
+
+            results = self._probe(root)
+
+            self.assertNotEqual(results["baseline"], results["perturbed"])
+            self.assertEqual(original, (root / "outputs" / "metrics.json").read_text(encoding="utf-8"))
+
+    def test_no_metrics_file_is_left_behind_when_none_existed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._workspace(root)
+
+            self._probe(root)
+
+            self.assertFalse((root / "outputs" / "metrics.json").exists())
+
 if __name__ == "__main__":
     unittest.main()
