@@ -1,0 +1,62 @@
+{
+  "schema_version": "1.0",
+  "competition": "236716",
+  "trial_id": "trial_003",
+  "status": "finalized",
+  "captured_at": "2026-07-31T01:58:46.094367+00:00",
+  "request_id": "236716:trial_003:workspace-coding",
+  "source": "workspace_coding_agent_request.md:Next Experiment",
+  "plan": {
+    "trial_id": "trial_003",
+    "source_trial_id": "trial_002",
+    "plan_type": "continuation_delta_plan",
+    "plan_title": "Rollback to trial_001 and align submission schema to id,x,y,z",
+    "primary_change_axis": "submission_schema_alignment",
+    "change_details": [
+      "Test Inference Output: Change submission prediction columns from ['target'] to ['x','y','z']",
+      "Test Inference Output: Write outputs/submission.csv with column order exactly: id,x,y,z; enforce float32 for x,y,z",
+      "Predict Step.Py: Update _read_sample_submission to expect/propagate ['id','x','y','z'] header",
+      "Predict Step.Py: Modify prediction assembly to return a dict/array with keys/cols ['x','y','z'] from the constant-velocity estimate",
+      "Predict Step.Py: If underlying predictor returns a 3-vector, map directly to (x,y,z); assert shape == (3,) per id",
+      "Test Step.Py: Ensure evaluation paths read ground-truth/predictions as 3D and compute Euclidean distance via _euclid for R-Hit@1cm",
+      "Workspace Config.Json: Update submission prediction_columns metadata to ['x','y','z']"
+    ],
+    "keep_unchanged": [
+      "Train File: train_labels.csv",
+      "Sample Submission: sample_submission.csv",
+      "Id Column: id",
+      "Method: random_holdout_by_id",
+      "Test Size: 0.1",
+      "Random State: 42",
+      "Stratify: False",
+      "전처리: none",
+      "Family: RuleBasedConstantVelocity",
+      "Training: none (stateless)",
+      "Name: R-Hit@1cm",
+      "Objective: maximize"
+    ],
+    "code_change_targets": [
+      "predict_step.py",
+      "test_step.py",
+      "workspace_config.json"
+    ],
+    "success_criteria": [
+      "outputs/submission.csv header exactly ['id','x','y','z']; row count matches sample_submission",
+      "All x,y,z are finite floats; no NaN/inf; dtype float32 or float64",
+      "Local cv_score matches trial_001 behavior (no drop from schema-only change)",
+      "Internal schema validator passes (no unexpected columns)"
+    ],
+    "failure_decision": [
+      "If header/order or dtype checks fail: fix column mapping in predict_step and re-run without altering model/split",
+      "If cv worsens unexpectedly: revert code diff and re-verify I/O only; do not change model or split in this axis"
+    ],
+    "expected_outputs": [
+      "outputs/metrics.json (cv_score unchanged vs base if data consistent)",
+      "outputs/submission.csv with columns: id,x,y,z",
+      "pipeline_summary.json (updated test_inference_output.prediction_columns)",
+      "code snapshot (modified predict_step.py, test_step.py, workspace_config.json)"
+    ]
+  },
+  "plan_markdown": "# trial_003 Demo Experiment Plan\n\n- status: ready\n- plan_type: continuation_delta_plan\n- source_trial_id: trial_002\n- title: Rollback to trial_001 and align submission schema to id,x,y,z\n- next_action: prepare-workspace-handoff\n\n## Objective\n\nMaximize R-Hit@1cm by fixing output schema to match sample_submission\n\n## Rationale\n\n- Previous best/local score used: trial_001 cv=1.000\n- trial_002 changed axis=controlled_refinement and regressed (cv=0.591, LB=0.3876) — axis rejected\n- sample_submission expects columns [id,x,y,z]; trial_002 emitted [id,target], likely harming LB despite similar logic\n- Rollback to recommended base (trial_001) and change exactly one axis: submission_schema_alignment\n\n## Primary Change Axis\n\nsubmission_schema_alignment\n\n## Keep Unchanged\n\n- Train File: train_labels.csv\n- Sample Submission: sample_submission.csv\n- Id Column: id\n- Method: random_holdout_by_id\n- Test Size: 0.1\n- Random State: 42\n- Stratify: False\n- 전처리: none\n- Family: RuleBasedConstantVelocity\n- Training: none (stateless)\n- Name: R-Hit@1cm\n- Objective: maximize\n\n## Change Details\n\n- Test Inference Output: Change submission prediction columns from ['target'] to ['x','y','z']\n- Test Inference Output: Write outputs/submission.csv with column order exactly: id,x,y,z; enforce float32 for x,y,z\n- Predict Step.Py: Update _read_sample_submission to expect/propagate ['id','x','y','z'] header\n- Predict Step.Py: Modify prediction assembly to return a dict/array with keys/cols ['x','y','z'] from the constant-velocity estimate\n- Predict Step.Py: If underlying predictor returns a 3-vector, map directly to (x,y,z); assert shape == (3,) per id\n- Test Step.Py: Ensure evaluation paths read ground-truth/predictions as 3D and compute Euclidean distance via _euclid for R-Hit@1cm\n- Workspace Config.Json: Update submission prediction_columns metadata to ['x','y','z']\n\n## Code Change Targets\n\n- predict_step.py\n- test_step.py\n- workspace_config.json\n\n## Implementation Notes\n\n- No model persistence; rule-based predictor remains stateless\n- Preserve data loading, split (random_holdout_by_id, test_size=0.1, random_state=42), and model (RuleBasedConstantVelocity)\n- Ensure predict_step writes `outputs/submission.csv` with columns [id,x,y,z] in that order, float dtype, no NaN/inf\n- Derive (x,y,z) from the same last/constant-velocity 3D state used in evaluation; do not collapse to a single target\n- Mirror schema in test_step evaluation paths to compute distance in 3D (already uses _euclid)\n\n## Success Criteria\n\n- outputs/submission.csv header exactly ['id','x','y','z']; row count matches sample_submission\n- All x,y,z are finite floats; no NaN/inf; dtype float32 or float64\n- Local cv_score matches trial_001 behavior (no drop from schema-only change)\n- Internal schema validator passes (no unexpected columns)\n\n## Failure Decision\n\n- If header/order or dtype checks fail: fix column mapping in predict_step and re-run without altering model/split\n- If cv worsens unexpectedly: revert code diff and re-verify I/O only; do not change model or split in this axis\n\n## Expected Outputs\n\n- outputs/metrics.json (cv_score unchanged vs base if data consistent)\n- outputs/submission.csv with columns: id,x,y,z\n- pipeline_summary.json (updated test_inference_output.prediction_columns)\n- code snapshot (modified predict_step.py, test_step.py, workspace_config.json)\n\n## Issues\n\n- None",
+  "finalized_at": "2026-07-31T01:59:40.780507+00:00"
+}

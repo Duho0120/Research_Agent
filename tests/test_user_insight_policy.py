@@ -6,8 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.interface_contract import submit_human_insight
-from kaggle_research_agent.user_insight_policy import (
+from research_agent.interface_contract import submit_human_insight
+from research_agent.user_insight_policy import (
     build_next_trial_user_insight_override,
     evaluate_user_insight_submission,
     interpret_user_insight,
@@ -64,7 +64,7 @@ class UserInsightPolicyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             client = FakeInsightClient()
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = interpret_user_insight(
                     "관계를 조금 더 섬세하게 활용해보자",
                     competition="demo",
@@ -85,7 +85,7 @@ class UserInsightPolicyTest(unittest.TestCase):
                 json.dumps({"trial_id": "trial_001", "kaggle_lb_score": 0.77}),
                 encoding="utf-8",
             )
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 first = submit_human_insight("demo", "trial_001", insight="앙상블을 사용하자")
                 second = submit_human_insight("demo", "trial_001", insight="검증 누수를 먼저 확인하자")
                 latest = latest_user_insight_record("demo", "trial_001")
@@ -109,7 +109,7 @@ class UserInsightPolicyTest(unittest.TestCase):
                     json.dumps({"trial_id": trial_id, "kaggle_lb_score": score}),
                     encoding="utf-8",
                 )
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 submit_human_insight("demo", "trial_006", insight="앙상블을 사용하자")
                 first = build_next_trial_user_insight_override("demo", "trial_006", "trial_007")
                 trial_007 = manual / "trial_007"
@@ -139,7 +139,7 @@ class UserInsightPolicyTest(unittest.TestCase):
                 json.dumps({"trial_id": "trial_001", "kaggle_lb_score": 0.77}),
                 encoding="utf-8",
             )
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 submit_human_insight("demo", "trial_001", insight="앙상블을 사용하자")
                 build_next_trial_user_insight_override("demo", "trial_001", "trial_002")
                 missing = validate_user_insight_code_result(
@@ -192,7 +192,7 @@ class UserInsightPolicyTest(unittest.TestCase):
                 json.dumps({"trial_id": "trial_001", "kaggle_lb_score": 0.77}),
                 encoding="utf-8",
             )
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 submit_human_insight("demo", "trial_001", insight="앙상블을 사용하자")
                 build_next_trial_user_insight_override("demo", "trial_001", "trial_002")
 
@@ -240,7 +240,7 @@ class UserInsightPolicyTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 submit_human_insight("demo", "trial_001", insight="family feature를 추가하자")
                 build_next_trial_user_insight_override("demo", "trial_001", "trial_002")
                 missing = validate_user_insight_code_result(
@@ -275,7 +275,7 @@ class UserInsightPolicyTest(unittest.TestCase):
     def test_blocked_code_writer_result_does_not_report_insight_as_unimplemented(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 submit_human_insight("demo", "trial_001", insight="Try a different model family.")
                 build_next_trial_user_insight_override("demo", "trial_001", "trial_002")
                 issues = validate_user_insight_code_result(
@@ -297,7 +297,7 @@ class UserInsightPolicyTest(unittest.TestCase):
         # (possibly unrelated) verification contract.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 submit_human_insight("demo", "trial_001", insight="Try a different model family.")
                 override = build_next_trial_user_insight_override("demo", "trial_001", "trial_002")
                 update_user_insight_record(
@@ -336,7 +336,7 @@ class UserInsightPolicyTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 submit_human_insight("demo", "trial_001", insight="Try another boosting model.")
                 build_next_trial_user_insight_override("demo", "trial_001", "trial_002")
                 result = mark_user_insight_applied(
@@ -373,7 +373,7 @@ class UserInsightPolicyTest(unittest.TestCase):
                 "submission": {"prediction_column": "target"},
             }
             (base_internal / "executed_trial_facts.json").write_text(json.dumps(base_facts), encoding="utf-8")
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 submit_human_insight("demo", "trial_001", insight="RandomForest model로 바꾸자")
                 build_next_trial_user_insight_override("demo", "trial_001", "trial_002")
                 result = mark_user_insight_applied(
@@ -423,7 +423,7 @@ class EnsembleVerificationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self._insight(root)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 issues = validate_user_insight_code_result("demo", "trial_002", self._CODE_RESULT)
 
         self.assertEqual([], issues)
@@ -448,7 +448,7 @@ class EnsembleVerificationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self._insight(root, contract=stale_contract)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 issues = validate_user_insight_code_result("demo", "trial_002", self._CODE_RESULT)
 
         self.assertEqual([], issues)
@@ -462,13 +462,13 @@ class EnsembleVerificationTest(unittest.TestCase):
                 "summary": "Tuned the learning rate on the existing single estimator.",
                 "changed_files": ["train_step.py"],
             }
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 issues = validate_user_insight_code_result("demo", "trial_002", unrelated)
 
         self.assertIn("user_insight_not_implemented:model_ensemble:model_change_present_in_code", issues)
 
     def test_ensemble_size_reads_both_member_list_and_n_estimators(self):
-        from kaggle_research_agent.user_insight_policy import _ensemble_size
+        from research_agent.user_insight_policy import _ensemble_size
 
         self.assertEqual(15, _ensemble_size({"estimator": "BaggingRegressor", "parameters": {"n_estimators": "15"}}))
         self.assertEqual(3, _ensemble_size({"estimator": "VotingRegressor", "members": ["a", "b", "c"]}))

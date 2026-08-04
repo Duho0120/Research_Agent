@@ -1,0 +1,118 @@
+{
+  "plan_type": "delta_patch",
+  "plan_title": "Align submission via sample template merge, ordered columns, and float precision",
+  "source_trial_id": "trial_003",
+  "primary_change_axis": "submission_schema_alignment",
+  "candidate": {
+    "name": "submission_schema_alignment: MergeToTemplate | EnforceOrder+Float6",
+    "description": "Write submission by merging predictions onto sample_submission to preserve id coverage/order and enforce exact columns [id,x,y,z] with 6-decimal floats.",
+    "implementation_hint": "In predict_step.py: in main(), after building preds DataFrame with columns ['id','x','y','z'], read template = _read_sample_submission(); out = template[['id']].merge(preds, on='id', how='left'); out = out[['id','x','y','z']]; for c in ['x','y','z']: out[c] = out[c].astype('float32'); out.to_csv(SUBMISSION_PATH, index=False, float_format='%.6f')"
+  },
+  "do_not_repeat": [
+    "submission_schema_alignment: Inference | Output | Predict | Update"
+  ],
+  "keep_unchanged": [
+    "data_split_cv",
+    "model_definition",
+    "preprocessing"
+  ],
+  "change_details": [
+    "Adjust predict_step.main to merge predictions with sample_submission for id alignment, enforce exact column order ['id','x','y','z'], cast to float32, and save CSV with float_format='%.6f' and no index."
+  ],
+  "affected_stages": [
+    "test_inference_output"
+  ],
+  "required_code_symbols": [
+    "predict_step.py: _read_sample_submission",
+    "predict_step.py: main"
+  ],
+  "expected_metadata_changes": [
+    "test_inference_output.postprocessing += ['merge_to_template','float_precision_6','enforce_column_order']"
+  ],
+  "code_change_targets": [
+    "predict_step.py"
+  ],
+  "success_criteria": [
+    "outputs/submission.csv has exactly columns id,x,y,z in order with all test ids",
+    "No LB schema errors; score loads successfully",
+    "Local R-Hit@1cm >= 0.591"
+  ],
+  "failure_decision": [
+    "If schema still misaligned or rows mismatch, revert this patch and next try writer in src/baseline.py to enforce order/format."
+  ],
+  "expected_outputs": [
+    "outputs/submission.csv"
+  ],
+  "schema_version": "1.0",
+  "objective": "Create and run one local experiment for 236716.",
+  "rationale": "Use the available Execution Profile and local metric artifact to verify the loop.",
+  "pipeline_blueprint": [],
+  "implementation_notes": [],
+  "issues": [],
+  "competition": "236716",
+  "trial_id": "trial_004",
+  "status": "ready",
+  "token_decision": {
+    "decision": "call_llm",
+    "reason": "experiment_planning",
+    "within_budget": true,
+    "trial_llm_calls": 2,
+    "strategy_calls_today": 10,
+    "counts_source": "decision_log",
+    "summarize_logs_before_llm": true,
+    "avoid_raw_training_logs_in_prompt": true,
+    "log": {
+      "time": "2026-07-31T04:45:05.766455+00:00",
+      "competition": "236716",
+      "trial_id": "trial_004",
+      "decision_type": "llm_call",
+      "decision": "call_llm",
+      "reason": "Token policy evaluated LLM reason: experiment_planning.",
+      "evidence": {
+        "llm_reason": "experiment_planning",
+        "trial_llm_calls": 2,
+        "strategy_calls_today": 10,
+        "counts_source": "decision_log",
+        "within_budget": true,
+        "summarize_logs_before_llm": true,
+        "avoid_raw_training_logs_in_prompt": true,
+        "prompt_summary_path": "experiments/236716/trial_004/demo_context.md"
+      },
+      "user_input_used": false,
+      "next_action": "call-llm"
+    }
+  },
+  "token_usage": {
+    "time": "2026-07-31T04:45:39.832318+00:00",
+    "competition": "236716",
+    "trial_id": "trial_004",
+    "provider": "openai_responses",
+    "model": "gpt-5",
+    "call_type": "experiment_planning",
+    "request_id": "resp_03d75e631413c5b2006a6c28525f40819bbf32d632dd8879c1",
+    "input_tokens": 2240,
+    "output_tokens": 2778,
+    "total_tokens": 5018,
+    "raw_usage": {
+      "input_tokens": 2240,
+      "input_tokens_details": {
+        "cache_write_tokens": 0,
+        "cached_tokens": 0
+      },
+      "output_tokens": 2778,
+      "output_tokens_details": {
+        "reasoning_tokens": 2240
+      },
+      "total_tokens": 5018
+    }
+  },
+  "model_config": {
+    "tier": "high_cost",
+    "provider": "openai",
+    "api": "responses",
+    "model": "gpt-5",
+    "call_type": "experiment_planning",
+    "override": true
+  },
+  "next_action": "prepare-workspace-handoff"
+}

@@ -1,0 +1,54 @@
+{
+  "competition": "236716",
+  "trial_id": "trial_001",
+  "status": "corrected",
+  "repairs": [
+    "source_trial_id_metadata->trial_001"
+  ],
+  "remaining_issues": [],
+  "all_consistency_issues": [],
+  "executed_trial_facts": {
+    "schema_version": "1.0",
+    "competition": "236716",
+    "trial_id": "trial_001",
+    "source_trial_id": "trial_001",
+    "plan_type": "continuation_delta_plan",
+    "primary_change_axis": null,
+    "candidate": {},
+    "change_details": [],
+    "keep_unchanged": [],
+    "model": {
+      "estimator": "RuleBasedConstantVelocity",
+      "parameters": {},
+      "pretrained": false,
+      "pipeline_container": null
+    },
+    "preprocessing": {},
+    "validation": {
+      "method": "random_holdout_by_id",
+      "test_size": 0.1,
+      "random_state": 42,
+      "stratify": false
+    },
+    "features": {},
+    "submission": {
+      "submission_path": "outputs/submission.csv",
+      "id_column": "id",
+      "prediction_column": "x,y,z",
+      "postprocessing": []
+    },
+    "scores": {
+      "metric": "R-Hit@1cm",
+      "objective": "maximize",
+      "local": 0.591,
+      "submission": 0.6006,
+      "rank": null
+    },
+    "consistency_issues": [],
+    "sources": {
+      "plan": "workspace_coding_handoff.json",
+      "model": "internal/pipeline_structure.json:model_definition",
+      "scores": "metrics.json+submission_log"
+    }
+  }
+}

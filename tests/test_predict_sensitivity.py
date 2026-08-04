@@ -4,7 +4,7 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
-from kaggle_research_agent.runtime_contract import (
+from research_agent.runtime_contract import (
     evaluate_predict_sensitivity,
     run_predict_sensitivity_probe,
 )
@@ -75,13 +75,13 @@ class ConstantPredictorGateTest(unittest.TestCase):
             trial = root / "experiments" / "demo" / "trial_001"
             trial.mkdir(parents=True)
             (trial / "continuation_context.json").write_text("{}", encoding="utf-8")
-            with unittest.mock.patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with unittest.mock.patch("research_agent.paths.project_root", return_value=root):
                 with unittest.mock.patch.object(loop, "run_predict_sensitivity_probe") as probe:
                     self.assertEqual([], loop._constant_predictor_issues("demo", "trial_001"))
             probe.assert_not_called()
 
     def test_probe_failures_do_not_block(self):
-        from kaggle_research_agent.runtime_contract import evaluate_predict_sensitivity
+        from research_agent.runtime_contract import evaluate_predict_sensitivity
 
         issues = evaluate_predict_sensitivity({"error": "ImportError: no module"})
         self.assertTrue(issues[0].startswith("predict_probe_error"))
@@ -113,7 +113,7 @@ class PerturbationDoesNotPolluteMetricsTest(unittest.TestCase):
         (root / "scoring_harness.py").write_text(self.HARNESS, encoding="utf-8")
 
     def _probe(self, root: Path):
-        from kaggle_research_agent.runtime_contract import run_scoring_perturbation_probe
+        from research_agent.runtime_contract import run_scoring_perturbation_probe
 
         return run_scoring_perturbation_probe(
             root,

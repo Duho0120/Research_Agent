@@ -6,10 +6,10 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent import simple_yaml
-from kaggle_research_agent.cli import main
-from kaggle_research_agent.workspace_code_writer import build_workspace_code_writer_payload
-from kaggle_research_agent.workspace_coding_handoff import (
+from research_agent import simple_yaml
+from research_agent.cli import main
+from research_agent.workspace_code_writer import build_workspace_code_writer_payload
+from research_agent.workspace_coding_handoff import (
     HARNESS_INIT_TRIAL_ID,
     generate_scoring_harness,
     prepare_workspace_coding_handoff,
@@ -23,14 +23,14 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
         # writer, so there is no runnable harness -- default the probe to a
         # sensitive scorer; tests about the runtime check override it.
         patcher = patch(
-            "kaggle_research_agent.workspace_coding_handoff.run_scoring_perturbation_probe",
+            "research_agent.workspace_coding_handoff.run_scoring_perturbation_probe",
             return_value={"baseline": 0.42, "perturbed": 0.01},
         )
         self.addCleanup(patcher.stop)
         patcher.start()
 
     def test_code_priority_is_generic_not_titanic_specific(self):
-        from kaggle_research_agent.workspace_coding_handoff import (
+        from research_agent.workspace_coding_handoff import (
             _code_file_priority,
             _context_file_limit,
             _delta_code_file_priority,
@@ -60,7 +60,7 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
         # alphabetically and gets listed first -- if the char budget then
         # runs out, train_step.py (the file the plan actually needs) can be
         # cut off entirely even in the "expanded retry" snapshot.
-        from kaggle_research_agent.workspace_coding_handoff import _allowed_readable_files
+        from research_agent.workspace_coding_handoff import _allowed_readable_files
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -87,7 +87,7 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             self._write_execution_profile(root, project)
             self._write_next_trial(root, continuation_mode="continue_with_caution")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_workspace_coding_handoff("demo", "trial_002")
 
             trial = root / "experiments" / "demo" / "trial_002"
@@ -181,7 +181,7 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             source_code = root / "experiments" / "demo" / "trial_001" / "user_view" / "code" / "src" / "baseline.py"
             source_code.write_text(_long_baseline_code(), encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_workspace_coding_handoff("demo", "trial_002")
                 trial = root / "experiments" / "demo" / "trial_002"
                 snapshot_text = (trial / "workspace_context_snapshot.md").read_text(encoding="utf-8")
@@ -209,7 +209,7 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             source_code.unlink()
             (project / "src" / "extra.py").write_text("EXTRA = 'current'\n", encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_workspace_coding_handoff(
                     "demo",
                     "trial_002",
@@ -244,7 +244,7 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
                 "log_tail": "TypeError: Object of type ufunc is not JSON serializable",
             }
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_workspace_coding_handoff(
                     "demo",
                     "trial_002",
@@ -274,7 +274,7 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             source_code = root / "experiments" / "demo" / "trial_001" / "user_view" / "code" / "src" / "baseline.py"
             source_code.write_text(_class_based_baseline_code(), encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_workspace_coding_handoff("demo", "trial_002")
                 trial = root / "experiments" / "demo" / "trial_002"
                 snapshot_text = (trial / "workspace_context_snapshot.md").read_text(encoding="utf-8")
@@ -317,7 +317,7 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             )
             (trial / "delta_plan.md").write_text("# Delta Patch Plan\n\n- candidate: TitleVariant\n", encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_workspace_coding_handoff("demo", "trial_002")
 
             self.assertEqual("ready", result["status"])
@@ -353,7 +353,7 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             card["target_column"] = "Survived"
             card_path.write_text(json.dumps(card), encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_workspace_coding_handoff("demo", "trial_002")
 
             self.assertIsNone(result["scoring_interface_contract"])
@@ -388,7 +388,7 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             )
             (trial / "delta_plan.md").write_text("# Delta Patch Plan\n\n- candidate: KNNRegressor\n", encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_workspace_coding_handoff("demo", "trial_002")
 
             self.assertIn("scoring_harness.py", result["forbidden_paths"])
@@ -426,7 +426,7 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             )
             (trial / "delta_plan.md").write_text("# Delta Patch Plan\n\n- candidate: kfold_holdout\n", encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_workspace_coding_handoff("demo", "trial_002")
 
             self.assertNotIn("scoring_harness.py", result["forbidden_paths"])
@@ -439,7 +439,7 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             self._write_execution_profile(root, project)
             self._write_next_trial(root, continuation_mode="can_continue")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_workspace_coding_handoff("demo", "trial_002")
 
             trial = root / "experiments" / "demo" / "trial_002"
@@ -463,7 +463,7 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
                 extra_context={"user_feedback": "Review prior feature experiments before changing model family."},
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_workspace_coding_handoff("demo", "trial_002")
 
             self.assertEqual("ready", result["status"])
@@ -504,7 +504,7 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             )
             (trial / "delta_plan.md").write_text("# Delta Patch Plan\n\n- candidate: CabinMissing_Pclass3\n", encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_workspace_coding_handoff("demo", "trial_002")
                 snapshot_text = (trial / "workspace_context_snapshot.md").read_text(encoding="utf-8")
                 handoff = json.loads((trial / "workspace_coding_handoff.json").read_text(encoding="utf-8"))
@@ -560,7 +560,7 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_workspace_coding_handoff("demo", "trial_002")
 
             self.assertEqual("blocked", result["status"])
@@ -593,7 +593,7 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_workspace_coding_handoff("demo", "trial_002", expanded_snapshot=True)
                 snapshot = (
                     root / "experiments" / "demo" / "trial_002" / "workspace_context_snapshot.md"
@@ -618,7 +618,7 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             self._write_execution_profile(root, project)
             self._write_next_trial(root, continuation_mode="can_continue")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_workspace_coding_handoff(
                     "demo",
                     "trial_002",
@@ -647,7 +647,7 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             self._write_execution_profile(root, project)
             self._write_next_trial(root, continuation_mode="can_continue")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 prepare_workspace_coding_handoff("demo", "trial_002")
 
             request_text = (
@@ -669,7 +669,7 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
                 "def train():\n    Xb = build()\n    return Xb\n", encoding="utf-8"
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_workspace_coding_handoff(
                     "demo",
                     "trial_002",
@@ -714,7 +714,7 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 prepare_workspace_coding_handoff("demo", "trial_002")
 
             snapshot = (trial / "workspace_context_snapshot.md").read_text(encoding="utf-8")
@@ -761,7 +761,7 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 prepare_workspace_coding_handoff("demo", "trial_002")
 
             snapshot = (trial / "workspace_context_snapshot.md").read_text(encoding="utf-8")
@@ -791,7 +791,7 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             base_code.parent.mkdir(parents=True, exist_ok=True)
             base_code.write_text("MODEL = 'best-submitted-base'\n", encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_workspace_coding_handoff("demo", "trial_002")
                 snapshot_text = (trial / "workspace_context_snapshot.md").read_text(encoding="utf-8")
 
@@ -813,7 +813,7 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             self._write_execution_profile(root, project)
             self._write_next_trial(root, continuation_mode="must_wait")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_workspace_coding_handoff("demo", "trial_002")
 
             trial = root / "experiments" / "demo" / "trial_002"
@@ -842,7 +842,7 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
                 comp / "execution_profile.yaml",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_workspace_coding_handoff("demo", "trial_002")
 
             self.assertEqual("blocked", result["status"])
@@ -855,7 +855,7 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             self._write_execution_profile(root, project)
             self._write_next_trial(root, continuation_mode="can_continue")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(["prepare-workspace-handoff", "--competition", "demo", "--trial", "trial_002"])
 
@@ -871,8 +871,8 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             self._write_execution_profile(root, project)
             (project / "scoring_harness.py").write_text("# already generated\n", encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.workspace_coding_handoff.run_workspace_code_writer") as writer:
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.workspace_coding_handoff.run_workspace_code_writer") as writer:
                     result = generate_scoring_harness("demo", model="gpt-5", provider="openai", allow_api=True)
 
             self.assertEqual("already_exists", result["status"])
@@ -895,8 +895,8 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.workspace_coding_handoff.run_workspace_code_writer") as writer:
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.workspace_coding_handoff.run_workspace_code_writer") as writer:
                     result = generate_scoring_harness("demo", model="gpt-5", provider="openai", allow_api=True)
 
             self.assertEqual("blocked", result["status"])
@@ -910,9 +910,9 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             project = self._write_project(root)
             self._write_execution_profile(root, project)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with patch(
-                    "kaggle_research_agent.workspace_coding_handoff.run_workspace_code_writer",
+                    "research_agent.workspace_coding_handoff.run_workspace_code_writer",
                     return_value={"status": "accepted", "changed_files": ["scoring_harness.py"]},
                 ):
                     result = generate_scoring_harness("demo", model="gpt-5", provider="openai", allow_api=True)
@@ -937,9 +937,9 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             project = self._write_project(root)
             self._write_execution_profile(root, project)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with patch(
-                    "kaggle_research_agent.workspace_coding_handoff.run_workspace_code_writer",
+                    "research_agent.workspace_coding_handoff.run_workspace_code_writer",
                     return_value={"status": "accepted", "changed_files": ["scoring_harness.py"]},
                 ) as writer:
                     result = generate_scoring_harness("demo", model="gpt-5", provider="openai", allow_api=True)
@@ -971,9 +971,9 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             self._write_execution_profile(root, project)
             simple_yaml.dump({"metric": "R-Hit@1cm"}, root / "competitions" / "demo" / "state.yaml")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with patch(
-                    "kaggle_research_agent.workspace_coding_handoff.run_workspace_code_writer",
+                    "research_agent.workspace_coding_handoff.run_workspace_code_writer",
                     return_value={"status": "accepted", "changed_files": ["scoring_harness.py"]},
                 ):
                     generate_scoring_harness("demo", model="gpt-5", provider="openai", allow_api=True)
@@ -992,9 +992,9 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             project = self._write_project(root)
             self._write_execution_profile(root, project)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with patch(
-                    "kaggle_research_agent.workspace_coding_handoff.run_workspace_code_writer",
+                    "research_agent.workspace_coding_handoff.run_workspace_code_writer",
                     return_value={"status": "blocked", "issues": ["scoring_harness_missing_interface_call:scoring_harness.py:predict"]},
                 ):
                     result = generate_scoring_harness("demo", model="gpt-5", provider="openai", allow_api=True)
@@ -1017,9 +1017,9 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
                 (project / "scoring_harness.py").write_text("# rejected\n", encoding="utf-8")
                 return {"status": "blocked", "issues": ["scoring_harness_missing_score_key:scoring_harness.py:cv_score"]}
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with patch(
-                    "kaggle_research_agent.workspace_coding_handoff.run_workspace_code_writer",
+                    "research_agent.workspace_coding_handoff.run_workspace_code_writer",
                     side_effect=write_bad_harness,
                 ):
                     result = generate_scoring_harness("demo", model="gpt-5", provider="openai", allow_api=True)
@@ -1047,9 +1047,9 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
                 {"status": "accepted", "changed_files": ["scoring_harness.py"]},
             ]
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with patch(
-                    "kaggle_research_agent.workspace_coding_handoff.run_workspace_code_writer", side_effect=results
+                    "research_agent.workspace_coding_handoff.run_workspace_code_writer", side_effect=results
                 ) as writer:
                     result = generate_scoring_harness("demo", model="gpt-5", provider="openai", allow_api=True)
 
@@ -1077,9 +1077,9 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
                 "changed_files": ["scoring_harness.py"],
             }
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with patch(
-                    "kaggle_research_agent.workspace_coding_handoff.run_workspace_code_writer",
+                    "research_agent.workspace_coding_handoff.run_workspace_code_writer",
                     side_effect=[blocked, blocked],
                 ) as writer:
                     result = generate_scoring_harness("demo", model="gpt-5", provider="openai", allow_api=True)
@@ -1353,7 +1353,7 @@ class DataLoaderGenerationTest(unittest.TestCase):
         return project
 
     def test_generated_loader_is_kept_only_when_it_runs_and_returns_features(self):
-        from kaggle_research_agent.workspace_coding_handoff import generate_data_loader
+        from research_agent.workspace_coding_handoff import generate_data_loader
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1363,10 +1363,10 @@ class DataLoaderGenerationTest(unittest.TestCase):
                 (project / "data_loader.py").write_text("# generated\n", encoding="utf-8")
                 return {"status": "accepted", "changed_files": ["data_loader.py"]}
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.workspace_coding_handoff.run_workspace_code_writer", side_effect=accept):
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.workspace_coding_handoff.run_workspace_code_writer", side_effect=accept):
                     with patch(
-                        "kaggle_research_agent.workspace_coding_handoff.run_sample_loading_probe",
+                        "research_agent.workspace_coding_handoff.run_sample_loading_probe",
                         return_value={"train": {"count": 5, "head_ids": ["A"], "feature_keys": ["x"]},
                                       "test": {"count": 2, "head_ids": ["B"], "feature_keys": ["x"]},
                                       "deterministic": True},
@@ -1377,7 +1377,7 @@ class DataLoaderGenerationTest(unittest.TestCase):
             self.assertTrue((project / "data_loader.py").exists())
 
     def test_loader_that_returns_ids_without_features_is_rejected_and_removed(self):
-        from kaggle_research_agent.workspace_coding_handoff import generate_data_loader
+        from research_agent.workspace_coding_handoff import generate_data_loader
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1387,10 +1387,10 @@ class DataLoaderGenerationTest(unittest.TestCase):
                 (project / "data_loader.py").write_text("# id-only loader\n", encoding="utf-8")
                 return {"status": "accepted", "changed_files": ["data_loader.py"]}
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.workspace_coding_handoff.run_workspace_code_writer", side_effect=accept):
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.workspace_coding_handoff.run_workspace_code_writer", side_effect=accept):
                     with patch(
-                        "kaggle_research_agent.workspace_coding_handoff.run_sample_loading_probe",
+                        "research_agent.workspace_coding_handoff.run_sample_loading_probe",
                         return_value={"train": {"count": 10000, "head_ids": ["A"], "feature_keys": []},
                                       "test": {"count": 10000, "head_ids": ["B"], "feature_keys": []},
                                       "deterministic": True},
@@ -1402,14 +1402,14 @@ class DataLoaderGenerationTest(unittest.TestCase):
             self.assertFalse((project / "data_loader.py").exists())
 
     def test_existing_loader_is_not_regenerated(self):
-        from kaggle_research_agent.workspace_coding_handoff import generate_data_loader
+        from research_agent.workspace_coding_handoff import generate_data_loader
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             project = self._setup(root)
             (project / "data_loader.py").write_text("# already there\n", encoding="utf-8")
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.workspace_coding_handoff.run_workspace_code_writer") as writer:
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.workspace_coding_handoff.run_workspace_code_writer") as writer:
                     result = generate_data_loader("demo", model="gpt-5", provider="openai", allow_api=True)
             self.assertEqual("already_exists", result["status"])
             writer.assert_not_called()
@@ -1453,12 +1453,12 @@ class HarnessRuntimeSensitivityWiringTest(unittest.TestCase):
             (project / "scoring_harness.py").write_text("# generated\n", encoding="utf-8")
             return {"status": "accepted", "changed_files": ["scoring_harness.py"], "issues": []}
 
-        with patch("kaggle_research_agent.paths.project_root", return_value=root):
+        with patch("research_agent.paths.project_root", return_value=root):
             with patch(
-                "kaggle_research_agent.workspace_coding_handoff.run_workspace_code_writer", side_effect=accept
+                "research_agent.workspace_coding_handoff.run_workspace_code_writer", side_effect=accept
             ):
                 with patch(
-                    "kaggle_research_agent.workspace_coding_handoff.run_scoring_perturbation_probe",
+                    "research_agent.workspace_coding_handoff.run_scoring_perturbation_probe",
                     return_value=probe_result,
                 ):
                     return generate_scoring_harness("demo", model="gpt-5", provider="openai", allow_api=True)

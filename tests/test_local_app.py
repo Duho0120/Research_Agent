@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from kaggle_research_agent.local_app import _render_trial_overview
+from research_agent.local_app import _render_trial_overview
 
 
 class RenderTrialOverviewTest(unittest.TestCase):

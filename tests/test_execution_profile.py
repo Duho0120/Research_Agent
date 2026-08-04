@@ -3,9 +3,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent import simple_yaml
-from kaggle_research_agent.cli import main
-from kaggle_research_agent.execution_profile import validate_execution_profile
+from research_agent import simple_yaml
+from research_agent.cli import main
+from research_agent.execution_profile import validate_execution_profile
 
 
 class ExecutionProfileTest(unittest.TestCase):
@@ -18,7 +18,7 @@ class ExecutionProfileTest(unittest.TestCase):
             python_path.write_text("", encoding="utf-8")
             self._write_profile(root, project, python_path)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_execution_profile("demo")
 
             self.assertEqual("ready", result["status"])
@@ -30,7 +30,7 @@ class ExecutionProfileTest(unittest.TestCase):
             root = Path(tmp)
             self._write_profile(root, root / "missing_project", root / "missing_python.exe")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_execution_profile("demo")
 
             self.assertEqual("blocked", result["status"])
@@ -51,7 +51,7 @@ class ExecutionProfileTest(unittest.TestCase):
                 allowed=["src/train.py", "data/train.csv", "outputs/submission.csv"],
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_execution_profile("demo")
 
             self.assertEqual("blocked", result["status"])
@@ -67,7 +67,7 @@ class ExecutionProfileTest(unittest.TestCase):
             python_path.write_text("", encoding="utf-8")
             self._write_profile(root, project, python_path)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 code = main(["validate-execution-profile", "--competition", "demo"])
 
             self.assertEqual(0, code)
@@ -86,7 +86,7 @@ class ExecutionProfileTest(unittest.TestCase):
                 metrics_contract={"source_key": "validation..score"},
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_execution_profile("demo")
 
             self.assertEqual("blocked", result["status"])

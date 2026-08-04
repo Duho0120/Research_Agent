@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.agents.submission import record_submission_result
+from research_agent.agents.submission import record_submission_result
 
 
 class SubmissionTrackerTest(unittest.TestCase):
@@ -15,7 +15,7 @@ class SubmissionTrackerTest(unittest.TestCase):
             trial.mkdir(parents=True)
             (trial / "submission.csv").write_text("id,target\n1,0.5\n", encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 row = record_submission_result(
                     competition="demo",
                     trial_id="trial_001",
@@ -52,7 +52,7 @@ class SubmissionTrackerTest(unittest.TestCase):
             trial_001.mkdir(parents=True)
             trial_002.mkdir(parents=True)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 record_submission_result(
                     competition="demo",
                     trial_id="trial_001",
@@ -80,7 +80,7 @@ class SubmissionTrackerTest(unittest.TestCase):
     def test_minimize_objective_marks_lower_score_as_best(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 better = record_submission_result(
                     competition="demo",
                     trial_id="trial_001",
@@ -106,7 +106,7 @@ class SubmissionTrackerTest(unittest.TestCase):
     def test_non_best_maximize_submission_writes_without_best_marker(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 row = record_submission_result(
                     competition="demo",
                     trial_id="trial_001",
@@ -132,7 +132,7 @@ class SubmissionTrackerTest(unittest.TestCase):
             trial_001.mkdir(parents=True)
             trial_002.mkdir(parents=True)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 first = record_submission_result(
                     competition="demo",
                     trial_id="trial_001",
@@ -161,7 +161,7 @@ class SubmissionTrackerTest(unittest.TestCase):
     def test_none_previous_and_current_values_have_none_deltas(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 row = record_submission_result(
                     competition="demo",
                     trial_id="trial_001",
@@ -180,7 +180,7 @@ class SubmissionTrackerTest(unittest.TestCase):
     def test_unsupported_objective_raises_value_error(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with self.assertRaisesRegex(ValueError, "Unsupported objective: median"):
                     record_submission_result(
                         competition="demo",

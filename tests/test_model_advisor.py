@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.agents.model_advisor import advise_model_candidates
+from research_agent.agents.model_advisor import advise_model_candidates
 
 
 class ModelAdvisorTest(unittest.TestCase):
@@ -29,7 +29,7 @@ class ModelAdvisorTest(unittest.TestCase):
             trial.mkdir(parents=True)
             (trial / "metrics.json").write_text(json.dumps({"cv_score": 0.72, "objective": "maximize"}), encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = advise_model_candidates("titanic", "trial_001")
 
             self.assertEqual(result["task_type"], "tabular")
@@ -71,7 +71,7 @@ class ModelAdvisorTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = advise_model_candidates("vision_demo", "trial_003")
 
             self.assertEqual(result["recommendation_scope"], "model_family_exploration")
@@ -95,7 +95,7 @@ class ModelAdvisorTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = advise_model_candidates("demo", "trial_001")
 
             self.assertEqual(result["recommendation_scope"], "defer_model_change")

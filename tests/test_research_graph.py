@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.graph.research_graph import run_graph_cycle
+from research_agent.graph.research_graph import run_graph_cycle
 
 
 class ResearchGraphTest(unittest.TestCase):
@@ -67,7 +67,7 @@ class ResearchGraphTest(unittest.TestCase):
             )
             (trial / "metrics.json").write_text(json.dumps({"cv_score": 0.72, "objective": "maximize"}), encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_graph_cycle("demo", "trial_001", create_job_request=False)
 
             self.assertEqual(result["status"], "completed")
@@ -107,7 +107,7 @@ class ResearchGraphTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_graph_cycle("demo", "trial_001", create_job_request=True)
 
             self.assertEqual(result["status"], "waiting_for_metrics")
@@ -142,7 +142,7 @@ class ResearchGraphTest(unittest.TestCase):
             response_path = root / "mock_response.json"
             self._write_mock_code_response(response_path)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_graph_cycle(
                     "demo",
                     "trial_002",

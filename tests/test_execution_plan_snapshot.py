@@ -5,14 +5,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.execution_plan_snapshot import (
+from research_agent.execution_plan_snapshot import (
     capture_pending_execution_plan,
     ensure_pending_execution_plan_snapshot,
     finalize_execution_plan_snapshot,
     load_execution_plan_snapshot,
 )
-from kaggle_research_agent.paths import trial_dir
-from kaggle_research_agent.store import write_text
+from research_agent.paths import trial_dir
+from research_agent.store import write_text
 
 
 class ExecutionPlanSnapshotTest(unittest.TestCase):
@@ -22,7 +22,7 @@ class ExecutionPlanSnapshotTest(unittest.TestCase):
             first_request = self._request("trial_001", "model_family", "Use RandomForest")
             revised_request = self._request("trial_003", "validation_review", "Use TimeSeriesSplit")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 capture_pending_execution_plan(
                     "demo",
                     "trial_006",
@@ -64,7 +64,7 @@ class ExecutionPlanSnapshotTest(unittest.TestCase):
             first_request = self._request("trial_001", "model_family", "Use RandomForest")
             replanned_request = self._request("trial_003", "validation_review", "Use TimeSeriesSplit")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 out_dir = trial_dir("demo", "trial_006")
                 write_text(out_dir / "workspace_coding_agent_request.md", first_request)
                 first = ensure_pending_execution_plan_snapshot(

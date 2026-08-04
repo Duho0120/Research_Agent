@@ -6,8 +6,8 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.cli import main
-from kaggle_research_agent.workspace_next_gate import plan_next_workspace_trial
+from research_agent.cli import main
+from research_agent.workspace_next_gate import plan_next_workspace_trial
 
 
 class WorkspaceNextGateTest(unittest.TestCase):
@@ -17,7 +17,7 @@ class WorkspaceNextGateTest(unittest.TestCase):
             self._write_state(root)
             self._write_source_trial(root, status="awaiting_human_review", urgent=False)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = plan_next_workspace_trial("demo", "trial_001", "trial_002")
 
             source = root / "experiments" / "demo" / "trial_001"
@@ -43,7 +43,7 @@ class WorkspaceNextGateTest(unittest.TestCase):
                 issues=["Metric definition is missing and blocks a valid next experiment."],
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = plan_next_workspace_trial("demo", "trial_001", "trial_002")
 
             source = root / "experiments" / "demo" / "trial_001"
@@ -59,7 +59,7 @@ class WorkspaceNextGateTest(unittest.TestCase):
             self._write_state(root)
             self._write_source_trial(root, status="completed", urgent=False, human_review_timing="no_review")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = plan_next_workspace_trial("demo", "trial_001", "trial_002")
 
             self.assertEqual("planned", result["status"])
@@ -107,7 +107,7 @@ class WorkspaceNextGateTest(unittest.TestCase):
                     + "\n"
                 )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = plan_next_workspace_trial("demo", "trial_005", "trial_006")
 
             context = json.loads(
@@ -184,7 +184,7 @@ class WorkspaceNextGateTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 plan_next_workspace_trial("demo", "trial_006", "trial_007")
 
             context = json.loads(
@@ -205,7 +205,7 @@ class WorkspaceNextGateTest(unittest.TestCase):
             trial = root / "experiments" / "demo" / "trial_001"
             trial.mkdir(parents=True)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = plan_next_workspace_trial("demo", "trial_001", "trial_002")
 
             self.assertEqual("blocked_missing_result_cycle", result["status"])
@@ -217,7 +217,7 @@ class WorkspaceNextGateTest(unittest.TestCase):
             self._write_state(root)
             self._write_source_trial(root, status="completed", urgent=False, human_review_timing="no_review")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(
                         [

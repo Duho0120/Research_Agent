@@ -1,0 +1,47 @@
+{
+  "schema_version": "1.0",
+  "plan_type": "delta_patch",
+  "trial_id": "trial_004",
+  "source_trial_id": "trial_003",
+  "primary_change_axis": "submission_schema_alignment",
+  "candidate": {
+    "name": "submission_schema_alignment: MergeToTemplate | EnforceOrder+Float6",
+    "description": "Write submission by merging predictions onto sample_submission to preserve id coverage/order and enforce exact columns [id,x,y,z] with 6-decimal floats.",
+    "implementation_hint": "In predict_step.py: in main(), after building preds DataFrame with columns ['id','x','y','z'], read template = _read_sample_submission(); out = template[['id']].merge(preds, on='id', how='left'); out = out[['id','x','y','z']]; for c in ['x','y','z']: out[c] = out[c].astype('float32'); out.to_csv(SUBMISSION_PATH, index=False, float_format='%.6f')"
+  },
+  "do_not_repeat": [
+    "submission_schema_alignment: Inference | Output | Predict | Update"
+  ],
+  "keep_unchanged": [
+    "data_split_cv",
+    "model_definition",
+    "preprocessing"
+  ],
+  "change_details": [
+    "Adjust predict_step.main to merge predictions with sample_submission for id alignment, enforce exact column order ['id','x','y','z'], cast to float32, and save CSV with float_format='%.6f' and no index."
+  ],
+  "code_change_targets": [
+    "predict_step.py"
+  ],
+  "affected_stages": [
+    "test_inference_output"
+  ],
+  "required_code_symbols": [
+    "predict_step.py: _read_sample_submission",
+    "predict_step.py: main"
+  ],
+  "expected_metadata_changes": [
+    "test_inference_output.postprocessing += ['merge_to_template','float_precision_6','enforce_column_order']"
+  ],
+  "success_criteria": [
+    "outputs/submission.csv has exactly columns id,x,y,z in order with all test ids",
+    "No LB schema errors; score loads successfully",
+    "Local R-Hit@1cm >= 0.591"
+  ],
+  "failure_decision": [
+    "If schema still misaligned or rows mismatch, revert this patch and next try writer in src/baseline.py to enforce order/format."
+  ],
+  "expected_outputs": [
+    "outputs/submission.csv"
+  ]
+}

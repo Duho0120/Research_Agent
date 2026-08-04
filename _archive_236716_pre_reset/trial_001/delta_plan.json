@@ -1,0 +1,27 @@
+{
+  "plan_type": "continuation_delta_plan",
+  "source_trial_id": "trial_001",
+  "primary_change_axis": null,
+  "candidate": null,
+  "change_details": null,
+  "keep_unchanged": null,
+  "code_change_targets": null,
+  "affected_stages": [
+    "training",
+    "evaluation"
+  ],
+  "required_code_symbols": [
+    "build_pipeline",
+    "train_validate"
+  ],
+  "expected_metadata_changes": [
+    "trial_id",
+    "source_trial_id",
+    "model",
+    "features",
+    "split"
+  ],
+  "success_criteria": null,
+  "failure_decision": null,
+  "schema_version": "1.0"
+}

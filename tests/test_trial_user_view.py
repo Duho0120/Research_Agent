@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.trial_user_view import write_proposed_plan_preview
+from research_agent.trial_user_view import write_proposed_plan_preview
 
 
 class WriteProposedPlanPreviewTest(unittest.TestCase):
@@ -26,7 +26,7 @@ class WriteProposedPlanPreviewTest(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 preview_path = write_proposed_plan_preview(
                     "demo", "trial_013", plan, metric="rmsle", objective="minimize"
                 )
@@ -45,19 +45,19 @@ class WriteProposedPlanPreviewTest(unittest.TestCase):
         # whatever render_user_view_files returns to that same path, so once
         # the trial actually runs, the preview is naturally replaced with the
         # ground-truth version -- no staleness.
-        from kaggle_research_agent.store import write_text
-        from kaggle_research_agent.trial_user_view import render_user_view_files
+        from research_agent.store import write_text
+        from research_agent.trial_user_view import render_user_view_files
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 preview_path = write_proposed_plan_preview(
                     "demo",
                     "trial_013",
                     {"plan_title": "proposed", "primary_change_axis": "feature_engineering"},
                 )
                 with patch(
-                    "kaggle_research_agent.plan_translation.render_effective_user_plan",
+                    "research_agent.plan_translation.render_effective_user_plan",
                     return_value="# effective content",
                 ):
                     files = render_user_view_files(

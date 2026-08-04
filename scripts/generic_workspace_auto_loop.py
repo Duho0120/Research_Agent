@@ -13,37 +13,37 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from kaggle_research_agent.agents.memory import log_decision  # noqa: E402
-from kaggle_research_agent.agents.submission import submit_trial  # noqa: E402
-from kaggle_research_agent.cli_app import (  # noqa: E402
+from research_agent.agents.memory import log_decision  # noqa: E402
+from research_agent.agents.submission import submit_trial  # noqa: E402
+from research_agent.cli_app import (  # noqa: E402
     check_dacon_submission_limit,
     dacon_auto_submit_allowed,
 )
-from kaggle_research_agent.demo_one_cycle import prepare_workspace_trial_plan  # noqa: E402
-from kaggle_research_agent.execution_profile import load_execution_profile, validate_execution_profile  # noqa: E402
-from kaggle_research_agent.graph.workspace_loop_graph import (  # noqa: E402
+from research_agent.demo_one_cycle import prepare_workspace_trial_plan  # noqa: E402
+from research_agent.execution_profile import load_execution_profile, validate_execution_profile  # noqa: E402
+from research_agent.graph.workspace_loop_graph import (  # noqa: E402
     WorkspaceLoopCallbacks,
     resume_workspace_loop_graph,
     run_workspace_loop_graph,
     workspace_loop_checkpointer,
     workspace_loop_thread_has_pending_work,
 )
-from kaggle_research_agent.paths import trial_dir  # noqa: E402
-from kaggle_research_agent.state_db import list_pending_actions  # noqa: E402
-from kaggle_research_agent.state_db_sync import sync_state_db  # noqa: E402
-from kaggle_research_agent.store import load_state, write_text  # noqa: E402
-from kaggle_research_agent.trial_artifacts import (  # noqa: E402
+from research_agent.paths import trial_dir  # noqa: E402
+from research_agent.state_db import list_pending_actions  # noqa: E402
+from research_agent.state_db_sync import sync_state_db  # noqa: E402
+from research_agent.store import load_state, write_text  # noqa: E402
+from research_agent.trial_artifacts import (  # noqa: E402
     organize_trial_artifacts,
     reconcile_trial_execution_metadata,
     trial_artifact_path,
 )
-from kaggle_research_agent.workspace_after_coding import run_workspace_after_coding  # noqa: E402
-from kaggle_research_agent.workspace_code_writer import run_workspace_code_writer  # noqa: E402
-from kaggle_research_agent.runtime_contract import (  # noqa: E402
+from research_agent.workspace_after_coding import run_workspace_after_coding  # noqa: E402
+from research_agent.workspace_code_writer import run_workspace_code_writer  # noqa: E402
+from research_agent.runtime_contract import (  # noqa: E402
     evaluate_predict_sensitivity,
     run_predict_sensitivity_probe,
 )
-from kaggle_research_agent.workspace_coding_handoff import (  # noqa: E402
+from research_agent.workspace_coding_handoff import (  # noqa: E402
     DATA_LOADER_INIT_TRIAL_ID,
     HARNESS_INIT_TRIAL_ID,
     _competition_data_dir,
@@ -51,11 +51,11 @@ from kaggle_research_agent.workspace_coding_handoff import (  # noqa: E402
     generate_scoring_harness,
     prepare_workspace_coding_handoff,
 )
-from kaggle_research_agent.workspace_metrics_collector import collect_workspace_metrics  # noqa: E402
-from kaggle_research_agent.workspace_next_gate import plan_next_workspace_trial  # noqa: E402
-from kaggle_research_agent.workspace_result_cycle import process_workspace_result  # noqa: E402
-from kaggle_research_agent.workspace_runner import run_workspace_pipeline  # noqa: E402
-from kaggle_research_agent.user_insight_policy import (  # noqa: E402
+from research_agent.workspace_metrics_collector import collect_workspace_metrics  # noqa: E402
+from research_agent.workspace_next_gate import plan_next_workspace_trial  # noqa: E402
+from research_agent.workspace_result_cycle import process_workspace_result  # noqa: E402
+from research_agent.workspace_runner import run_workspace_pipeline  # noqa: E402
+from research_agent.user_insight_policy import (  # noqa: E402
     build_next_trial_user_insight_override,
     latest_user_insight_record,
 )

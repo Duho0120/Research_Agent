@@ -4,8 +4,8 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from kaggle_research_agent.cli import main
-from kaggle_research_agent.state_db import (
+from research_agent.cli import main
+from research_agent.state_db import (
     initialize_state_db,
     record_token_usage,
     upsert_competition,
@@ -15,7 +15,7 @@ from kaggle_research_agent.state_db import (
     upsert_trial_decision,
     upsert_trial_score,
 )
-from kaggle_research_agent.state_query import (
+from research_agent.state_query import (
     get_experiment_status,
     get_trial_detail,
     list_experiment_statuses,

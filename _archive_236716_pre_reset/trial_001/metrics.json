@@ -1,0 +1,44 @@
+{
+  "metric": "R-Hit@1cm",
+  "objective": "maximize",
+  "validation_method": "random_holdout_by_id",
+  "validation_size": 0.1,
+  "random_seed": 42,
+  "R-Hit@1cm": 0.591,
+  "n_ids": 1000,
+  "total_pairs": 1000,
+  "model_type": "RuleBasedConstantVelocity",
+  "horizon_s": 0.08,
+  "final_features": [
+    "x",
+    "y",
+    "z"
+  ],
+  "time_candidates": [
+    "timestep_ms",
+    "timestamp_ms",
+    "time",
+    "t"
+  ],
+  "competition": "236716",
+  "trial": "trial_001",
+  "trial_id": "trial_001",
+  "base_trial": "trial_001",
+  "change_axis": null,
+  "cv_score": 0.591,
+  "source_metrics_path": "C:\\Users\\ASUS\\Desktop\\Research_Agent\\demo_workspaces\\236716\\outputs\\metrics.json",
+  "pipeline_summary": {
+    "competition": "236716",
+    "trial": "trial_001",
+    "trial_id": "trial_001",
+    "base_trial": "trial_001",
+    "change_axis": null
+  },
+  "lb_score": 0.6006,
+  "submitted_lb_score": 0.6006,
+  "submitted_rank": null,
+  "submission_file": "demo_workspaces/236716/outputs/submission.csv",
+  "submission_status": "submitted",
+  "is_best_submission": true,
+  "source_trial_id": "trial_001"
+}

@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.agents.review_pack import prepare_review_pack
+from research_agent.agents.review_pack import prepare_review_pack
 
 
 class ReviewPackTest(unittest.TestCase):
@@ -26,7 +26,7 @@ class ReviewPackTest(unittest.TestCase):
                 "strategy_recommendation": "continue_refinement",
             }
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_review_pack("demo", "trial_001", diagnosis)
 
             pack = trial / "review_pack"
@@ -58,7 +58,7 @@ class ReviewPackTest(unittest.TestCase):
                 "needs_user_review": True,
             }
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_review_pack("demo", "trial_002", diagnosis)
 
             card = result["decision_support"]
@@ -83,7 +83,7 @@ class ReviewPackTest(unittest.TestCase):
                 "needs_user_review": True,
             }
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_review_pack("demo", "trial_003", diagnosis)
 
             card = result["decision_support"]
@@ -117,7 +117,7 @@ class ReviewPackTest(unittest.TestCase):
                 "needs_user_review": True,
             }
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_review_pack("demo", "trial_004", diagnosis)
 
             card = result["decision_support"]

@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from kaggle_research_agent.runtime_contract import (
+from research_agent.runtime_contract import (
     evaluate_loader_contract,
     run_sample_loading_probe,
 )
@@ -127,7 +127,7 @@ class ScoringSensitivityTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self._workspace(root, harness_body)
-            from kaggle_research_agent.runtime_contract import run_scoring_perturbation_probe
+            from research_agent.runtime_contract import run_scoring_perturbation_probe
 
             return run_scoring_perturbation_probe(
                 root,
@@ -140,7 +140,7 @@ class ScoringSensitivityTest(unittest.TestCase):
             )
 
     def test_a_real_scorer_moves_when_predictions_are_wrecked(self):
-        from kaggle_research_agent.runtime_contract import evaluate_scoring_sensitivity
+        from research_agent.runtime_contract import evaluate_scoring_sensitivity
 
         results = self._run(
             "import json\n"
@@ -155,7 +155,7 @@ class ScoringSensitivityTest(unittest.TestCase):
         self.assertEqual([], evaluate_scoring_sensitivity(results))
 
     def test_hardcoded_score_is_caught(self):
-        from kaggle_research_agent.runtime_contract import evaluate_scoring_sensitivity
+        from research_agent.runtime_contract import evaluate_scoring_sensitivity
 
         results = self._run(
             "import json\n"
@@ -168,7 +168,7 @@ class ScoringSensitivityTest(unittest.TestCase):
         )
 
     def test_format_only_harness_is_caught(self):
-        from kaggle_research_agent.runtime_contract import evaluate_scoring_sensitivity
+        from research_agent.runtime_contract import evaluate_scoring_sensitivity
 
         # Mirrors the real one: it calls predict, counts rows, and reports a
         # constant -- busy-looking, but blind to prediction quality.
@@ -185,7 +185,7 @@ class ScoringSensitivityTest(unittest.TestCase):
         )
 
     def test_missing_score_key_is_reported(self):
-        from kaggle_research_agent.runtime_contract import evaluate_scoring_sensitivity
+        from research_agent.runtime_contract import evaluate_scoring_sensitivity
 
         results = self._run(
             "import json\n"

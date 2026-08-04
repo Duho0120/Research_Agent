@@ -5,14 +5,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.demo_guide import (
+from research_agent.demo_guide import (
     inspect_competition_url,
     list_demo_experiments,
     render_demo_experiment_status,
     run_demo_guide,
     summarize_demo_experiment,
 )
-from kaggle_research_agent.workspace_preparer import prepare_workspace
+from research_agent.workspace_preparer import prepare_workspace
 
 
 class DemoGuideTest(unittest.TestCase):
@@ -31,7 +31,7 @@ class DemoGuideTest(unittest.TestCase):
         self.assertIn("종료합니다.", text)
 
     def test_url_inspection_infers_kaggle_slug_even_when_dynamic_page_is_unreadable(self):
-        with patch("kaggle_research_agent.demo_guide._fetch_url_text", return_value="<html><title>Titanic</title></html>"):
+        with patch("research_agent.demo_guide._fetch_url_text", return_value="<html><title>Titanic</title></html>"):
             result = inspect_competition_url("https://www.kaggle.com/competitions/titanic/overview")
 
         self.assertEqual("unreadable", result["status"])
@@ -79,8 +79,8 @@ class DemoGuideTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.demo_guide._fetch_url_text", return_value="<html><title>Titanic</title></html>"):
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.demo_guide._fetch_url_text", return_value="<html><title>Titanic</title></html>"):
                     with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}):
                         code = run_demo_guide(
                             input_fn=lambda prompt: next(inputs),
@@ -121,7 +121,7 @@ class DemoGuideTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 prepare_workspace(
                     "titanic",
                     topic="Titanic survival prediction",
@@ -147,7 +147,7 @@ class DemoGuideTest(unittest.TestCase):
     def test_demo_experiment_summary_detects_missing_and_found_data(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 prepare_workspace(
                     "titanic",
                     topic="Titanic survival prediction",

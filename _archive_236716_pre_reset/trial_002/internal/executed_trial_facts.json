@@ -1,0 +1,47 @@
+{
+  "schema_version": "1.0",
+  "competition": "236716",
+  "trial_id": "trial_002",
+  "source_trial_id": "trial_001",
+  "plan_type": "continuation_delta_plan",
+  "primary_change_axis": "controlled_refinement",
+  "candidate": {},
+  "change_details": [
+    "Make one controlled improvement based on the latest diagnosis.",
+    "Keep model family and validation fixed for attribution."
+  ],
+  "keep_unchanged": [],
+  "model": {
+    "estimator": "RuleBasedConstantVelocity",
+    "parameters": {},
+    "pretrained": false,
+    "pipeline_container": null
+  },
+  "preprocessing": {},
+  "validation": {
+    "method": "random_holdout_by_id",
+    "test_size": 0.1,
+    "random_state": 42,
+    "stratify": false
+  },
+  "features": {},
+  "submission": {
+    "submission_path": "outputs/submission.csv",
+    "id_column": "id",
+    "prediction_column": "x,y,z",
+    "postprocessing": []
+  },
+  "scores": {
+    "metric": "R-Hit@1cm",
+    "objective": "maximize",
+    "local": 0.591,
+    "submission": 0.3876,
+    "rank": null
+  },
+  "consistency_issues": [],
+  "sources": {
+    "plan": "next_experiment.json,internal/effective_plan.json:current_delta,delta_plan.json",
+    "model": "internal/pipeline_structure.json:model_definition",
+    "scores": "metrics.json+submission_log"
+  }
+}

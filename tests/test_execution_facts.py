@@ -6,9 +6,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.execution_facts import resolve_trial_plan, write_executed_trial_facts
-from kaggle_research_agent.trial_decision import write_trial_decision_card
-from kaggle_research_agent.trial_memory_card import write_trial_memory_card
+from research_agent.execution_facts import resolve_trial_plan, write_executed_trial_facts
+from research_agent.trial_decision import write_trial_decision_card
+from research_agent.trial_memory_card import write_trial_memory_card
 
 
 class ExecutionFactsTest(unittest.TestCase):
@@ -60,7 +60,7 @@ class ExecutionFactsTest(unittest.TestCase):
                 "metrics": stale_metrics,
             }
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 facts = write_executed_trial_facts(
                     "demo",
                     "trial_002",
@@ -93,7 +93,7 @@ class ExecutionFactsTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 plan = resolve_trial_plan("demo", "trial_002")
 
             self.assertEqual("trial_001", plan["source_trial_id"])
@@ -150,7 +150,7 @@ class ExecutionFactsTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 plan = resolve_trial_plan("demo", "trial_005")
 
             self.assertEqual("trial_004", plan["source_trial_id"])
@@ -201,7 +201,7 @@ class ExecutionFactsTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 plan = resolve_trial_plan("demo", "trial_006")
 
             self.assertEqual("trial_003", plan["source_trial_id"])
@@ -254,7 +254,7 @@ class ExecutionFactsTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 plan = resolve_trial_plan("demo", "trial_002")
 
             self.assertEqual("hyperparameter_tuning", plan["primary_change_axis"])

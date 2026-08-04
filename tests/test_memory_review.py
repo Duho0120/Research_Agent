@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.agents.memory import log_token_usage, normalize_token_usage, record_user_feedback, request_user_review
+from research_agent.agents.memory import log_token_usage, normalize_token_usage, record_user_feedback, request_user_review
 
 
 class MemoryReviewTest(unittest.TestCase):
@@ -22,7 +22,7 @@ class MemoryReviewTest(unittest.TestCase):
                 "improvement_candidates": ["Try a model-family change."],
             }
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 path = request_user_review("demo", "trial_001", diagnosis)
 
             self.assertTrue(path.exists())
@@ -33,7 +33,7 @@ class MemoryReviewTest(unittest.TestCase):
     def test_record_user_feedback_appends_jsonl(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 row = record_user_feedback(
                     "demo",
                     "trial_001",
@@ -68,7 +68,7 @@ class MemoryReviewTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 record_user_feedback(
                     "demo",
                     "trial_001",
@@ -90,7 +90,7 @@ class MemoryReviewTest(unittest.TestCase):
     def test_log_token_usage_appends_normalized_jsonl(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 row = log_token_usage(
                     "demo",
                     "trial_001",

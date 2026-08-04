@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.chat_history import (
+from research_agent.chat_history import (
     answer_chat_question,
     chat_history_snapshot,
     start_new_chat,
@@ -23,7 +23,7 @@ class ChatHistoryTest(unittest.TestCase):
                 "interaction": {"access": "read_only"},
             }
             with patch(
-                "kaggle_research_agent.chat_history.answer_experiment_question",
+                "research_agent.chat_history.answer_experiment_question",
                 return_value=result_payload,
             ) as answer:
                 result = answer_chat_question(
@@ -46,7 +46,7 @@ class ChatHistoryTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "state.sqlite3"
             with patch(
-                "kaggle_research_agent.chat_history.answer_experiment_question",
+                "research_agent.chat_history.answer_experiment_question",
                 return_value={
                     "answer": "답변",
                     "mode": "local_evidence",
@@ -76,7 +76,7 @@ class ChatHistoryTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "state.sqlite3"
             with patch(
-                "kaggle_research_agent.chat_history.answer_experiment_question",
+                "research_agent.chat_history.answer_experiment_question",
                 return_value={
                     "answer": "답변",
                     "mode": "local_evidence",

@@ -3,11 +3,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.feedback_policy import (
+from research_agent.feedback_policy import (
     create_feedback_request,
     evaluate_feedback_policy,
 )
-from kaggle_research_agent.state_db import list_pending_actions, list_review_evidence
+from research_agent.state_db import list_pending_actions, list_review_evidence
 
 
 class FeedbackPolicyTest(unittest.TestCase):
@@ -60,7 +60,7 @@ class FeedbackPolicyTest(unittest.TestCase):
 
             self.assertEqual("request_now", decision["action"])
             self.assertGreaterEqual(decision["score"], decision["score_threshold"])
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 action = create_feedback_request(
                     "demo",
                     "trial_003",

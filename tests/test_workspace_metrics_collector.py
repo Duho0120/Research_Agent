@@ -5,9 +5,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent import simple_yaml
-from kaggle_research_agent.cli import main
-from kaggle_research_agent.workspace_metrics_collector import collect_workspace_metrics
+from research_agent import simple_yaml
+from research_agent.cli import main
+from research_agent.workspace_metrics_collector import collect_workspace_metrics
 
 
 class WorkspaceMetricsCollectorTest(unittest.TestCase):
@@ -26,7 +26,7 @@ class WorkspaceMetricsCollectorTest(unittest.TestCase):
             original = source.read_text(encoding="utf-8")
             self._write_workspace(root, project, "trial_001", status="completed")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = collect_workspace_metrics("demo", "trial_001")
 
             self.assertEqual("collected", result["status"])
@@ -58,7 +58,7 @@ class WorkspaceMetricsCollectorTest(unittest.TestCase):
                 metrics_contract={"source_key": "validation.macro_f1"},
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = collect_workspace_metrics("demo", "trial_002")
 
             self.assertEqual("collected", result["status"])
@@ -94,7 +94,7 @@ class WorkspaceMetricsCollectorTest(unittest.TestCase):
                 metrics_contract={"source_key": "cv_mean_accuracy"},
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = collect_workspace_metrics("demo", "trial_003")
 
             self.assertEqual("collected", result["status"])
@@ -116,7 +116,7 @@ class WorkspaceMetricsCollectorTest(unittest.TestCase):
             )
             self._write_workspace(root, project, "trial_validation_metric", status="completed")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = collect_workspace_metrics("demo", "trial_validation_metric")
 
             self.assertEqual("collected", result["status"])
@@ -140,7 +140,7 @@ class WorkspaceMetricsCollectorTest(unittest.TestCase):
             )
             self._write_workspace(root, project, "trial_direct_metric", status="completed")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = collect_workspace_metrics("demo", "trial_direct_metric")
 
             self.assertEqual("collected", result["status"])
@@ -164,7 +164,7 @@ class WorkspaceMetricsCollectorTest(unittest.TestCase):
             )
             self._write_workspace(root, project, "trial_metric_value", status="completed")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = collect_workspace_metrics("demo", "trial_metric_value")
 
             self.assertEqual("collected", result["status"])
@@ -185,7 +185,7 @@ class WorkspaceMetricsCollectorTest(unittest.TestCase):
             )
             self._write_workspace(root, project, "trial_mismatched_metric_value", status="completed")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = collect_workspace_metrics("demo", "trial_mismatched_metric_value")
 
             self.assertEqual("needs_review", result["status"])
@@ -202,7 +202,7 @@ class WorkspaceMetricsCollectorTest(unittest.TestCase):
             source.write_text(json.dumps({"score": 0.91}), encoding="utf-8")
             self._write_workspace(root, project, "trial_003", status="completed")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = collect_workspace_metrics("demo", "trial_003")
 
             self.assertEqual("needs_review", result["status"])
@@ -221,7 +221,7 @@ class WorkspaceMetricsCollectorTest(unittest.TestCase):
             source.write_text("not-json", encoding="utf-8")
             self._write_workspace(root, project, "trial_004", status="completed")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = collect_workspace_metrics("demo", "trial_004")
 
             self.assertEqual("blocked", result["status"])
@@ -239,7 +239,7 @@ class WorkspaceMetricsCollectorTest(unittest.TestCase):
             source.write_text(json.dumps({"cv_score": 0.5}), encoding="utf-8")
             self._write_workspace(root, project, "trial_005", status="failed")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = collect_workspace_metrics("demo", "trial_005")
 
             self.assertEqual("blocked", result["status"])
@@ -256,7 +256,7 @@ class WorkspaceMetricsCollectorTest(unittest.TestCase):
             workspace_run = root / "experiments" / "demo" / "trial_007" / "workspace_run.json"
             workspace_run.write_text("[]", encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = collect_workspace_metrics("demo", "trial_007")
 
             self.assertEqual("blocked", result["status"])
@@ -273,7 +273,7 @@ class WorkspaceMetricsCollectorTest(unittest.TestCase):
             source.write_text(json.dumps({"cv_score": 0.72}), encoding="utf-8")
             self._write_workspace(root, project, "trial_006", status="completed")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 code = main(
                     [
                         "collect-workspace-metrics",
@@ -308,7 +308,7 @@ class WorkspaceMetricsCollectorTest(unittest.TestCase):
                     )
                     self._write_workspace(root, project, "trial_001", status="completed", metric="R-Hit@1cm")
 
-                    with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                    with patch("research_agent.paths.project_root", return_value=root):
                         result = collect_workspace_metrics("demo", "trial_001")
 
                     self.assertEqual("collected", result["status"])
@@ -331,7 +331,7 @@ class WorkspaceMetricsCollectorTest(unittest.TestCase):
             )
             self._write_workspace(root, project, "trial_001", status="completed", metric="R-Hit@1cm")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = collect_workspace_metrics("demo", "trial_001")
 
             self.assertEqual("collected", result["status"])
@@ -355,7 +355,7 @@ class WorkspaceMetricsCollectorTest(unittest.TestCase):
                 metrics_contract={"source_key": "r_hit_at_1cm"},
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = collect_workspace_metrics("demo", "trial_001")
 
             self.assertEqual("collected", result["status"])

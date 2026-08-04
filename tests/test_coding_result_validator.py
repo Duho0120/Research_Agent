@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.agents.coding_result_validator import (
+from research_agent.agents.coding_result_validator import (
     create_dry_run_coding_result,
     validate_coding_result,
 )
@@ -32,7 +32,7 @@ class CodingResultValidatorTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_coding_result("demo", "trial_002")
 
             self.assertEqual(result["status"], "accepted")
@@ -67,7 +67,7 @@ class CodingResultValidatorTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_coding_result("demo", "trial_002")
 
             self.assertEqual("accepted", result["status"])
@@ -95,7 +95,7 @@ class CodingResultValidatorTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_coding_result("demo", "trial_002")
 
             self.assertEqual(result["status"], "blocked")
@@ -113,7 +113,7 @@ class CodingResultValidatorTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_coding_result("demo", "trial_002")
 
             self.assertEqual(result["status"], "blocked")
@@ -146,7 +146,7 @@ class CodingResultValidatorTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_coding_result("demo", "trial_002")
 
             self.assertEqual(result["status"], "blocked")
@@ -160,7 +160,7 @@ class CodingResultValidatorTest(unittest.TestCase):
             trial.mkdir(parents=True)
             self._write_handoff(trial)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = create_dry_run_coding_result("demo", "trial_002")
 
             self.assertEqual(result["status"], "blocked")

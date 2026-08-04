@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.agents.pipeline_planner import plan_pipeline_improvement
+from research_agent.agents.pipeline_planner import plan_pipeline_improvement
 
 
 class PipelinePlannerTest(unittest.TestCase):
@@ -36,7 +36,7 @@ class PipelinePlannerTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 plan = plan_pipeline_improvement("demo", "trial_001")
 
             self.assertEqual(plan["primary_axis"], "validation")
@@ -67,7 +67,7 @@ class PipelinePlannerTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 plan = plan_pipeline_improvement("demo", "trial_001")
 
             self.assertEqual(plan["primary_axis"], "error_analysis")
@@ -96,7 +96,7 @@ class PipelinePlannerTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 plan = plan_pipeline_improvement("demo", "trial_004")
 
             self.assertEqual(plan["primary_axis"], "model_family")
@@ -132,7 +132,7 @@ class PipelinePlannerTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 plan = plan_pipeline_improvement("demo", "trial_001")
 
             self.assertEqual(plan["evidence_used"]["lb_score"], 0.77511)

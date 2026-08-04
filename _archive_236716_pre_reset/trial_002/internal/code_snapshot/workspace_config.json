@@ -1,0 +1,15 @@
+{
+  "competition": "236716",
+  "platform": "dacon",
+  "topic": "모기 비행 궤적 예측",
+  "metric": "R-Hit@1cm",
+  "objective": "maximize",
+  "target_column": null,
+  "id_column": null,
+  "required_data_files": [
+    "train_labels.csv",
+    "sample_submission.csv"
+  ],
+  "data_dir": "data",
+  "outputs_dir": "outputs"
+}

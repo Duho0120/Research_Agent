@@ -4,14 +4,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.agents.memory import log_decision
+from research_agent.agents.memory import log_decision
 
 
 class DecisionLoggerTest(unittest.TestCase):
     def test_log_decision_appends_competition_scoped_jsonl(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 row = log_decision(
                     "demo",
                     "trial_010",

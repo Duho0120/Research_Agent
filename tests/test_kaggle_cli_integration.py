@@ -1,7 +1,7 @@
 import unittest
 from pathlib import Path
 
-from kaggle_research_agent.integrations import kaggle_cli
+from research_agent.integrations import kaggle_cli
 
 
 class KaggleCliIntegrationTest(unittest.TestCase):

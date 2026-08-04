@@ -1,0 +1,985 @@
+{
+  "competition": "236716",
+  "trial_id": "trial_004",
+  "plan_type": "continuation_delta_plan",
+  "source_trial_id": "trial_003",
+  "base_summary": {
+    "schema_version": "1.0",
+    "competition": "236716",
+    "base_trial_id": "trial_003",
+    "scores": {
+      "local": 0.591,
+      "submit": 0.6006
+    },
+    "plan": {
+      "type": "continuation_delta_plan",
+      "title": "Rollback to trial_001 and align submission schema to id,x,y,z",
+      "change_axis": "submission_schema_alignment"
+    },
+    "pipeline": {
+      "metric": "R-Hit@1cm",
+      "objective": "maximize",
+      "stages": [
+        {
+          "id": "imports_setup",
+          "actual_applied": [
+            "사용 라이브러리/도구: pathlib.Path.",
+            "workspace 기준 경로 상수 CONFIG_PATH, DATA_DIR, MODEL_PATH, SUBMISSION_PATH를 정의합니다."
+          ],
+          "structured_details": {},
+          "code_locations": [
+            "src/baseline.py",
+            "train_step.py",
+            "predict_step.py",
+            "test_step.py"
+          ]
+        },
+        {
+          "id": "data_load",
+          "actual_applied": [
+            "`pd.read_csv`로 train_labels.csv, sample_submission.csv를 읽습니다.",
+            "학습 타깃은 `x,y,z`, 제출 ID는 `id`로 사용합니다."
+          ],
+          "structured_details": {
+            "required_files": [
+              "train_labels.csv",
+              "sample_submission.csv"
+            ],
+            "target_column": "x,y,z",
+            "id_column": "id",
+            "loader": "pandas.read_csv"
+          },
+          "code_locations": [
+            "src/baseline.py",
+            "train_step.py",
+            "predict_step.py",
+            "test_step.py",
+            "workspace_config.json"
+          ]
+        },
+        {
+          "id": "preprocessing",
+          "actual_applied": [],
+          "structured_details": {},
+          "code_locations": [
+            "train_step.py"
+          ]
+        },
+        {
+          "id": "data_split_cv",
+          "actual_applied": [
+            "`metrics.json` 기준 검증 방식은 `random_holdout_by_id`입니다."
+          ],
+          "structured_details": {
+            "method": "random_holdout_by_id",
+            "test_size": 0.1,
+            "random_state": 42,
+            "stratify": false
+          },
+          "code_locations": [
+            "src/baseline.py",
+            "train_step.py",
+            "predict_step.py",
+            "test_step.py"
+          ]
+        },
+        {
+          "id": "feature_representation",
+          "actual_applied": [],
+          "structured_details": {},
+          "code_locations": [
+            "train_step.py",
+            "test_step.py"
+          ]
+        },
+        {
+          "id": "model_definition",
+          "actual_applied": [
+            "모델 family는 `RuleBasedConstantVelocity`입니다."
+          ],
+          "structured_details": {
+            "estimator": "RuleBasedConstantVelocity",
+            "parameters": {},
+            "pretrained": false,
+            "pipeline_container": null
+          },
+          "code_locations": [
+            "src/baseline.py",
+            "test_step.py"
+          ]
+        },
+        {
+          "id": "loss_objective",
+          "actual_applied": [
+            "평가 지표는 `R-Hit@1cm`이며 목표 방향은 `maximize`입니다.",
+            "명시적 loss 구현 대신 `RuleBasedConstantVelocity`의 내부 학습 목적을 사용합니다."
+          ],
+          "structured_details": {
+            "metric": "R-Hit@1cm",
+            "objective": "maximize",
+            "explicit_loss": null,
+            "library_objective": "RuleBasedConstantVelocity"
+          },
+          "code_locations": [
+            "src/baseline.py",
+            "test_step.py",
+            "workspace_config.json"
+          ]
+        },
+        {
+          "id": "training",
+          "actual_applied": [],
+          "structured_details": {
+            "fit_detected": false,
+            "checkpoint_path": null,
+            "train_rows": null,
+            "validation_rows": null
+          },
+          "code_locations": [
+            "src/baseline.py",
+            "train_step.py",
+            "test_step.py",
+            "workspace_config.json"
+          ]
+        },
+        {
+          "id": "evaluation",
+          "actual_applied": [
+            "`cv_score`는 0.591입니다."
+          ],
+          "structured_details": {
+            "score_source": "R-Hit@1cm",
+            "cv_score": 0.591,
+            "validation_accuracy": null,
+            "fold_scores": null
+          },
+          "code_locations": [
+            "src/baseline.py",
+            "test_step.py"
+          ]
+        },
+        {
+          "id": "test_inference_output",
+          "actual_applied": [
+            "`outputs/submission.csv`를 생성합니다.",
+            "제출 파일은 `id`, `x`, `y`, `z` 컬럼을 사용합니다."
+          ],
+          "structured_details": {
+            "submission_path": "outputs/submission.csv",
+            "id_column": "id",
+            "prediction_column": "x,y,z",
+            "postprocessing": []
+          },
+          "code_locations": [
+            "src/baseline.py",
+            "train_step.py",
+            "predict_step.py",
+            "test_step.py",
+            "workspace_config.json"
+          ]
+        }
+      ]
+    },
+    "decision": {
+      "recommended_base_trial": "trial_001",
+      "active_axis": "submission_schema_alignment",
+      "axis_attempt_count": 1,
+      "axis_attempt_limit": 3,
+      "rejected_axes": [
+        "controlled_refinement"
+      ],
+      "rejected_candidates": [
+        "controlled_refinement: controlled_refinement",
+        "submission_schema_alignment: Inference | Output | Predict | Update"
+      ]
+    },
+    "code": {
+      "symbols": {
+        "src/baseline.py": [
+          "load_config",
+          "check_required_data",
+          "_to_float",
+          "_task_kind",
+          "_regression_score",
+          "train",
+          "predict",
+          "_find_train_file",
+          "_find_test_file",
+          "_read_csv",
+          "_first_column"
+        ],
+        "train_step.py": [
+          "_detect_time_column",
+          "_peek_first_train_file",
+          "_read_header",
+          "main"
+        ],
+        "predict_step.py": [
+          "_read_sample_submission",
+          "_build_file_map",
+          "_detect_time_column",
+          "_to_float",
+          "_read_series",
+          "_predict_last_cv",
+          "main"
+        ],
+        "test_step.py": [
+          "_detect_time_column",
+          "_to_float",
+          "_read_series",
+          "_predict_from_pair",
+          "_euclid",
+          "main"
+        ]
+      }
+    }
+  },
+  "status": "ready",
+  "issues": [],
+  "metric": "R-Hit@1cm",
+  "objective": "maximize",
+  "platform": "dacon",
+  "project_root": "C:\\Users\\ASUS\\Desktop\\Research_Agent\\demo_workspaces\\236716",
+  "commands": {
+    "test": [
+      "{python} test_step.py"
+    ],
+    "train": [
+      "{python} train_step.py"
+    ],
+    "predict": [
+      "{python} predict_step.py"
+    ]
+  },
+  "artifacts": {
+    "metrics": [
+      "outputs/metrics.json"
+    ],
+    "submission": [
+      "outputs/submission.csv"
+    ]
+  },
+  "write_scope": {
+    "allowed": [
+      "src/",
+      "tests/",
+      "train_step.py",
+      "predict_step.py",
+      "test_step.py",
+      "workspace_config.json"
+    ],
+    "forbidden": [
+      "data/",
+      "outputs/metrics.json",
+      "outputs/submission.csv"
+    ]
+  },
+  "metrics_contract": {},
+  "artifact_policy": {
+    "save_submission": true,
+    "save_metrics": true,
+    "save_code_snapshot": true,
+    "save_pipeline_summary": true,
+    "save_model": {
+      "default": false,
+      "allowed_when": [
+        "required_for_separate_predict_command",
+        "best_trial",
+        "submitted_trial",
+        "expensive_to_retrain",
+        "ensemble_candidate",
+        "user_requested"
+      ],
+      "require_reason": true,
+      "prefer_small_serialized_artifact": true,
+      "cleanup_non_best_models": true
+    },
+    "notes": [
+      "A trial should not persist trained model artifacts by default.",
+      "Submission, metrics, code snapshot, and pipeline summary are the primary memory artifacts.",
+      "If a model artifact is persisted, the plan/code should record why it is needed."
+    ]
+  },
+  "inventory_summary": {
+    "file_count": 500,
+    "truncated": true,
+    "data_files": [
+      "data/train_labels.csv",
+      "data/train/TRAIN_00001.csv",
+      "data/train/TRAIN_00002.csv",
+      "data/train/TRAIN_00003.csv",
+      "data/train/TRAIN_00004.csv",
+      "data/train/TRAIN_00005.csv",
+      "data/train/TRAIN_00006.csv",
+      "data/train/TRAIN_00007.csv",
+      "data/train/TRAIN_00008.csv",
+      "data/train/TRAIN_00009.csv",
+      "data/train/TRAIN_00010.csv",
+      "data/train/TRAIN_00011.csv",
+      "data/train/TRAIN_00012.csv",
+      "data/train/TRAIN_00013.csv",
+      "data/train/TRAIN_00014.csv",
+      "data/train/TRAIN_00015.csv",
+      "data/train/TRAIN_00016.csv",
+      "data/train/TRAIN_00017.csv",
+      "data/train/TRAIN_00018.csv",
+      "data/train/TRAIN_00019.csv"
+    ],
+    "code_files": [
+      "predict_step.py",
+      "test_step.py",
+      "train_step.py",
+      "src/__init__.py",
+      "src/baseline.py"
+    ]
+  },
+  "data_profile": {
+    "schema_version": "1.0",
+    "competition": "236716",
+    "status": "ready",
+    "project_root": "C:\\Users\\ASUS\\Desktop\\Research_Agent\\demo_workspaces\\236716",
+    "data_dir": "C:\\Users\\ASUS\\Desktop\\Research_Agent\\demo_workspaces\\236716\\data",
+    "required_data_files": [
+      "train_labels.csv",
+      "sample_submission.csv"
+    ],
+    "target_column": null,
+    "id_column": null,
+    "submission_prediction_column": null,
+    "validation_size": null,
+    "random_seed": null,
+    "task_type": "unknown",
+    "files": [
+      {
+        "name": "sample_submission.csv",
+        "role": "sample_submission",
+        "format": "csv",
+        "columns": [
+          "id",
+          "x",
+          "y",
+          "z"
+        ],
+        "rows_sampled": 80,
+        "column_profiles": [
+          {
+            "name": "id",
+            "role": "feature",
+            "type": "categorical_or_text",
+            "missing_in_sample": 0,
+            "unique_in_sample": 80,
+            "sample_values": [
+              "TEST_00001",
+              "TEST_00002",
+              "TEST_00003",
+              "TEST_00004",
+              "TEST_00005",
+              "TEST_00006",
+              "TEST_00007",
+              "TEST_00008"
+            ],
+            "baseline_use": "defer_or_engineer"
+          },
+          {
+            "name": "x",
+            "role": "feature",
+            "type": "numeric",
+            "missing_in_sample": 0,
+            "unique_in_sample": 1,
+            "sample_values": [
+              "0"
+            ],
+            "baseline_use": "include_numeric"
+          },
+          {
+            "name": "y",
+            "role": "feature",
+            "type": "numeric",
+            "missing_in_sample": 0,
+            "unique_in_sample": 1,
+            "sample_values": [
+              "0"
+            ],
+            "baseline_use": "include_numeric"
+          },
+          {
+            "name": "z",
+            "role": "feature",
+            "type": "numeric",
+            "missing_in_sample": 0,
+            "unique_in_sample": 1,
+            "sample_values": [
+              "0"
+            ],
+            "baseline_use": "include_numeric"
+          }
+        ]
+      },
+      {
+        "name": "train_labels.csv",
+        "role": "unknown",
+        "format": "csv",
+        "columns": [
+          "id",
+          "x",
+          "y",
+          "z"
+        ],
+        "rows_sampled": 80,
+        "column_profiles": [
+          {
+            "name": "id",
+            "role": "feature",
+            "type": "categorical_or_text",
+            "missing_in_sample": 0,
+            "unique_in_sample": 80,
+            "sample_values": [
+              "TRAIN_00001",
+              "TRAIN_00002",
+              "TRAIN_00003",
+              "TRAIN_00004",
+              "TRAIN_00005",
+              "TRAIN_00006",
+              "TRAIN_00007",
+              "TRAIN_00008"
+            ],
+            "baseline_use": "defer_or_engineer"
+          },
+          {
+            "name": "x",
+            "role": "feature",
+            "type": "numeric",
+            "missing_in_sample": 0,
+            "unique_in_sample": 80,
+            "sample_values": [
+              "0.921500",
+              "0.958949",
+              "1.116291",
+              "1.120465",
+              "1.197448",
+              "1.212156",
+              "1.311051",
+              "1.329246"
+            ],
+            "baseline_use": "include_numeric"
+          },
+          {
+            "name": "y",
+            "role": "feature",
+            "type": "numeric",
+            "missing_in_sample": 0,
+            "unique_in_sample": 80,
+            "sample_values": [
+              "-0.021910",
+              "-0.050734",
+              "-0.051013",
+              "-0.069400",
+              "-0.080307",
+              "-0.124668",
+              "-0.167822",
+              "-0.173408"
+            ],
+            "baseline_use": "include_numeric"
+          },
+          {
+            "name": "z",
+            "role": "feature",
+            "type": "numeric",
+            "missing_in_sample": 0,
+            "unique_in_sample": 80,
+            "sample_values": [
+              "-0.000712",
+              "-0.009392",
+              "-0.019708",
+              "-0.045875",
+              "-0.049363",
+              "-0.088811",
+              "-0.102459",
+              "-0.102502"
+            ],
+            "baseline_use": "include_numeric"
+          }
+        ]
+      }
+    ],
+    "directory_datasets": [
+      {
+        "name": "test/",
+        "role": "test",
+        "file_count": 10000,
+        "filename_pattern": "TEST_#####.csv",
+        "example_files": [
+          "TEST_00001.csv",
+          "TEST_00002.csv",
+          "TEST_00003.csv"
+        ],
+        "per_file_columns": [
+          "timestep_ms",
+          "x",
+          "y",
+          "z"
+        ],
+        "per_file_rows_sampled": 11,
+        "column_profiles": [
+          {
+            "name": "timestep_ms",
+            "role": "feature",
+            "type": "numeric",
+            "missing_in_sample": 0,
+            "unique_in_sample": 11,
+            "sample_values": [
+              "-120",
+              "-160",
+              "-200",
+              "-240",
+              "-280",
+              "-320",
+              "-360",
+              "-40"
+            ],
+            "baseline_use": "include_numeric"
+          },
+          {
+            "name": "x",
+            "role": "feature",
+            "type": "numeric",
+            "missing_in_sample": 0,
+            "unique_in_sample": 11,
+            "sample_values": [
+              "3.994828",
+              "3.997651",
+              "3.999875",
+              "4.003622",
+              "4.006621",
+              "4.009012",
+              "4.011209",
+              "4.014258"
+            ],
+            "baseline_use": "include_numeric"
+          },
+          {
+            "name": "y",
+            "role": "feature",
+            "type": "numeric",
+            "missing_in_sample": 0,
+            "unique_in_sample": 11,
+            "sample_values": [
+              "-1.062941",
+              "-1.068346",
+              "-1.074615",
+              "-1.080916",
+              "-1.087306",
+              "-1.094246",
+              "-1.102156",
+              "-1.110654"
+            ],
+            "baseline_use": "include_numeric"
+          },
+          {
+            "name": "z",
+            "role": "feature",
+            "type": "numeric",
+            "missing_in_sample": 0,
+            "unique_in_sample": 11,
+            "sample_values": [
+              "0.040801",
+              "0.041584",
+              "0.042038",
+              "0.042315",
+              "0.042905",
+              "0.043208",
+              "0.043357",
+              "0.043444"
+            ],
+            "baseline_use": "include_numeric"
+          }
+        ],
+        "sample_id_source": "filename_stem",
+        "id_matched_files": [
+          "sample_submission.csv:id"
+        ],
+        "notes": [
+          "Each CSV in this directory is ONE sample; the sample id is the filename stem.",
+          "Load every file in the directory and derive features per sample -- do not expect a single flat table."
+        ]
+      },
+      {
+        "name": "train/",
+        "role": "train",
+        "file_count": 10000,
+        "filename_pattern": "TRAIN_#####.csv",
+        "example_files": [
+          "TRAIN_00001.csv",
+          "TRAIN_00002.csv",
+          "TRAIN_00003.csv"
+        ],
+        "per_file_columns": [
+          "timestep_ms",
+          "x",
+          "y",
+          "z"
+        ],
+        "per_file_rows_sampled": 11,
+        "column_profiles": [
+          {
+            "name": "timestep_ms",
+            "role": "feature",
+            "type": "numeric",
+            "missing_in_sample": 0,
+            "unique_in_sample": 11,
+            "sample_values": [
+              "-120",
+              "-160",
+              "-200",
+              "-240",
+              "-280",
+              "-320",
+              "-360",
+              "-40"
+            ],
+            "baseline_use": "include_numeric"
+          },
+          {
+            "name": "x",
+            "role": "feature",
+            "type": "numeric",
+            "missing_in_sample": 0,
+            "unique_in_sample": 11,
+            "sample_values": [
+              "2.490842",
+              "2.541293",
+              "2.592528",
+              "2.642445",
+              "2.692050",
+              "2.742067",
+              "2.791783",
+              "2.841753"
+            ],
+            "baseline_use": "include_numeric"
+          },
+          {
+            "name": "y",
+            "role": "feature",
+            "type": "numeric",
+            "missing_in_sample": 0,
+            "unique_in_sample": 11,
+            "sample_values": [
+              "0.377812",
+              "0.388259",
+              "0.397126",
+              "0.408369",
+              "0.419100",
+              "0.427725",
+              "0.444501",
+              "0.460089"
+            ],
+            "baseline_use": "include_numeric"
+          },
+          {
+            "name": "z",
+            "role": "feature",
+            "type": "numeric",
+            "missing_in_sample": 0,
+            "unique_in_sample": 11,
+            "sample_values": [
+              "-0.182941",
+              "-0.193358",
+              "-0.207018",
+              "-0.220893",
+              "-0.233944",
+              "-0.246040",
+              "-0.264160",
+              "-0.281991"
+            ],
+            "baseline_use": "include_numeric"
+          }
+        ],
+        "sample_id_source": "filename_stem",
+        "id_matched_files": [
+          "train_labels.csv:id"
+        ],
+        "notes": [
+          "Each CSV in this directory is ONE sample; the sample id is the filename stem.",
+          "Load every file in the directory and derive features per sample -- do not expect a single flat table."
+        ]
+      }
+    ],
+    "dataset_layout": "per_sample_files",
+    "train_file": null,
+    "test_file": null,
+    "train_dir": "train/",
+    "test_dir": "test/",
+    "sample_submission_file": "sample_submission.csv",
+    "baseline_recommendation": {
+      "first_trial_policy": "stable_supervised_tabular_baseline",
+      "target_column": null,
+      "id_column": null,
+      "include_features_first": [],
+      "defer_features_first": [],
+      "exclude_columns": [],
+      "preferred_model_families": [
+        "logistic_regression_or_linear_classifier_for_binary_classification",
+        "small_random_forest_or_gradient_boosted_tree_if_available"
+      ],
+      "avoid_first_trial": [
+        "gaussian_naive_bayes_for_mixed_numeric_and_categorical_data",
+        "raw_high_cardinality_text_or_identifier_one_hot_features",
+        "broad_schema_discovery_when_target_id_and_columns_are_known"
+      ],
+      "notes": [
+        "Use concrete data_profile columns before generic RAG summaries.",
+        "Never train on columns that are absent from the test data unless prediction-time derivation is explicit.",
+        "Keep the first baseline simple, supervised, deterministic, and submission-format checked."
+      ]
+    }
+  },
+  "baseline_guardrails": {
+    "priority": "first_trial_quality_over_generic_flexibility",
+    "data_profile_is_mandatory": true,
+    "recommended_features": [],
+    "deferred_features": [],
+    "excluded_columns": [],
+    "preferred_model_families": [
+      "logistic_regression_or_linear_classifier_for_binary_classification",
+      "small_random_forest_or_gradient_boosted_tree_if_available"
+    ],
+    "avoid_first_trial": [
+      "gaussian_naive_bayes_for_mixed_numeric_and_categorical_data",
+      "raw_high_cardinality_text_or_identifier_one_hot_features",
+      "broad_schema_discovery_when_target_id_and_columns_are_known"
+    ]
+  },
+  "competition_docs": {
+    "overview.md": "# 236716 - 모기 비행 궤적 예측 AI 경진대회\n\nLiDAR 센서로 관측된 모기의 과거 좌표를 바탕으로 80ms 후의 3D 위치를 예측하는 시계열 회귀 문제.\n\n- 입력: 40ms 간격으로 관측된 11개 시점의 3D 좌표 (x, y, z), 시간 범위 -400ms ~ 0ms\n- 출력: +80ms 시점의 3D 좌표 (x, y, z)\n- 좌표계: 방 기준 절대 좌표가 아니라 LiDAR 센서 기준 sensor-local 3D 좌표계. 단위는 미터(m). 축 방향은 x: forward, y: left, z: up.\n- 평가지표: R-Hit@1cm. 예측 좌표와 실제 좌표의 3D 유클리드 거리 d를 계산해서 d <= 0.01m이면 적중(1), 아니면 실패(0). 점수는 전체 샘플의 평균 R-Hit(적중률).",
+    "data_notes.md": "# Data Notes\n\n**IMPORTANT: there is no flat data/train.csv or data/test.csv file. Do not assume one exists.**\n\n```\ndata/\n├── train/                  # 10000 files, one per training sample\n│   ├── TRAIN_00001.csv     # columns: timestep_ms, x, y, z (11 rows, -400ms..0ms in 40ms steps)\n│   ├── TRAIN_00002.csv\n│   ├── ...\n│   └── TRAIN_10000.csv\n├── test/                   # 10000 files, same structure as train/, one per test sample\n│   ├── TEST_00001.csv\n│   ├── ...\n│   └── TEST_10000.csv\n├── train_labels.csv        # columns: id, x, y, z -- id values are \"TRAIN_00001\" etc.,\n│                            # matching the train/*.csv filename stem. x,y,z here is the\n│                            # TARGET: the mosquito's actual position 80ms after the last\n│                            # observed timestep in that sample's file.\n└── sample_submission.csv   # columns: id, x, y, z -- id values are \"TEST_00001\" etc.\n```\n\n**How to build the training set:** for each `train/TRAIN_XXXXX.csv`, load its 11-row time\nseries (features), then look up the target `x,y,z` from `train_labels.csv` where\n`id == \"TRAIN_XXXXX\"`. Predictions for `test/TEST_XXXXX.csv` go into `outputs/submission.csv`\nkeyed by `id == \"TEST_XXXXX\"`, matching `sample_submission.csv`'s row order/ids.\n\nNo leakage risk between train/test (disjoint sample folders). No column notes beyond the\nabove -- x,y,z are already numeric sensor-local coordinates in meters.",
+    "metric.md": "# Metric\n\n- name: R-Hit@1cm\n- objective: maximize"
+  },
+  "recent_trials": [
+    {
+      "time": "2026-07-31T00:04:41.673706+00:00",
+      "competition": "236716",
+      "trial_id": "trial_001",
+      "cv_score": 1.0,
+      "lb_score": null,
+      "objective": "maximize",
+      "recommendation": "accept_as_candidate",
+      "is_best": true,
+      "notes": ""
+    },
+    {
+      "time": "2026-07-31T01:06:48.918957+00:00",
+      "competition": "236716",
+      "trial_id": "trial_002",
+      "cv_score": 0.591,
+      "lb_score": 0.3876,
+      "objective": "maximize",
+      "recommendation": "record_but_do_not_promote",
+      "is_best": false,
+      "notes": ""
+    },
+    {
+      "time": "2026-07-31T02:01:30.866690+00:00",
+      "competition": "236716",
+      "trial_id": "trial_003",
+      "cv_score": 0.591,
+      "lb_score": 0.6006,
+      "objective": "maximize",
+      "recommendation": "record_but_do_not_promote",
+      "is_best": false,
+      "notes": ""
+    }
+  ],
+  "decision_context": {
+    "latest_decision_card": {
+      "schema_version": "1.0",
+      "competition": "236716",
+      "trial_id": "trial_003",
+      "created_at": "2026-07-31T02:01:30.878810+00:00",
+      "source_trial_id": "trial_002",
+      "plan_type": "continuation_delta_plan",
+      "change_axis": "submission_schema_alignment",
+      "local_score": 0.591,
+      "lb_score": 0.6006,
+      "previous_local_score": 0.591,
+      "previous_lb_score": 0.3876,
+      "best_local_score": 0.591,
+      "best_lb_score": 0.6006,
+      "local_delta": 0.0,
+      "lb_delta": 0.0,
+      "previous_local_delta": 0.0,
+      "previous_lb_delta": 0.213,
+      "objective": "maximize",
+      "local_status": "flat",
+      "lb_status": "flat",
+      "previous_local_status": "flat",
+      "previous_lb_status": "improved",
+      "raw_decision": "accept",
+      "decision": "continue_axis_refinement",
+      "model_type": "RuleBasedConstantVelocity",
+      "catastrophic_regression": false,
+      "estimator_family_changed": false,
+      "no_change_suspected": false,
+      "active_axis": "submission_schema_alignment",
+      "axis_attempt_count": 1,
+      "axis_attempt_limit": 3,
+      "candidate_label": "submission_schema_alignment: Inference | Output | Predict | Update",
+      "rejected_candidates": [
+        "controlled_refinement: controlled_refinement",
+        "submission_schema_alignment: Inference | Output | Predict | Update"
+      ],
+      "rejected_candidates_by_axis": {
+        "controlled_refinement": [
+          "controlled_refinement: controlled_refinement"
+        ],
+        "submission_schema_alignment": [
+          "submission_schema_alignment: Inference | Output | Predict | Update"
+        ]
+      },
+      "active_axis_rejected_candidates": [
+        "submission_schema_alignment: Inference | Output | Predict | Update"
+      ],
+      "recommended_base_trial": "trial_001",
+      "rejected_axes": [
+        "controlled_refinement"
+      ],
+      "accepted_axes": [],
+      "next_guidance": "`submission_schema_alignment` has not improved yet, but the axis is not rejected. Start from best/base trial `trial_001` and apply another candidate or parameter variant within the same axis.",
+      "planner_constraints": [
+        "Use `trial_001` as the base trial unless the user explicitly overrides it.",
+        "Change exactly one primary improvement axis in the next trial.",
+        "Keep split/model/preprocessing fixed unless selected as the primary axis.",
+        "Keep the primary improvement axis as `submission_schema_alignment` for the next trial.",
+        "Use `trial_001` as the code/pipeline base even if the active axis was attempted on another trial.",
+        "Try a different candidate or parameter variant inside the same axis; do not switch to a new axis yet.",
+        "Do not preserve the failed candidate unless the new variant explicitly requires it."
+      ]
+    },
+    "best_decision_card": {
+      "schema_version": "1.0",
+      "competition": "236716",
+      "trial_id": "trial_001",
+      "created_at": "2026-07-31T00:55:17.154968+00:00",
+      "source_trial_id": "trial_001",
+      "plan_type": "continuation_delta_plan",
+      "change_axis": "",
+      "local_score": 0.591,
+      "lb_score": 0.6006,
+      "previous_local_score": null,
+      "previous_lb_score": null,
+      "best_local_score": null,
+      "best_lb_score": null,
+      "local_delta": null,
+      "lb_delta": null,
+      "previous_local_delta": null,
+      "previous_lb_delta": null,
+      "objective": "maximize",
+      "local_status": "baseline",
+      "lb_status": "baseline",
+      "previous_local_status": "baseline",
+      "previous_lb_status": "baseline",
+      "raw_decision": "baseline_established",
+      "decision": "baseline_established",
+      "model_type": null,
+      "catastrophic_regression": false,
+      "estimator_family_changed": false,
+      "no_change_suspected": false,
+      "active_axis": null,
+      "axis_attempt_count": 0,
+      "axis_attempt_limit": 3,
+      "candidate_label": "",
+      "rejected_candidates": [],
+      "rejected_candidates_by_axis": {},
+      "active_axis_rejected_candidates": [],
+      "recommended_base_trial": "trial_001",
+      "rejected_axes": [],
+      "accepted_axes": [],
+      "next_guidance": "Use this trial as the baseline. The next trial should change exactly one improvement axis.",
+      "planner_constraints": [
+        "Use `trial_001` as the base trial unless the user explicitly overrides it.",
+        "Change exactly one primary improvement axis in the next trial.",
+        "Keep split/model/preprocessing fixed unless selected as the primary axis."
+      ]
+    },
+    "rejected_axes": [
+      "controlled_refinement"
+    ],
+    "accepted_axes": [],
+    "active_axis": "submission_schema_alignment",
+    "axis_attempt_count": 1,
+    "axis_attempt_limit": 3,
+    "rejected_candidates": [
+      "controlled_refinement: controlled_refinement",
+      "submission_schema_alignment: Inference | Output | Predict | Update"
+    ],
+    "rejected_candidates_by_axis": {
+      "controlled_refinement": [
+        "controlled_refinement: controlled_refinement"
+      ],
+      "submission_schema_alignment": [
+        "submission_schema_alignment: Inference | Output | Predict | Update"
+      ]
+    },
+    "active_axis_rejected_candidates": [
+      "submission_schema_alignment: Inference | Output | Predict | Update"
+    ],
+    "recommended_base_trial": "trial_001",
+    "next_guidance": "`submission_schema_alignment` has not improved yet, but the axis is not rejected. Start from best/base trial `trial_001` and apply another candidate or parameter variant within the same axis.",
+    "planner_constraints": [
+      "Use `trial_001` as the base trial unless the user explicitly overrides it.",
+      "Change exactly one primary improvement axis in the next trial.",
+      "Keep split/model/preprocessing fixed unless selected as the primary axis.",
+      "Keep the primary improvement axis as `submission_schema_alignment` for the next trial.",
+      "Use `trial_001` as the code/pipeline base even if the active axis was attempted on another trial.",
+      "Try a different candidate or parameter variant inside the same axis; do not switch to a new axis yet.",
+      "Do not preserve the failed candidate unless the new variant explicitly requires it."
+    ],
+    "decision_card_count": 3
+  },
+  "llm_call": false,
+  "model_policy": {
+    "experiment_planning": {
+      "tier": "high_cost",
+      "provider": "openai",
+      "api": "responses",
+      "model": "gpt-5",
+      "call_type": "experiment_planning",
+      "override": true
+    },
+    "workspace_code_writing": {
+      "tier": "high_cost",
+      "provider": "openai",
+      "api": "responses",
+      "model": "gpt-5",
+      "call_type": "workspace_code_writing",
+      "override": true
+    },
+    "low_cost": {
+      "tier": "low_cost",
+      "provider": "openai",
+      "api": "responses",
+      "model": "gpt-5.6-luna",
+      "call_types": [
+        "status_summary",
+        "log_summary",
+        "short_note_rewrite",
+        "simple_context_summary",
+        "user_summary_card",
+        "experiment_question",
+        "user_insight_interpretation",
+        "plan_translation"
+      ]
+    }
+  },
+  "planning_context_pack": {
+    "task": "experiment_planning",
+    "document_count": 0,
+    "documents": [],
+    "skipped": true,
+    "skip_reason": "continuation_uses_structured_memory_and_code_snapshot",
+    "policy": {
+      "use_rag": false,
+      "task": "experiment_planning",
+      "reason": "continuation_uses_structured_memory_and_code_snapshot"
+    }
+  }
+}

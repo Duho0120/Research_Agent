@@ -1,0 +1,196 @@
+{
+  "competition": "236716",
+  "source_trial_id": "trial_002",
+  "next_trial_id": "trial_003",
+  "status": "planned",
+  "continuation_mode": "can_continue",
+  "pending_human_review": false,
+  "issues": [],
+  "source_result_status": "completed",
+  "next_experiment": {
+    "next_trial_id": "trial_003",
+    "strategy": "controlled_refinement",
+    "requires_user_review_before_submit": false,
+    "user_insight_override": null
+  },
+  "continuation_context": {
+    "competition": "236716",
+    "source_trial_id": "trial_002",
+    "recommended_base_trial": "trial_001",
+    "next_trial_id": "trial_003",
+    "continuation_mode": "can_continue",
+    "pending_human_review": false,
+    "review_source_trial": null,
+    "source_result_status": "completed",
+    "human_review": {
+      "competition": "236716",
+      "trial_id": "trial_002",
+      "decision": "no_review",
+      "action": "no_review",
+      "timing": "no_review",
+      "urgent": false,
+      "blocking": false,
+      "pipeline_mature": true,
+      "pipeline_readiness": {
+        "execution_profile_ready": true,
+        "workspace_run_completed": true,
+        "metrics_collected": true,
+        "completed_trial_count": 2,
+        "pending_user_review": false
+      },
+      "axis": "human_review",
+      "interaction_type": "blocking_human_review",
+      "triggers": [],
+      "fingerprint": "33e5e6c28c278d21",
+      "score": 0.0,
+      "score_threshold": 4.0,
+      "score_reasons": [],
+      "evidence_summary": [],
+      "questions": [],
+      "next_action": "continue"
+    },
+    "blocked_topics": [],
+    "allowed_topics": [
+      "next_experiment_planning",
+      "code_patch_planning",
+      "local_execution_after_validation"
+    ],
+    "decision_context": {
+      "latest_decision_card": {
+        "schema_version": "1.0",
+        "competition": "236716",
+        "trial_id": "trial_002",
+        "created_at": "2026-07-31T01:06:48.932500+00:00",
+        "source_trial_id": "trial_001",
+        "plan_type": "continuation_delta_plan",
+        "change_axis": "controlled_refinement",
+        "local_score": 0.591,
+        "lb_score": 0.3876,
+        "previous_local_score": 0.591,
+        "previous_lb_score": 0.6006,
+        "best_local_score": 0.591,
+        "best_lb_score": 0.6006,
+        "local_delta": 0.0,
+        "lb_delta": -0.213,
+        "previous_local_delta": 0.0,
+        "previous_lb_delta": -0.213,
+        "objective": "maximize",
+        "local_status": "flat",
+        "lb_status": "regressed",
+        "previous_local_status": "flat",
+        "previous_lb_status": "regressed",
+        "raw_decision": "reject_or_hold",
+        "decision": "reject_or_hold",
+        "model_type": "RuleBasedConstantVelocity",
+        "catastrophic_regression": true,
+        "estimator_family_changed": false,
+        "no_change_suspected": false,
+        "active_axis": null,
+        "axis_attempt_count": 1,
+        "axis_attempt_limit": 3,
+        "candidate_label": "controlled_refinement: controlled_refinement",
+        "rejected_candidates": [
+          "controlled_refinement: controlled_refinement"
+        ],
+        "rejected_candidates_by_axis": {
+          "controlled_refinement": [
+            "controlled_refinement: controlled_refinement"
+          ]
+        },
+        "active_axis_rejected_candidates": [
+          "controlled_refinement: controlled_refinement"
+        ],
+        "recommended_base_trial": "trial_001",
+        "rejected_axes": [
+          "controlled_refinement"
+        ],
+        "accepted_axes": [],
+        "next_guidance": "Treat `controlled_refinement` as exhausted for now. Start from `trial_001` and try a different single axis.",
+        "planner_constraints": [
+          "Use `trial_001` as the base trial unless the user explicitly overrides it.",
+          "Change exactly one primary improvement axis in the next trial.",
+          "Keep split/model/preprocessing fixed unless selected as the primary axis.",
+          "FACT: `controlled_refinement` regressed the score by more than 25% -- far beyond tuning noise. The idea itself is wrong for this data; do not retry it with different parameters, and do not retry it under a different axis name.",
+          "Do not keep stacking on rejected axis `controlled_refinement`.",
+          "If the rejected axis was implemented in the last trial, roll back to the recommended base before applying a new change."
+        ]
+      },
+      "best_decision_card": {
+        "schema_version": "1.0",
+        "competition": "236716",
+        "trial_id": "trial_001",
+        "created_at": "2026-07-31T00:55:17.154968+00:00",
+        "source_trial_id": "trial_001",
+        "plan_type": "continuation_delta_plan",
+        "change_axis": "",
+        "local_score": 0.591,
+        "lb_score": 0.6006,
+        "previous_local_score": null,
+        "previous_lb_score": null,
+        "best_local_score": null,
+        "best_lb_score": null,
+        "local_delta": null,
+        "lb_delta": null,
+        "previous_local_delta": null,
+        "previous_lb_delta": null,
+        "objective": "maximize",
+        "local_status": "baseline",
+        "lb_status": "baseline",
+        "previous_local_status": "baseline",
+        "previous_lb_status": "baseline",
+        "raw_decision": "baseline_established",
+        "decision": "baseline_established",
+        "model_type": null,
+        "catastrophic_regression": false,
+        "estimator_family_changed": false,
+        "no_change_suspected": false,
+        "active_axis": null,
+        "axis_attempt_count": 0,
+        "axis_attempt_limit": 3,
+        "candidate_label": "",
+        "rejected_candidates": [],
+        "rejected_candidates_by_axis": {},
+        "active_axis_rejected_candidates": [],
+        "recommended_base_trial": "trial_001",
+        "rejected_axes": [],
+        "accepted_axes": [],
+        "next_guidance": "Use this trial as the baseline. The next trial should change exactly one improvement axis.",
+        "planner_constraints": [
+          "Use `trial_001` as the base trial unless the user explicitly overrides it.",
+          "Change exactly one primary improvement axis in the next trial.",
+          "Keep split/model/preprocessing fixed unless selected as the primary axis."
+        ]
+      },
+      "rejected_axes": [
+        "controlled_refinement"
+      ],
+      "accepted_axes": [],
+      "active_axis": null,
+      "axis_attempt_count": 1,
+      "axis_attempt_limit": 3,
+      "rejected_candidates": [
+        "controlled_refinement: controlled_refinement"
+      ],
+      "rejected_candidates_by_axis": {
+        "controlled_refinement": [
+          "controlled_refinement: controlled_refinement"
+        ]
+      },
+      "active_axis_rejected_candidates": [
+        "controlled_refinement: controlled_refinement"
+      ],
+      "recommended_base_trial": "trial_001",
+      "next_guidance": "Treat `controlled_refinement` as exhausted for now. Start from `trial_001` and try a different single axis.",
+      "planner_constraints": [
+        "Use `trial_001` as the base trial unless the user explicitly overrides it.",
+        "Change exactly one primary improvement axis in the next trial.",
+        "Keep split/model/preprocessing fixed unless selected as the primary axis.",
+        "FACT: `controlled_refinement` regressed the score by more than 25% -- far beyond tuning noise. The idea itself is wrong for this data; do not retry it with different parameters, and do not retry it under a different axis name.",
+        "Do not keep stacking on rejected axis `controlled_refinement`.",
+        "If the rejected axis was implemented in the last trial, roll back to the recommended base before applying a new change."
+      ],
+      "decision_card_count": 2
+    }
+  },
+  "next_action": "prepare-next-trial"
+}

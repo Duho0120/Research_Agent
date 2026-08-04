@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from kaggle_research_agent import cli_app
-from kaggle_research_agent.state_db import (
+from research_agent import cli_app
+from research_agent.state_db import (
     initialize_state_db,
     upsert_competition,
     upsert_trial,
@@ -31,7 +31,7 @@ class CliAppTest(unittest.TestCase):
                         "error": "recoverable_after_metrics_collection",
                     },
                 )
-                with patch("kaggle_research_agent.cli_app.os.kill", side_effect=OSError):
+                with patch("research_agent.cli_app.os.kill", side_effect=OSError):
                     state = cli_app._current_loop_state("demo")
 
                 saved = cli_app.load_json(cli_app.loop_state_path())
@@ -55,16 +55,16 @@ class CliAppTest(unittest.TestCase):
                 "trials": [],
             },
         }
-        with patch("kaggle_research_agent.cli_app.get_experiment", return_value=response):
-            with patch("kaggle_research_agent.cli_app._filesystem_topic", return_value="Bike Sharing Demand"):
-                with patch("kaggle_research_agent.cli_app._manual_trial_rows", return_value=[]):
+        with patch("research_agent.cli_app.get_experiment", return_value=response):
+            with patch("research_agent.cli_app._filesystem_topic", return_value="Bike Sharing Demand"):
+                with patch("research_agent.cli_app._manual_trial_rows", return_value=[]):
                     snapshot = cli_app.experiment_snapshot("bike-sharing-demand", sync=False)
 
         self.assertEqual("Bike Sharing Demand", snapshot["topic"])
 
     def test_snapshot_labels_post_metrics_failure_as_recovery_pending(self):
         with patch(
-            "kaggle_research_agent.cli_app.get_experiment",
+            "research_agent.cli_app.get_experiment",
             return_value={
                 "ok": True,
                 "data": {
@@ -78,7 +78,7 @@ class CliAppTest(unittest.TestCase):
             },
         ):
             with patch(
-                "kaggle_research_agent.cli_app._current_loop_state",
+                "research_agent.cli_app._current_loop_state",
                 return_value={
                     "competition": "demo",
                     "status": "failed",
@@ -86,7 +86,7 @@ class CliAppTest(unittest.TestCase):
                     "error": "recoverable_after_metrics_collection",
                 },
             ):
-                with patch("kaggle_research_agent.cli_app._manual_trial_rows", return_value=[]):
+                with patch("research_agent.cli_app._manual_trial_rows", return_value=[]):
                     snapshot = cli_app.experiment_snapshot("demo", sync=False)
 
         self.assertEqual("후처리 복구 대기", snapshot["state"])
@@ -111,9 +111,9 @@ class CliAppTest(unittest.TestCase):
                 ],
             },
         }
-        with patch("kaggle_research_agent.cli_app.get_experiment", return_value=response):
+        with patch("research_agent.cli_app.get_experiment", return_value=response):
             with patch(
-                "kaggle_research_agent.cli_app._current_loop_state",
+                "research_agent.cli_app._current_loop_state",
                 return_value={
                     "competition": "demo",
                     "status": "running",
@@ -122,7 +122,7 @@ class CliAppTest(unittest.TestCase):
                     "next_trial": "trial_001",
                 },
             ):
-                with patch("kaggle_research_agent.cli_app._manual_trial_rows", return_value=[]):
+                with patch("research_agent.cli_app._manual_trial_rows", return_value=[]):
                     snapshot = cli_app.experiment_snapshot("demo", sync=False)
 
         self.assertEqual("trial_001", snapshot["current_trial"])
@@ -146,9 +146,9 @@ class CliAppTest(unittest.TestCase):
                 ],
             },
         }
-        with patch("kaggle_research_agent.cli_app.get_experiment", return_value=response):
+        with patch("research_agent.cli_app.get_experiment", return_value=response):
             with patch(
-                "kaggle_research_agent.cli_app._current_loop_state",
+                "research_agent.cli_app._current_loop_state",
                 return_value={
                     "competition": "demo",
                     "status": "running",
@@ -158,7 +158,7 @@ class CliAppTest(unittest.TestCase):
                     "last_completed_trial": "trial_001",
                 },
             ):
-                with patch("kaggle_research_agent.cli_app._manual_trial_rows", return_value=[]):
+                with patch("research_agent.cli_app._manual_trial_rows", return_value=[]):
                     snapshot = cli_app.experiment_snapshot("demo", sync=False)
 
         self.assertEqual("trial_002", snapshot["current_trial"])
@@ -203,8 +203,8 @@ class CliAppTest(unittest.TestCase):
             self._write_metrics(root, "trial_001", 0.80, 0.76)
             self._write_metrics(root, "trial_002", 0.81, 0.77)
             with patch.dict("os.environ", {"RESEARCH_AGENT_RUNTIME_DIR": str(runtime)}):
-                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
-                    with patch("kaggle_research_agent.cli_app.get_experiment", return_value={"ok": False}):
+                with patch("research_agent.cli_app.project_root", return_value=root):
+                    with patch("research_agent.cli_app.get_experiment", return_value={"ok": False}):
                         snapshot = cli_app.experiment_snapshot("titanic", sync=False)
 
             self.assertEqual("trial_002", snapshot["last_completed_trial"])
@@ -234,8 +234,8 @@ class CliAppTest(unittest.TestCase):
                 },
             }
             with patch.dict("os.environ", {"RESEARCH_AGENT_RUNTIME_DIR": str(runtime)}):
-                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
-                    with patch("kaggle_research_agent.cli_app.get_experiment", return_value=response):
+                with patch("research_agent.cli_app.project_root", return_value=root):
+                    with patch("research_agent.cli_app.get_experiment", return_value=response):
                         snapshot = cli_app.experiment_snapshot("titanic", sync=False)
 
             self.assertEqual("trial_007", snapshot["next_trial"])
@@ -258,16 +258,16 @@ class CliAppTest(unittest.TestCase):
                 ],
             },
         }
-        with patch("kaggle_research_agent.cli_app.get_experiment", return_value=response):
-            with patch("kaggle_research_agent.cli_app._current_loop_state", return_value={}):
-                with patch("kaggle_research_agent.cli_app._manual_trial_rows", return_value=[]):
+        with patch("research_agent.cli_app.get_experiment", return_value=response):
+            with patch("research_agent.cli_app._current_loop_state", return_value={}):
+                with patch("research_agent.cli_app._manual_trial_rows", return_value=[]):
                     snapshot = cli_app.experiment_snapshot("bike-sharing-demand", sync=False)
 
         self.assertEqual("trial_002", snapshot["best"]["trial_id"])
 
     def test_empty_install_does_not_inject_titanic_experiment(self):
-        with patch("kaggle_research_agent.cli_app.list_experiments", return_value={"ok": True, "data": {"experiments": []}}):
-            with patch("kaggle_research_agent.cli_app._filesystem_experiments", return_value=[]):
+        with patch("research_agent.cli_app.list_experiments", return_value={"ok": True, "data": {"experiments": []}}):
+            with patch("research_agent.cli_app._filesystem_experiments", return_value=[]):
                 self.assertEqual([], cli_app.load_experiments(sync=False))
 
     def test_snapshot_does_not_treat_discovered_scaffold_as_completed(self):
@@ -290,9 +290,9 @@ class CliAppTest(unittest.TestCase):
                 ],
             },
         }
-        with patch("kaggle_research_agent.cli_app.get_experiment", return_value=response):
-            with patch("kaggle_research_agent.cli_app._current_loop_state", return_value={}):
-                with patch("kaggle_research_agent.cli_app._manual_trial_rows", return_value=[]):
+        with patch("research_agent.cli_app.get_experiment", return_value=response):
+            with patch("research_agent.cli_app._current_loop_state", return_value={}):
+                with patch("research_agent.cli_app._manual_trial_rows", return_value=[]):
                     snapshot = cli_app.experiment_snapshot("bike-sharing-demand", sync=False)
 
         self.assertIsNone(snapshot["last_completed_trial"])
@@ -416,7 +416,7 @@ class CliAppTest(unittest.TestCase):
                     cli_app.loop_state_path(),
                     {"competition": "titanic", "status": "running", "current_trial": "trial_004"},
                 )
-                with patch("kaggle_research_agent.cli_app.subprocess.Popen") as popen:
+                with patch("research_agent.cli_app.subprocess.Popen") as popen:
                     message = cli_app.start_experiment("titanic")
             self.assertIn("이미 자동 실험이 실행 중입니다.", message)
             self.assertIn("trial_004", message)
@@ -425,8 +425,8 @@ class CliAppTest(unittest.TestCase):
     def test_resolve_start_trial_ignores_failed_loop_pointing_at_missing_trial(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.ROOT", root):
-                with patch("kaggle_research_agent.cli_app._infer_start_trial", return_value="trial_006"):
+            with patch("research_agent.paths.ROOT", root):
+                with patch("research_agent.cli_app._infer_start_trial", return_value="trial_006"):
                     start_trial = cli_app._resolve_start_trial(
                         "bike-sharing-demand",
                         {"status": "failed", "next_trial": "trial_009", "error": "blocked_missing_result_cycle"},
@@ -437,8 +437,8 @@ class CliAppTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "experiments" / "bike-sharing-demand" / "trial_002").mkdir(parents=True)
-            with patch("kaggle_research_agent.paths.ROOT", root):
-                with patch("kaggle_research_agent.cli_app._infer_start_trial", return_value="trial_099"):
+            with patch("research_agent.paths.ROOT", root):
+                with patch("research_agent.cli_app._infer_start_trial", return_value="trial_099"):
                     start_trial = cli_app._resolve_start_trial(
                         "bike-sharing-demand",
                         {
@@ -452,8 +452,8 @@ class CliAppTest(unittest.TestCase):
     def test_resolve_start_trial_trusts_non_failed_loop_regardless_of_disk(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.ROOT", root):
-                with patch("kaggle_research_agent.cli_app._infer_start_trial", return_value="trial_006"):
+            with patch("research_agent.paths.ROOT", root):
+                with patch("research_agent.cli_app._infer_start_trial", return_value="trial_006"):
                     start_trial = cli_app._resolve_start_trial(
                         "bike-sharing-demand",
                         {"status": "paused", "next_trial": "trial_009"},
@@ -469,9 +469,9 @@ class CliAppTest(unittest.TestCase):
             self._write_execution_profile(root, "titanic")
             process = Mock(pid=321)
             with patch.dict("os.environ", {"RESEARCH_AGENT_RUNTIME_DIR": str(runtime)}):
-                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
-                    with patch("kaggle_research_agent.cli_app.get_experiment", return_value={"ok": False}):
-                        with patch("kaggle_research_agent.cli_app.subprocess.Popen", return_value=process) as popen:
+                with patch("research_agent.cli_app.project_root", return_value=root):
+                    with patch("research_agent.cli_app.get_experiment", return_value={"ok": False}):
+                        with patch("research_agent.cli_app.subprocess.Popen", return_value=process) as popen:
                             message = cli_app.start_experiment("titanic")
                 state = cli_app.load_json(cli_app.loop_state_path())
             command = popen.call_args.args[0]
@@ -492,9 +492,9 @@ class CliAppTest(unittest.TestCase):
             process = Mock(pid=321)
             output = []
             with patch.dict("os.environ", {"RESEARCH_AGENT_RUNTIME_DIR": str(runtime)}):
-                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
-                    with patch("kaggle_research_agent.cli_app.get_experiment", return_value={"ok": False}):
-                        with patch("kaggle_research_agent.cli_app.subprocess.Popen", return_value=process) as popen:
+                with patch("research_agent.cli_app.project_root", return_value=root):
+                    with patch("research_agent.cli_app.get_experiment", return_value={"ok": False}):
+                        with patch("research_agent.cli_app.subprocess.Popen", return_value=process) as popen:
                             message = cli_app._start_experiment_dialog(
                                 "titanic",
                                 lambda _: "1",
@@ -516,7 +516,7 @@ class CliAppTest(unittest.TestCase):
             "취소",
             cli_app._start_experiment_dialog("titanic", lambda _: "q", lambda _: None),
         )
-        with patch("kaggle_research_agent.cli_app.start_experiment", return_value="continued") as start:
+        with patch("research_agent.cli_app.start_experiment", return_value="continued") as start:
             message = cli_app._start_experiment_dialog("titanic", lambda _: "c", lambda _: None)
         self.assertEqual("continued", message)
         start.assert_called_once_with("titanic", continuous=True)
@@ -560,11 +560,11 @@ class CliAppTest(unittest.TestCase):
                 self._write_metrics(root, f"trial_{index:03d}", 0.8, 0.76)
             process = Mock(pid=987)
             with patch.dict("os.environ", {"RESEARCH_AGENT_RUNTIME_DIR": str(runtime)}):
-                with patch("kaggle_research_agent.paths.ROOT", root):
-                    with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
-                        with patch("kaggle_research_agent.cli_app.get_experiment", return_value={"ok": False}):
+                with patch("research_agent.paths.ROOT", root):
+                    with patch("research_agent.cli_app.project_root", return_value=root):
+                        with patch("research_agent.cli_app.get_experiment", return_value={"ok": False}):
                             snapshot = cli_app.experiment_snapshot("titanic", sync=False)
-                            with patch("kaggle_research_agent.cli_app.subprocess.Popen", return_value=process) as popen:
+                            with patch("research_agent.cli_app.subprocess.Popen", return_value=process) as popen:
                                 message = cli_app.start_experiment("titanic", trial_count=1)
 
             command = popen.call_args.args[0]
@@ -614,9 +614,9 @@ class CliAppTest(unittest.TestCase):
             )
             process = Mock(pid=654)
             with patch.dict("os.environ", {"RESEARCH_AGENT_RUNTIME_DIR": str(runtime)}):
-                with patch("kaggle_research_agent.paths.ROOT", root):
-                    with patch("kaggle_research_agent.cli_app.get_experiment", return_value={"ok": False}):
-                        with patch("kaggle_research_agent.cli_app.subprocess.Popen", return_value=process) as popen:
+                with patch("research_agent.paths.ROOT", root):
+                    with patch("research_agent.cli_app.get_experiment", return_value={"ok": False}):
+                        with patch("research_agent.cli_app.subprocess.Popen", return_value=process) as popen:
                             message = cli_app.start_experiment("demo")
                 state = cli_app.load_json(cli_app.loop_state_path())
 
@@ -677,9 +677,9 @@ class CliAppTest(unittest.TestCase):
             self._write_dacon_profile(root, team_name="뚜로")
             process = Mock(pid=321)
             with patch.dict("os.environ", {"RESEARCH_AGENT_RUNTIME_DIR": str(runtime)}):
-                with patch("kaggle_research_agent.paths.ROOT", root):
-                    with patch("kaggle_research_agent.cli_app.get_experiment", return_value={"ok": False}):
-                        with patch("kaggle_research_agent.cli_app.subprocess.Popen", return_value=process) as popen:
+                with patch("research_agent.paths.ROOT", root):
+                    with patch("research_agent.cli_app.get_experiment", return_value={"ok": False}):
+                        with patch("research_agent.cli_app.subprocess.Popen", return_value=process) as popen:
                             cli_app.start_experiment("236716")
 
             command = popen.call_args.args[0]
@@ -697,9 +697,9 @@ class CliAppTest(unittest.TestCase):
             self._write_dacon_profile(root, team_name=None)
             process = Mock(pid=322)
             with patch.dict("os.environ", {"RESEARCH_AGENT_RUNTIME_DIR": str(runtime)}):
-                with patch("kaggle_research_agent.paths.ROOT", root):
-                    with patch("kaggle_research_agent.cli_app.get_experiment", return_value={"ok": False}):
-                        with patch("kaggle_research_agent.cli_app.subprocess.Popen", return_value=process) as popen:
+                with patch("research_agent.paths.ROOT", root):
+                    with patch("research_agent.cli_app.get_experiment", return_value={"ok": False}):
+                        with patch("research_agent.cli_app.subprocess.Popen", return_value=process) as popen:
                             cli_app.start_experiment("236716")
 
             command = popen.call_args.args[0]
@@ -720,7 +720,7 @@ class CliAppTest(unittest.TestCase):
                 encoding="utf-8",
             )
             with patch.dict("os.environ", {"RESEARCH_AGENT_RUNTIME_DIR": str(root / "runtime")}):
-                with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.paths.project_root", return_value=root):
                     cli_app.save_json_atomic(
                         cli_app.loop_state_path(),
                         {
@@ -737,7 +737,7 @@ class CliAppTest(unittest.TestCase):
             root = Path(tmp)
             (root / "experiments" / "demo" / "trial_001").mkdir(parents=True)
             with patch.dict("os.environ", {"RESEARCH_AGENT_RUNTIME_DIR": str(root / "runtime")}):
-                with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.paths.project_root", return_value=root):
                     cli_app.save_json_atomic(
                         cli_app.loop_state_path(),
                         {
@@ -762,7 +762,7 @@ class CliAppTest(unittest.TestCase):
                 encoding="utf-8",
             )
             with patch.dict("os.environ", {"RESEARCH_AGENT_RUNTIME_DIR": str(root / "runtime")}):
-                with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.paths.project_root", return_value=root):
                     cli_app.save_json_atomic(
                         cli_app.loop_state_path(),
                         {"competition": "demo", "status": "failed", "next_trial": "trial_001"},
@@ -785,9 +785,9 @@ class CliAppTest(unittest.TestCase):
     def test_menu_can_exit_without_external_services(self):
         answers = iter(["11"])
         output = []
-        with patch("kaggle_research_agent.cli_app.load_experiments", return_value=[]):
+        with patch("research_agent.cli_app.load_experiments", return_value=[]):
             with patch(
-                "kaggle_research_agent.cli_app.experiment_snapshot",
+                "research_agent.cli_app.experiment_snapshot",
                 return_value={"competition": "titanic", "topic": "Titanic", "state": "대기 중", "latest": {}, "best": {}},
             ):
                 code = cli_app.run_menu(sync_on_start=False, input_fn=lambda _: next(answers), output=output.append)
@@ -800,9 +800,9 @@ class CliAppTest(unittest.TestCase):
             user_view = root / "experiments" / "demo" / "trial_001" / "user_view"
             user_view.mkdir(parents=True)
             snapshot = {"last_completed_trial": "trial_001"}
-            with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+            with patch("research_agent.cli_app.project_root", return_value=root):
                 answers = iter(["1", "5", "q"])
-                with patch("kaggle_research_agent.cli_app._open_folder") as opener:
+                with patch("research_agent.cli_app._open_folder") as opener:
                     message = cli_app._open_paths_dialog("demo", snapshot, lambda _: next(answers), lambda _: None)
 
             opener.assert_called_once_with(user_view.resolve())
@@ -819,9 +819,9 @@ class CliAppTest(unittest.TestCase):
                 "last_completed_trial": "trial_006",
                 "best": {"trial_id": "trial_003"},
             }
-            with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+            with patch("research_agent.cli_app.project_root", return_value=root):
                 answers = iter(["1", "4", "q"])
-                with patch("kaggle_research_agent.cli_app._open_folder") as opener:
+                with patch("research_agent.cli_app._open_folder") as opener:
                     message = cli_app._open_paths_dialog("demo", snapshot, lambda _: next(answers), lambda _: None)
 
             opener.assert_called_once_with(best_view.resolve())
@@ -838,8 +838,8 @@ class CliAppTest(unittest.TestCase):
             plan.write_text("# Plan\nUse title feature and family size.", encoding="utf-8")
             pipeline.write_text("# Pipeline\nload -> feature -> model -> submit", encoding="utf-8")
             scores.write_text("# Scores\nlocal 0.85475\nsubmit 0.77272", encoding="utf-8")
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.cli_app.project_root", return_value=root):
                     db_path = initialize_state_db()
                     upsert_competition({"competition_id": "demo", "objective": "maximize"}, db_path)
                     upsert_trial(
@@ -899,8 +899,8 @@ class CliAppTest(unittest.TestCase):
             snapshot = {"last_completed_trial": "trial_001"}
             answers = iter(["2", "", "q"])
             output = []
-            with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app._open_folder"):
+            with patch("research_agent.cli_app.project_root", return_value=root):
+                with patch("research_agent.cli_app._open_folder"):
                     message = cli_app._open_paths_dialog("demo", snapshot, lambda _: next(answers), output.append)
 
         rendered = "\n".join(output)
@@ -915,8 +915,8 @@ class CliAppTest(unittest.TestCase):
             experiment_root.mkdir(parents=True)
             snapshot = {"last_completed_trial": "trial_001"}
             answers = iter(["3", "q"])
-            with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app._open_folder") as opener:
+            with patch("research_agent.cli_app.project_root", return_value=root):
+                with patch("research_agent.cli_app._open_folder") as opener:
                     message = cli_app._open_paths_dialog("demo", snapshot, lambda _: next(answers), lambda _: None)
 
             opener.assert_called_once_with(experiment_root.resolve())
@@ -930,8 +930,8 @@ class CliAppTest(unittest.TestCase):
             internal.mkdir(parents=True)
             snapshot = {"last_completed_trial": "trial_006"}
             answers = iter(["4", "2", "q"])
-            with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app._open_folder") as opener:
+            with patch("research_agent.cli_app.project_root", return_value=root):
+                with patch("research_agent.cli_app._open_folder") as opener:
                     message = cli_app._open_paths_dialog("demo", snapshot, lambda _: next(answers), lambda _: None)
 
             opener.assert_called_once_with(internal.resolve())
@@ -944,8 +944,8 @@ class CliAppTest(unittest.TestCase):
             trial_root.mkdir(parents=True)
             snapshot = {"best": {"trial_id": "trial_003"}}
             answers = iter(["4", "3", "q"])
-            with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app._open_folder") as opener:
+            with patch("research_agent.cli_app.project_root", return_value=root):
+                with patch("research_agent.cli_app._open_folder") as opener:
                     message = cli_app._open_paths_dialog("demo", snapshot, lambda _: next(answers), lambda _: None)
 
             opener.assert_called_once_with(trial_root.resolve())
@@ -961,8 +961,8 @@ class CliAppTest(unittest.TestCase):
             experiments.mkdir(parents=True)
             manual_trials.mkdir(parents=True)
 
-            with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app._open_folder") as opener:
+            with patch("research_agent.cli_app.project_root", return_value=root):
+                with patch("research_agent.cli_app._open_folder") as opener:
                     message = cli_app._open_user_artifacts_roots("demo")
 
             opener.assert_called_once_with(experiments.resolve())
@@ -980,9 +980,9 @@ class CliAppTest(unittest.TestCase):
                 "last_completed_trial": "trial_006",
                 "best": {"trial_id": "trial_003"},
             }
-            with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+            with patch("research_agent.cli_app.project_root", return_value=root):
                 answers = iter(["5", "2", "q"])
-                with patch("kaggle_research_agent.cli_app._open_folder") as opener:
+                with patch("research_agent.cli_app._open_folder") as opener:
                     message = cli_app._open_paths_dialog("demo", snapshot, lambda _: next(answers), lambda _: None)
 
             opener.assert_called_once_with(best_submission.parent.resolve())
@@ -998,9 +998,9 @@ class CliAppTest(unittest.TestCase):
             run_json.parent.mkdir(parents=True)
             run_json.write_text(json.dumps({"submission_file": str(submission)}), encoding="utf-8")
             snapshot = {"last_completed_trial": "trial_006"}
-            with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+            with patch("research_agent.cli_app.project_root", return_value=root):
                 answers = iter(["5", "1", "q"])
-                with patch("kaggle_research_agent.cli_app._open_folder") as opener:
+                with patch("research_agent.cli_app._open_folder") as opener:
                     message = cli_app._open_paths_dialog("demo", snapshot, lambda _: next(answers), lambda _: None)
 
             opener.assert_called_once_with(submission.parent.resolve())
@@ -1014,8 +1014,8 @@ class CliAppTest(unittest.TestCase):
             submission.write_text("id,pred\n1,0\n", encoding="utf-8")
             snapshot = {}
             answers = iter(["5", "4", "trial_004", "q"])
-            with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app._open_folder") as opener:
+            with patch("research_agent.cli_app.project_root", return_value=root):
+                with patch("research_agent.cli_app._open_folder") as opener:
                     message = cli_app._open_paths_dialog("demo", snapshot, lambda _: next(answers), lambda _: None)
 
             opener.assert_called_once_with(submission.parent.resolve())
@@ -1028,8 +1028,8 @@ class CliAppTest(unittest.TestCase):
             outputs.mkdir(parents=True)
             snapshot = {}
             answers = iter(["5", "3", "q"])
-            with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app._open_folder") as opener:
+            with patch("research_agent.cli_app.project_root", return_value=root):
+                with patch("research_agent.cli_app._open_folder") as opener:
                     message = cli_app._open_paths_dialog("demo", snapshot, lambda _: next(answers), lambda _: None)
 
             opener.assert_called_once_with(outputs.resolve())
@@ -1039,7 +1039,7 @@ class CliAppTest(unittest.TestCase):
     def test_open_paths_dialog_can_expand_sqlite_trial_detail_before_returning(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 db_path = initialize_state_db()
                 upsert_competition({"competition_id": "demo", "objective": "maximize"}, db_path)
                 upsert_trial(
@@ -1078,7 +1078,7 @@ class CliAppTest(unittest.TestCase):
     def test_render_sqlite_trial_table_joins_trial_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 db_path = initialize_state_db()
                 upsert_competition({"competition_id": "demo", "objective": "maximize"}, db_path)
                 upsert_trial(
@@ -1129,7 +1129,7 @@ class CliAppTest(unittest.TestCase):
     def test_render_sqlite_trial_table_falls_back_to_primary_axis_when_decision_axis_is_empty(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 db_path = initialize_state_db()
                 upsert_competition({"competition_id": "demo", "objective": "maximize"}, db_path)
                 upsert_trial(
@@ -1170,7 +1170,7 @@ class CliAppTest(unittest.TestCase):
     def test_render_trial_comparison_table_shows_scores_deltas_and_best(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 db_path = initialize_state_db()
                 upsert_competition({"competition_id": "demo", "objective": "maximize"}, db_path)
                 for trial_id, source, local, submit, axis, decision, is_best in [
@@ -1223,7 +1223,7 @@ class CliAppTest(unittest.TestCase):
     def test_render_sqlite_trial_detail_shows_untruncated_values(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 db_path = initialize_state_db()
                 upsert_competition({"competition_id": "demo", "objective": "maximize"}, db_path)
                 upsert_trial(
@@ -1281,8 +1281,8 @@ class CliAppTest(unittest.TestCase):
                 prompts.append(prompt)
                 return next(answers)
             with patch.dict("os.environ", {"RESEARCH_AGENT_RUNTIME_DIR": str(runtime)}):
-                with patch("kaggle_research_agent.paths.ROOT", root):
-                    with patch("kaggle_research_agent.cli_app.sync_state", return_value={"ok": True}):
+                with patch("research_agent.paths.ROOT", root):
+                    with patch("research_agent.cli_app.sync_state", return_value={"ok": True}):
                         created = cli_app._new_experiment_dialog(ask, output.append)
                 selected = cli_app.selected_competition()
 
@@ -1439,7 +1439,7 @@ class CliAppTest(unittest.TestCase):
     def test_insight_message_shows_original_text_next_trial_and_planned_improvement(self):
         snapshot = {"current_trial": None, "last_completed_trial": "trial_003", "next_trial": "trial_004"}
         answers = iter(["다음 실험은 Kaggle 제출 점수 개선을 우선해줘."])
-        with patch("kaggle_research_agent.cli_app.submit_human_insight", return_value={"ok": True}):
+        with patch("research_agent.cli_app.submit_human_insight", return_value={"ok": True}):
             message = cli_app._insight_dialog("titanic", snapshot, lambda _: next(answers), lambda _: None)
 
         self.assertIn("다음 실험은 Kaggle 제출 점수 개선을 우선해줘.", message)
@@ -1476,9 +1476,9 @@ class CliAppTest(unittest.TestCase):
                 "scope": "next_trial",
                 "user_feedback": "앙상블 대신 제출 점수 안정성을 우선하자",
             }
-            with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+            with patch("research_agent.cli_app.project_root", return_value=root):
                 with patch(
-                    "kaggle_research_agent.cli_app.submit_human_insight",
+                    "research_agent.cli_app.submit_human_insight",
                     return_value={"ok": True, "data": {"feedback": new_feedback}},
                 ):
                     message = cli_app._insight_dialog("titanic", snapshot, lambda _: next(answers), output.append)
@@ -1544,8 +1544,8 @@ class DeleteExperimentTest(unittest.TestCase):
     def test_delete_experiment_removes_db_row_and_created_workspace(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.cli_app.project_root", return_value=root):
                     with patch.dict("os.environ", {"RESEARCH_AGENT_RUNTIME_DIR": str(root / "_runtime")}):
                         db_path = initialize_state_db()
                         upsert_competition({"competition_id": "demo-delete", "platform": "dacon"}, db_path)
@@ -1564,7 +1564,7 @@ class DeleteExperimentTest(unittest.TestCase):
                         self.assertTrue(result["ok"])
                         self.assertFalse((root / "demo_workspaces" / "demo-delete").exists())
                         self.assertFalse((root / "competitions" / "demo-delete").exists())
-                        from kaggle_research_agent.state_db import list_competitions
+                        from research_agent.state_db import list_competitions
 
                         remaining_ids = [row["competition_id"] for row in list_competitions(db_path)]
                         self.assertNotIn("demo-delete", remaining_ids)
@@ -1578,8 +1578,8 @@ class DeleteExperimentTest(unittest.TestCase):
         # by trusting that record -- is what actually fixes this.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.cli_app.project_root", return_value=root):
                     with patch.dict("os.environ", {"RESEARCH_AGENT_RUNTIME_DIR": str(root / "_runtime")}):
                         db_path = initialize_state_db()
                         upsert_competition({"competition_id": "demo-stale", "platform": "dacon"}, db_path)
@@ -1603,8 +1603,8 @@ class DeleteExperimentTest(unittest.TestCase):
             external = Path(tmp) / "outside_project"
             external.mkdir()
             (external / "keep.txt").write_text("keep me", encoding="utf-8")
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.cli_app.project_root", return_value=root):
                     with patch.dict("os.environ", {"RESEARCH_AGENT_RUNTIME_DIR": str(root / "_runtime")}):
                         db_path = initialize_state_db()
                         upsert_competition({"competition_id": "demo-external", "platform": "kaggle"}, db_path)
@@ -1629,8 +1629,8 @@ class DeleteExperimentTest(unittest.TestCase):
         # showing up immediately on the freshly re-registered experiment.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.cli_app.project_root", return_value=root):
                     with patch.dict("os.environ", {"RESEARCH_AGENT_RUNTIME_DIR": str(root / "_runtime")}):
                         db_path = initialize_state_db()
                         upsert_competition({"competition_id": "236716", "platform": "dacon"}, db_path)
@@ -1660,8 +1660,8 @@ class DeleteExperimentTest(unittest.TestCase):
     def test_delete_experiment_keeps_unrelated_loop_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.cli_app.project_root", return_value=root):
                     with patch.dict("os.environ", {"RESEARCH_AGENT_RUNTIME_DIR": str(root / "_runtime")}):
                         db_path = initialize_state_db()
                         upsert_competition({"competition_id": "demo-delete", "platform": "dacon"}, db_path)
@@ -1687,7 +1687,7 @@ class DeleteExperimentTest(unittest.TestCase):
 
 class SubmitTrialManuallyTest(unittest.TestCase):
     def _write_profile(self, root: Path, project: Path, *, team_name: str = "뚜로") -> None:
-        from kaggle_research_agent import simple_yaml
+        from research_agent import simple_yaml
 
         comp_dir = root / "competitions" / "demo"
         comp_dir.mkdir(parents=True)
@@ -1720,9 +1720,9 @@ class SubmitTrialManuallyTest(unittest.TestCase):
                 captured.update(kwargs)
                 return {"status": "submitted", "trial_id": kwargs["trial_id"]}
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
-                    with patch("kaggle_research_agent.cli_app._submit_trial", side_effect=fake_submit_trial):
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.cli_app.project_root", return_value=root):
+                    with patch("research_agent.cli_app._submit_trial", side_effect=fake_submit_trial):
                         result = cli_app.submit_trial_manually("demo", "trial_004")
 
             self.assertTrue(result["ok"])
@@ -1735,14 +1735,14 @@ class SubmitTrialManuallyTest(unittest.TestCase):
     def test_rejects_non_dacon_competition(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            from kaggle_research_agent import simple_yaml
+            from research_agent import simple_yaml
 
             comp_dir = root / "competitions" / "demo"
             comp_dir.mkdir(parents=True)
             simple_yaml.dump({"platform": "kaggle"}, comp_dir / "execution_profile.yaml")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.cli_app.project_root", return_value=root):
                     result = cli_app.submit_trial_manually("demo", "trial_004")
 
             self.assertFalse(result["ok"])
@@ -1755,8 +1755,8 @@ class SubmitTrialManuallyTest(unittest.TestCase):
             project.mkdir()
             self._write_profile(root, project, team_name="")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.cli_app.project_root", return_value=root):
                     result = cli_app.submit_trial_manually("demo", "trial_004")
 
             self.assertFalse(result["ok"])
@@ -1771,8 +1771,8 @@ class SubmitTrialManuallyTest(unittest.TestCase):
             trial = root / "experiments" / "demo" / "trial_004"
             trial.mkdir(parents=True)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.cli_app.project_root", return_value=root):
                     result = cli_app.submit_trial_manually("demo", "trial_004")
 
             self.assertFalse(result["ok"])
@@ -1783,8 +1783,8 @@ class RefreshDaconCompetitionDocsTest(unittest.TestCase):
     def test_writes_overview_and_data_notes_from_scraped_text(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.cli_app.project_root", return_value=root):
                     comp_dir = root / "competitions" / "demo"
                     comp_dir.mkdir(parents=True)
                     (comp_dir / "overview.md").write_text(
@@ -1793,11 +1793,11 @@ class RefreshDaconCompetitionDocsTest(unittest.TestCase):
                     )
 
                     with patch(
-                        "kaggle_research_agent.cli_app.dacon_api.fetch_competition_overview",
+                        "research_agent.cli_app.dacon_api.fetch_competition_overview",
                         return_value={"ok": True, "status": "found", "text": "실제 대회 설명입니다."},
                     ):
                         with patch(
-                            "kaggle_research_agent.cli_app.dacon_api.fetch_competition_data_description",
+                            "research_agent.cli_app.dacon_api.fetch_competition_data_description",
                             return_value={"ok": True, "status": "found", "text": "실제 데이터 설명입니다."},
                         ):
                             result = cli_app.refresh_dacon_competition_docs("demo", dacon_competition_id="236716")
@@ -1813,17 +1813,17 @@ class RefreshDaconCompetitionDocsTest(unittest.TestCase):
     def test_a_scrape_failure_does_not_raise_or_overwrite_the_other_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.cli_app.project_root", return_value=root):
                     comp_dir = root / "competitions" / "demo"
                     comp_dir.mkdir(parents=True)
 
                     with patch(
-                        "kaggle_research_agent.cli_app.dacon_api.fetch_competition_overview",
+                        "research_agent.cli_app.dacon_api.fetch_competition_overview",
                         return_value={"ok": False, "status": "fetch_error", "error": "timeout"},
                     ):
                         with patch(
-                            "kaggle_research_agent.cli_app.dacon_api.fetch_competition_data_description",
+                            "research_agent.cli_app.dacon_api.fetch_competition_data_description",
                             return_value={"ok": True, "status": "found", "text": "실제 데이터 설명입니다."},
                         ):
                             result = cli_app.refresh_dacon_competition_docs("demo", dacon_competition_id="236716")
@@ -1843,9 +1843,9 @@ class DaconSubmissionLimitTest(unittest.TestCase):
     def test_check_uses_manual_override_without_hitting_the_network(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
-                    from kaggle_research_agent import simple_yaml
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.cli_app.project_root", return_value=root):
+                    from research_agent import simple_yaml
 
                     profile_path = root / "competitions" / "demo" / "execution_profile.yaml"
                     profile_path.parent.mkdir(parents=True)
@@ -1855,11 +1855,11 @@ class DaconSubmissionLimitTest(unittest.TestCase):
                     )
 
                     with patch(
-                        "kaggle_research_agent.cli_app.dacon_api.fetch_daily_submission_limit",
+                        "research_agent.cli_app.dacon_api.fetch_daily_submission_limit",
                         side_effect=AssertionError("should not fetch when a manual override is set"),
                     ):
                         with patch(
-                            "kaggle_research_agent.cli_app.dacon_api.fetch_my_submissions",
+                            "research_agent.cli_app.dacon_api.fetch_my_submissions",
                             return_value=self._NO_SUBMISSION_HISTORY,
                         ):
                             result = cli_app.check_dacon_submission_limit("demo")
@@ -1872,26 +1872,26 @@ class DaconSubmissionLimitTest(unittest.TestCase):
         # first time; every later call must read the cached value instead.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
-                    from kaggle_research_agent import simple_yaml
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.cli_app.project_root", return_value=root):
+                    from research_agent import simple_yaml
 
                     profile_path = root / "competitions" / "demo" / "execution_profile.yaml"
                     profile_path.parent.mkdir(parents=True)
                     simple_yaml.dump({"dacon_competition_id": "236716"}, profile_path)
 
                     with patch(
-                        "kaggle_research_agent.cli_app.dacon_api.fetch_daily_submission_limit",
+                        "research_agent.cli_app.dacon_api.fetch_daily_submission_limit",
                         return_value={"ok": True, "status": "found", "daily_submission_limit": 5},
                     ) as fetch_limit:
                         with patch(
-                            "kaggle_research_agent.cli_app.dacon_api.fetch_my_submissions",
+                            "research_agent.cli_app.dacon_api.fetch_my_submissions",
                             return_value=self._NO_SUBMISSION_HISTORY,
                         ):
                             first = cli_app.check_dacon_submission_limit("demo")
 
                             with patch(
-                                "kaggle_research_agent.cli_app.dacon_api.fetch_daily_submission_limit",
+                                "research_agent.cli_app.dacon_api.fetch_daily_submission_limit",
                                 side_effect=AssertionError("should not re-fetch once cached"),
                             ):
                                 second = cli_app.check_dacon_submission_limit("demo")
@@ -1910,20 +1910,20 @@ class DaconSubmissionLimitTest(unittest.TestCase):
         # override is worth setting.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
-                    from kaggle_research_agent import simple_yaml
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.cli_app.project_root", return_value=root):
+                    from research_agent import simple_yaml
 
                     profile_path = root / "competitions" / "demo" / "execution_profile.yaml"
                     profile_path.parent.mkdir(parents=True)
                     simple_yaml.dump({"dacon_competition_id": "236716"}, profile_path)
 
                     with patch(
-                        "kaggle_research_agent.cli_app.dacon_api.fetch_daily_submission_limit",
+                        "research_agent.cli_app.dacon_api.fetch_daily_submission_limit",
                         return_value={"ok": False, "status": "not_found", "error": "..."},
                     ):
                         with patch(
-                            "kaggle_research_agent.cli_app.dacon_api.fetch_my_submissions",
+                            "research_agent.cli_app.dacon_api.fetch_my_submissions",
                             side_effect=AssertionError("must not fetch submission history when limit is unknown"),
                         ):
                             result = cli_app.check_dacon_submission_limit("demo")
@@ -1938,11 +1938,11 @@ class DaconSubmissionLimitTest(unittest.TestCase):
         # RollingWindowSubmissionStatsTest below, kept for that future use).
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.cli_app.project_root", return_value=root):
                     from datetime import datetime, timedelta, timezone
 
-                    from kaggle_research_agent import simple_yaml
+                    from research_agent import simple_yaml
 
                     profile_path = root / "competitions" / "demo" / "execution_profile.yaml"
                     profile_path.parent.mkdir(parents=True)
@@ -1958,7 +1958,7 @@ class DaconSubmissionLimitTest(unittest.TestCase):
                     yesterday = (midnight_kst - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
 
                     with patch(
-                        "kaggle_research_agent.cli_app.dacon_api.fetch_my_submissions",
+                        "research_agent.cli_app.dacon_api.fetch_my_submissions",
                         return_value={
                             "ok": True,
                             "submissions": [
@@ -1979,9 +1979,9 @@ class DaconSubmissionLimitTest(unittest.TestCase):
         # Nothing pending against the limit -- there is nothing to reset.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
-                    from kaggle_research_agent import simple_yaml
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.cli_app.project_root", return_value=root):
+                    from research_agent import simple_yaml
 
                     profile_path = root / "competitions" / "demo" / "execution_profile.yaml"
                     profile_path.parent.mkdir(parents=True)
@@ -1991,7 +1991,7 @@ class DaconSubmissionLimitTest(unittest.TestCase):
                     )
 
                     with patch(
-                        "kaggle_research_agent.cli_app.dacon_api.fetch_my_submissions",
+                        "research_agent.cli_app.dacon_api.fetch_my_submissions",
                         return_value={"ok": True, "submissions": []},
                     ):
                         result = cli_app.check_dacon_submission_limit("demo")
@@ -2005,9 +2005,9 @@ class DaconSubmissionLimitTest(unittest.TestCase):
         # limit alone rather than a broken "?/5" or hiding it entirely.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
-                    from kaggle_research_agent import simple_yaml
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.cli_app.project_root", return_value=root):
+                    from research_agent import simple_yaml
 
                     profile_path = root / "competitions" / "demo" / "execution_profile.yaml"
                     profile_path.parent.mkdir(parents=True)
@@ -2017,7 +2017,7 @@ class DaconSubmissionLimitTest(unittest.TestCase):
                     )
 
                     with patch(
-                        "kaggle_research_agent.cli_app.dacon_api.fetch_my_submissions",
+                        "research_agent.cli_app.dacon_api.fetch_my_submissions",
                         return_value=self._NO_SUBMISSION_HISTORY,
                     ):
                         result = cli_app.check_dacon_submission_limit("demo")
@@ -2029,9 +2029,9 @@ class DaconSubmissionLimitTest(unittest.TestCase):
     def test_set_override_writes_and_clear_removes_it(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
-                    from kaggle_research_agent import simple_yaml
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.cli_app.project_root", return_value=root):
+                    from research_agent import simple_yaml
 
                     profile_path = root / "competitions" / "demo" / "execution_profile.yaml"
                     profile_path.parent.mkdir(parents=True)
@@ -2048,9 +2048,9 @@ class DaconSubmissionLimitTest(unittest.TestCase):
     def test_set_dacon_team_name_writes_and_clears(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
-                    from kaggle_research_agent import simple_yaml
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.cli_app.project_root", return_value=root):
+                    from research_agent import simple_yaml
 
                     profile_path = root / "competitions" / "demo" / "execution_profile.yaml"
                     profile_path.parent.mkdir(parents=True)
@@ -2089,9 +2089,9 @@ class BestTrialLocalFallbackTest(unittest.TestCase):
     def test_dacon_daily_limit_is_known_false_for_non_dacon_platform(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
-                    from kaggle_research_agent import simple_yaml
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.cli_app.project_root", return_value=root):
+                    from research_agent import simple_yaml
 
                     profile_path = root / "competitions" / "demo" / "execution_profile.yaml"
                     profile_path.parent.mkdir(parents=True)
@@ -2102,9 +2102,9 @@ class BestTrialLocalFallbackTest(unittest.TestCase):
     def test_dacon_daily_limit_is_known_true_for_manual_override(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
-                    from kaggle_research_agent import simple_yaml
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.cli_app.project_root", return_value=root):
+                    from research_agent import simple_yaml
 
                     profile_path = root / "competitions" / "demo" / "execution_profile.yaml"
                     profile_path.parent.mkdir(parents=True)
@@ -2118,9 +2118,9 @@ class BestTrialLocalFallbackTest(unittest.TestCase):
     def test_dacon_daily_limit_is_known_true_for_cached_auto_detection(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
-                    from kaggle_research_agent import simple_yaml
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.cli_app.project_root", return_value=root):
+                    from research_agent import simple_yaml
 
                     profile_path = root / "competitions" / "demo" / "execution_profile.yaml"
                     profile_path.parent.mkdir(parents=True)
@@ -2136,16 +2136,16 @@ class BestTrialLocalFallbackTest(unittest.TestCase):
         # every dashboard render via experiment_snapshot.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
-                    from kaggle_research_agent import simple_yaml
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.cli_app.project_root", return_value=root):
+                    from research_agent import simple_yaml
 
                     profile_path = root / "competitions" / "demo" / "execution_profile.yaml"
                     profile_path.parent.mkdir(parents=True)
                     simple_yaml.dump({"platform": "dacon", "dacon_competition_id": "236716"}, profile_path)
 
                     with patch(
-                        "kaggle_research_agent.cli_app.dacon_api.fetch_daily_submission_limit",
+                        "research_agent.cli_app.dacon_api.fetch_daily_submission_limit",
                         side_effect=AssertionError("must not fetch live from experiment_snapshot's hot path"),
                     ):
                         self.assertFalse(cli_app._dacon_daily_limit_is_known("demo"))
@@ -2182,7 +2182,7 @@ class RollingWindowSubmissionStatsTest(unittest.TestCase):
         stale = (now - timedelta(hours=30)).strftime("%Y-%m-%d %H:%M:%S")
 
         with patch(
-            "kaggle_research_agent.cli_app.dacon_api.fetch_my_submissions",
+            "research_agent.cli_app.dacon_api.fetch_my_submissions",
             return_value={
                 "ok": True,
                 "submissions": [

@@ -6,12 +6,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.incremental_trial import (
+from research_agent.incremental_trial import (
     enrich_delta_plan,
     write_base_summary,
     write_effective_trial_artifacts,
 )
-from kaggle_research_agent.trial_user_view_effective import render_effective_pipeline_structure
+from research_agent.trial_user_view_effective import render_effective_pipeline_structure
 
 
 class IncrementalTrialTest(unittest.TestCase):
@@ -62,7 +62,7 @@ class IncrementalTrialTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 summary = write_base_summary("demo", "trial_002", "trial_001")
 
             self.assertEqual("trial_001", summary["base_trial_id"])
@@ -101,7 +101,7 @@ class IncrementalTrialTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 write_effective_trial_artifacts("demo", "trial_002", pipeline_structure=current_structure)
 
             effective = json.loads((current / "internal" / "effective_plan.json").read_text(encoding="utf-8-sig"))
@@ -132,7 +132,7 @@ class IncrementalTrialTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 write_effective_trial_artifacts("demo", "trial_002", pipeline_structure={"stages": []})
 
             delta = json.loads((current / "delta_plan.json").read_text(encoding="utf-8-sig"))

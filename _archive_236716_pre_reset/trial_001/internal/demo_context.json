@@ -1,0 +1,730 @@
+{
+  "competition": "236716",
+  "trial_id": "trial_001",
+  "plan_type": "initial_pipeline_plan",
+  "source_trial_id": null,
+  "base_summary": {},
+  "status": "ready",
+  "issues": [],
+  "metric": "R-Hit@1cm",
+  "objective": "maximize",
+  "platform": "dacon",
+  "project_root": "C:\\Users\\ASUS\\Desktop\\Research_Agent\\demo_workspaces\\236716",
+  "commands": {
+    "test": [
+      "{python} test_step.py"
+    ],
+    "train": [
+      "{python} train_step.py"
+    ],
+    "predict": [
+      "{python} predict_step.py"
+    ]
+  },
+  "artifacts": {
+    "metrics": [
+      "outputs/metrics.json"
+    ],
+    "submission": [
+      "outputs/submission.csv"
+    ]
+  },
+  "write_scope": {
+    "allowed": [
+      "src/",
+      "tests/",
+      "train_step.py",
+      "predict_step.py",
+      "test_step.py",
+      "workspace_config.json"
+    ],
+    "forbidden": [
+      "data/",
+      "outputs/metrics.json",
+      "outputs/submission.csv"
+    ]
+  },
+  "metrics_contract": {
+    "source_key": "r_hit_at_1cm"
+  },
+  "artifact_policy": {
+    "save_submission": true,
+    "save_metrics": true,
+    "save_code_snapshot": true,
+    "save_pipeline_summary": true,
+    "save_model": {
+      "default": false,
+      "allowed_when": [
+        "required_for_separate_predict_command",
+        "best_trial",
+        "submitted_trial",
+        "expensive_to_retrain",
+        "ensemble_candidate",
+        "user_requested"
+      ],
+      "require_reason": true,
+      "prefer_small_serialized_artifact": true,
+      "cleanup_non_best_models": true
+    },
+    "notes": [
+      "A trial should not persist trained model artifacts by default.",
+      "Submission, metrics, code snapshot, and pipeline summary are the primary memory artifacts.",
+      "If a model artifact is persisted, the plan/code should record why it is needed."
+    ]
+  },
+  "inventory_summary": {
+    "file_count": 500,
+    "truncated": true,
+    "data_files": [
+      "data/train_labels.csv",
+      "data/train/TRAIN_00001.csv",
+      "data/train/TRAIN_00002.csv",
+      "data/train/TRAIN_00003.csv",
+      "data/train/TRAIN_00004.csv",
+      "data/train/TRAIN_00005.csv",
+      "data/train/TRAIN_00006.csv",
+      "data/train/TRAIN_00007.csv",
+      "data/train/TRAIN_00008.csv",
+      "data/train/TRAIN_00009.csv",
+      "data/train/TRAIN_00010.csv",
+      "data/train/TRAIN_00011.csv",
+      "data/train/TRAIN_00012.csv",
+      "data/train/TRAIN_00013.csv",
+      "data/train/TRAIN_00014.csv",
+      "data/train/TRAIN_00015.csv",
+      "data/train/TRAIN_00016.csv",
+      "data/train/TRAIN_00017.csv",
+      "data/train/TRAIN_00018.csv",
+      "data/train/TRAIN_00019.csv"
+    ],
+    "code_files": [
+      "predict_step.py",
+      "test_step.py",
+      "train_step.py",
+      "src/__init__.py",
+      "src/baseline.py"
+    ]
+  },
+  "data_profile": {
+    "schema_version": "1.0",
+    "competition": "236716",
+    "status": "ready",
+    "project_root": "C:\\Users\\ASUS\\Desktop\\Research_Agent\\demo_workspaces\\236716",
+    "data_dir": "C:\\Users\\ASUS\\Desktop\\Research_Agent\\demo_workspaces\\236716\\data",
+    "required_data_files": [
+      "train_labels.csv",
+      "sample_submission.csv"
+    ],
+    "target_column": null,
+    "id_column": null,
+    "submission_prediction_column": null,
+    "validation_size": null,
+    "random_seed": null,
+    "task_type": "unknown",
+    "files": [
+      {
+        "name": "sample_submission.csv",
+        "role": "sample_submission",
+        "format": "csv",
+        "columns": [
+          "id",
+          "x",
+          "y",
+          "z"
+        ],
+        "rows_sampled": 80,
+        "column_profiles": [
+          {
+            "name": "id",
+            "role": "feature",
+            "type": "categorical_or_text",
+            "missing_in_sample": 0,
+            "unique_in_sample": 80,
+            "sample_values": [
+              "TEST_00001",
+              "TEST_00002",
+              "TEST_00003",
+              "TEST_00004",
+              "TEST_00005",
+              "TEST_00006",
+              "TEST_00007",
+              "TEST_00008"
+            ],
+            "baseline_use": "defer_or_engineer"
+          },
+          {
+            "name": "x",
+            "role": "feature",
+            "type": "numeric",
+            "missing_in_sample": 0,
+            "unique_in_sample": 1,
+            "sample_values": [
+              "0"
+            ],
+            "baseline_use": "include_numeric"
+          },
+          {
+            "name": "y",
+            "role": "feature",
+            "type": "numeric",
+            "missing_in_sample": 0,
+            "unique_in_sample": 1,
+            "sample_values": [
+              "0"
+            ],
+            "baseline_use": "include_numeric"
+          },
+          {
+            "name": "z",
+            "role": "feature",
+            "type": "numeric",
+            "missing_in_sample": 0,
+            "unique_in_sample": 1,
+            "sample_values": [
+              "0"
+            ],
+            "baseline_use": "include_numeric"
+          }
+        ]
+      },
+      {
+        "name": "train_labels.csv",
+        "role": "unknown",
+        "format": "csv",
+        "columns": [
+          "id",
+          "x",
+          "y",
+          "z"
+        ],
+        "rows_sampled": 80,
+        "column_profiles": [
+          {
+            "name": "id",
+            "role": "feature",
+            "type": "categorical_or_text",
+            "missing_in_sample": 0,
+            "unique_in_sample": 80,
+            "sample_values": [
+              "TRAIN_00001",
+              "TRAIN_00002",
+              "TRAIN_00003",
+              "TRAIN_00004",
+              "TRAIN_00005",
+              "TRAIN_00006",
+              "TRAIN_00007",
+              "TRAIN_00008"
+            ],
+            "baseline_use": "defer_or_engineer"
+          },
+          {
+            "name": "x",
+            "role": "feature",
+            "type": "numeric",
+            "missing_in_sample": 0,
+            "unique_in_sample": 80,
+            "sample_values": [
+              "0.921500",
+              "0.958949",
+              "1.116291",
+              "1.120465",
+              "1.197448",
+              "1.212156",
+              "1.311051",
+              "1.329246"
+            ],
+            "baseline_use": "include_numeric"
+          },
+          {
+            "name": "y",
+            "role": "feature",
+            "type": "numeric",
+            "missing_in_sample": 0,
+            "unique_in_sample": 80,
+            "sample_values": [
+              "-0.021910",
+              "-0.050734",
+              "-0.051013",
+              "-0.069400",
+              "-0.080307",
+              "-0.124668",
+              "-0.167822",
+              "-0.173408"
+            ],
+            "baseline_use": "include_numeric"
+          },
+          {
+            "name": "z",
+            "role": "feature",
+            "type": "numeric",
+            "missing_in_sample": 0,
+            "unique_in_sample": 80,
+            "sample_values": [
+              "-0.000712",
+              "-0.009392",
+              "-0.019708",
+              "-0.045875",
+              "-0.049363",
+              "-0.088811",
+              "-0.102459",
+              "-0.102502"
+            ],
+            "baseline_use": "include_numeric"
+          }
+        ]
+      }
+    ],
+    "directory_datasets": [
+      {
+        "name": "test/",
+        "role": "test",
+        "file_count": 10000,
+        "filename_pattern": "TEST_#####.csv",
+        "example_files": [
+          "TEST_00001.csv",
+          "TEST_00002.csv",
+          "TEST_00003.csv"
+        ],
+        "per_file_columns": [
+          "timestep_ms",
+          "x",
+          "y",
+          "z"
+        ],
+        "per_file_rows_sampled": 11,
+        "column_profiles": [
+          {
+            "name": "timestep_ms",
+            "role": "feature",
+            "type": "numeric",
+            "missing_in_sample": 0,
+            "unique_in_sample": 11,
+            "sample_values": [
+              "-120",
+              "-160",
+              "-200",
+              "-240",
+              "-280",
+              "-320",
+              "-360",
+              "-40"
+            ],
+            "baseline_use": "include_numeric"
+          },
+          {
+            "name": "x",
+            "role": "feature",
+            "type": "numeric",
+            "missing_in_sample": 0,
+            "unique_in_sample": 11,
+            "sample_values": [
+              "3.994828",
+              "3.997651",
+              "3.999875",
+              "4.003622",
+              "4.006621",
+              "4.009012",
+              "4.011209",
+              "4.014258"
+            ],
+            "baseline_use": "include_numeric"
+          },
+          {
+            "name": "y",
+            "role": "feature",
+            "type": "numeric",
+            "missing_in_sample": 0,
+            "unique_in_sample": 11,
+            "sample_values": [
+              "-1.062941",
+              "-1.068346",
+              "-1.074615",
+              "-1.080916",
+              "-1.087306",
+              "-1.094246",
+              "-1.102156",
+              "-1.110654"
+            ],
+            "baseline_use": "include_numeric"
+          },
+          {
+            "name": "z",
+            "role": "feature",
+            "type": "numeric",
+            "missing_in_sample": 0,
+            "unique_in_sample": 11,
+            "sample_values": [
+              "0.040801",
+              "0.041584",
+              "0.042038",
+              "0.042315",
+              "0.042905",
+              "0.043208",
+              "0.043357",
+              "0.043444"
+            ],
+            "baseline_use": "include_numeric"
+          }
+        ],
+        "sample_id_source": "filename_stem",
+        "id_matched_files": [
+          "sample_submission.csv:id"
+        ],
+        "notes": [
+          "Each CSV in this directory is ONE sample; the sample id is the filename stem.",
+          "Load every file in the directory and derive features per sample -- do not expect a single flat table."
+        ]
+      },
+      {
+        "name": "train/",
+        "role": "train",
+        "file_count": 10000,
+        "filename_pattern": "TRAIN_#####.csv",
+        "example_files": [
+          "TRAIN_00001.csv",
+          "TRAIN_00002.csv",
+          "TRAIN_00003.csv"
+        ],
+        "per_file_columns": [
+          "timestep_ms",
+          "x",
+          "y",
+          "z"
+        ],
+        "per_file_rows_sampled": 11,
+        "column_profiles": [
+          {
+            "name": "timestep_ms",
+            "role": "feature",
+            "type": "numeric",
+            "missing_in_sample": 0,
+            "unique_in_sample": 11,
+            "sample_values": [
+              "-120",
+              "-160",
+              "-200",
+              "-240",
+              "-280",
+              "-320",
+              "-360",
+              "-40"
+            ],
+            "baseline_use": "include_numeric"
+          },
+          {
+            "name": "x",
+            "role": "feature",
+            "type": "numeric",
+            "missing_in_sample": 0,
+            "unique_in_sample": 11,
+            "sample_values": [
+              "2.490842",
+              "2.541293",
+              "2.592528",
+              "2.642445",
+              "2.692050",
+              "2.742067",
+              "2.791783",
+              "2.841753"
+            ],
+            "baseline_use": "include_numeric"
+          },
+          {
+            "name": "y",
+            "role": "feature",
+            "type": "numeric",
+            "missing_in_sample": 0,
+            "unique_in_sample": 11,
+            "sample_values": [
+              "0.377812",
+              "0.388259",
+              "0.397126",
+              "0.408369",
+              "0.419100",
+              "0.427725",
+              "0.444501",
+              "0.460089"
+            ],
+            "baseline_use": "include_numeric"
+          },
+          {
+            "name": "z",
+            "role": "feature",
+            "type": "numeric",
+            "missing_in_sample": 0,
+            "unique_in_sample": 11,
+            "sample_values": [
+              "-0.182941",
+              "-0.193358",
+              "-0.207018",
+              "-0.220893",
+              "-0.233944",
+              "-0.246040",
+              "-0.264160",
+              "-0.281991"
+            ],
+            "baseline_use": "include_numeric"
+          }
+        ],
+        "sample_id_source": "filename_stem",
+        "id_matched_files": [
+          "train_labels.csv:id"
+        ],
+        "notes": [
+          "Each CSV in this directory is ONE sample; the sample id is the filename stem.",
+          "Load every file in the directory and derive features per sample -- do not expect a single flat table."
+        ]
+      }
+    ],
+    "dataset_layout": "per_sample_files",
+    "train_file": null,
+    "test_file": null,
+    "train_dir": "train/",
+    "test_dir": "test/",
+    "sample_submission_file": "sample_submission.csv",
+    "baseline_recommendation": {
+      "first_trial_policy": "stable_supervised_tabular_baseline",
+      "target_column": null,
+      "id_column": null,
+      "include_features_first": [],
+      "defer_features_first": [],
+      "exclude_columns": [],
+      "preferred_model_families": [
+        "logistic_regression_or_linear_classifier_for_binary_classification",
+        "small_random_forest_or_gradient_boosted_tree_if_available"
+      ],
+      "avoid_first_trial": [
+        "gaussian_naive_bayes_for_mixed_numeric_and_categorical_data",
+        "raw_high_cardinality_text_or_identifier_one_hot_features",
+        "broad_schema_discovery_when_target_id_and_columns_are_known"
+      ],
+      "notes": [
+        "Use concrete data_profile columns before generic RAG summaries.",
+        "Never train on columns that are absent from the test data unless prediction-time derivation is explicit.",
+        "Keep the first baseline simple, supervised, deterministic, and submission-format checked."
+      ]
+    }
+  },
+  "baseline_guardrails": {
+    "priority": "first_trial_quality_over_generic_flexibility",
+    "data_profile_is_mandatory": true,
+    "recommended_features": [],
+    "deferred_features": [],
+    "excluded_columns": [],
+    "preferred_model_families": [
+      "logistic_regression_or_linear_classifier_for_binary_classification",
+      "small_random_forest_or_gradient_boosted_tree_if_available"
+    ],
+    "avoid_first_trial": [
+      "gaussian_naive_bayes_for_mixed_numeric_and_categorical_data",
+      "raw_high_cardinality_text_or_identifier_one_hot_features",
+      "broad_schema_discovery_when_target_id_and_columns_are_known"
+    ]
+  },
+  "competition_docs": {
+    "overview.md": "# 236716 - 모기 비행 궤적 예측 AI 경진대회\n\nLiDAR 센서로 관측된 모기의 과거 좌표를 바탕으로 80ms 후의 3D 위치를 예측하는 시계열 회귀 문제.\n\n- 입력: 40ms 간격으로 관측된 11개 시점의 3D 좌표 (x, y, z), 시간 범위 -400ms ~ 0ms\n- 출력: +80ms 시점의 3D 좌표 (x, y, z)\n- 좌표계: 방 기준 절대 좌표가 아니라 LiDAR 센서 기준 sensor-local 3D 좌표계. 단위는 미터(m). 축 방향은 x: forward, y: left, z: up.\n- 평가지표: R-Hit@1cm. 예측 좌표와 실제 좌표의 3D 유클리드 거리 d를 계산해서 d <= 0.01m이면 적중(1), 아니면 실패(0). 점수는 전체 샘플의 평균 R-Hit(적중률).",
+    "data_notes.md": "# Data Notes\n\n**IMPORTANT: there is no flat data/train.csv or data/test.csv file. Do not assume one exists.**\n\n```\ndata/\n├── train/                  # 10000 files, one per training sample\n│   ├── TRAIN_00001.csv     # columns: timestep_ms, x, y, z (11 rows, -400ms..0ms in 40ms steps)\n│   ├── TRAIN_00002.csv\n│   ├── ...\n│   └── TRAIN_10000.csv\n├── test/                   # 10000 files, same structure as train/, one per test sample\n│   ├── TEST_00001.csv\n│   ├── ...\n│   └── TEST_10000.csv\n├── train_labels.csv        # columns: id, x, y, z -- id values are \"TRAIN_00001\" etc.,\n│                            # matching the train/*.csv filename stem. x,y,z here is the\n│                            # TARGET: the mosquito's actual position 80ms after the last\n│                            # observed timestep in that sample's file.\n└── sample_submission.csv   # columns: id, x, y, z -- id values are \"TEST_00001\" etc.\n```\n\n**How to build the training set:** for each `train/TRAIN_XXXXX.csv`, load its 11-row time\nseries (features), then look up the target `x,y,z` from `train_labels.csv` where\n`id == \"TRAIN_XXXXX\"`. Predictions for `test/TEST_XXXXX.csv` go into `outputs/submission.csv`\nkeyed by `id == \"TEST_XXXXX\"`, matching `sample_submission.csv`'s row order/ids.\n\nNo leakage risk between train/test (disjoint sample folders). No column notes beyond the\nabove -- x,y,z are already numeric sensor-local coordinates in meters.",
+    "metric.md": "# Metric\n\n- name: R-Hit@1cm\n- objective: maximize"
+  },
+  "recent_trials": [],
+  "decision_context": {
+    "latest_decision_card": {
+      "schema_version": "1.0",
+      "competition": "236716",
+      "trial_id": "trial_001",
+      "created_at": "2026-07-31T00:04:41.690183+00:00",
+      "source_trial_id": null,
+      "plan_type": "initial_pipeline_plan",
+      "change_axis": "",
+      "local_score": 1.0,
+      "lb_score": null,
+      "previous_local_score": null,
+      "previous_lb_score": null,
+      "best_local_score": null,
+      "best_lb_score": null,
+      "local_delta": null,
+      "lb_delta": null,
+      "previous_local_delta": null,
+      "previous_lb_delta": null,
+      "objective": "maximize",
+      "local_status": "baseline",
+      "lb_status": "missing",
+      "previous_local_status": "baseline",
+      "previous_lb_status": "missing",
+      "raw_decision": "baseline_established",
+      "decision": "baseline_established",
+      "model_type": "RuleBasedConstantVelocity",
+      "catastrophic_regression": false,
+      "estimator_family_changed": false,
+      "no_change_suspected": false,
+      "active_axis": null,
+      "axis_attempt_count": 0,
+      "axis_attempt_limit": 3,
+      "candidate_label": "Baseline: Constant-Velocity Extrapolation (+80ms from t0,t-40ms)",
+      "rejected_candidates": [],
+      "rejected_candidates_by_axis": {},
+      "active_axis_rejected_candidates": [],
+      "recommended_base_trial": "trial_001",
+      "rejected_axes": [],
+      "accepted_axes": [],
+      "next_guidance": "Use this trial as the baseline. The next trial should change exactly one improvement axis.",
+      "planner_constraints": [
+        "Use `trial_001` as the base trial unless the user explicitly overrides it.",
+        "Change exactly one primary improvement axis in the next trial.",
+        "Keep split/model/preprocessing fixed unless selected as the primary axis."
+      ]
+    },
+    "best_decision_card": {
+      "schema_version": "1.0",
+      "competition": "236716",
+      "trial_id": "trial_001",
+      "created_at": "2026-07-31T00:04:41.690183+00:00",
+      "source_trial_id": null,
+      "plan_type": "initial_pipeline_plan",
+      "change_axis": "",
+      "local_score": 1.0,
+      "lb_score": null,
+      "previous_local_score": null,
+      "previous_lb_score": null,
+      "best_local_score": null,
+      "best_lb_score": null,
+      "local_delta": null,
+      "lb_delta": null,
+      "previous_local_delta": null,
+      "previous_lb_delta": null,
+      "objective": "maximize",
+      "local_status": "baseline",
+      "lb_status": "missing",
+      "previous_local_status": "baseline",
+      "previous_lb_status": "missing",
+      "raw_decision": "baseline_established",
+      "decision": "baseline_established",
+      "model_type": "RuleBasedConstantVelocity",
+      "catastrophic_regression": false,
+      "estimator_family_changed": false,
+      "no_change_suspected": false,
+      "active_axis": null,
+      "axis_attempt_count": 0,
+      "axis_attempt_limit": 3,
+      "candidate_label": "Baseline: Constant-Velocity Extrapolation (+80ms from t0,t-40ms)",
+      "rejected_candidates": [],
+      "rejected_candidates_by_axis": {},
+      "active_axis_rejected_candidates": [],
+      "recommended_base_trial": "trial_001",
+      "rejected_axes": [],
+      "accepted_axes": [],
+      "next_guidance": "Use this trial as the baseline. The next trial should change exactly one improvement axis.",
+      "planner_constraints": [
+        "Use `trial_001` as the base trial unless the user explicitly overrides it.",
+        "Change exactly one primary improvement axis in the next trial.",
+        "Keep split/model/preprocessing fixed unless selected as the primary axis."
+      ]
+    },
+    "rejected_axes": [],
+    "accepted_axes": [],
+    "active_axis": null,
+    "axis_attempt_count": 0,
+    "axis_attempt_limit": 3,
+    "rejected_candidates": [],
+    "rejected_candidates_by_axis": {},
+    "active_axis_rejected_candidates": [],
+    "recommended_base_trial": "trial_001",
+    "next_guidance": "Use this trial as the baseline. The next trial should change exactly one improvement axis.",
+    "planner_constraints": [
+      "Use `trial_001` as the base trial unless the user explicitly overrides it.",
+      "Change exactly one primary improvement axis in the next trial.",
+      "Keep split/model/preprocessing fixed unless selected as the primary axis."
+    ],
+    "decision_card_count": 1
+  },
+  "llm_call": false,
+  "model_policy": {
+    "experiment_planning": {
+      "tier": "high_cost",
+      "provider": "openai",
+      "api": "responses",
+      "model": "gpt-5",
+      "call_type": "experiment_planning",
+      "override": true
+    },
+    "workspace_code_writing": {
+      "tier": "high_cost",
+      "provider": "openai",
+      "api": "responses",
+      "model": "gpt-5",
+      "call_type": "workspace_code_writing",
+      "override": true
+    },
+    "low_cost": {
+      "tier": "low_cost",
+      "provider": "openai",
+      "api": "responses",
+      "model": "gpt-5.6-luna",
+      "call_types": [
+        "status_summary",
+        "log_summary",
+        "short_note_rewrite",
+        "simple_context_summary",
+        "user_summary_card",
+        "experiment_question",
+        "user_insight_interpretation",
+        "plan_translation"
+      ]
+    }
+  },
+  "planning_context_pack": {
+    "task": "experiment_planning",
+    "query": "competition overview metric data notes source materials execution profile competition data card data profile target id columns feature recommendations previous trial plan metrics pipeline structure result",
+    "document_count": 5,
+    "budget": {
+      "max_documents": 5,
+      "max_chars_per_document": 900,
+      "prompt_chars_per_document": 650
+    },
+    "context_pack_file": "experiments/236716/trial_001/context_pack_experiment_planning.json",
+    "context_pack_md_file": "experiments/236716/trial_001/context_pack_experiment_planning.md",
+    "retrieval_manifest_file": "experiments/236716/trial_001/retrieval_manifest_experiment_planning.json",
+    "documents": [
+      {
+        "source_path": "memory/236716/latest_trial_memory_card.json",
+        "source_kind": "trial_memory_card",
+        "trial_id": null,
+        "score": 41,
+        "text": "{\n  \"schema_version\": \"1.0\",\n  \"competition\": \"236716\",\n  \"trial_id\": \"trial_001\",\n  \"created_at\": \"2026-07-31T00:04:41.695235+00:00\",\n  \"plan_type\": \"initial_pipeline_plan\",\n  \"source_trial_id\": null,\n  \"plan_title\": \"Baseline: Constant-Velocity Extrapolation (+80ms from t0,t-40ms)\",\n  \"change_axis\": \"\",\n  \"candidate_label\": \"Baseline: Constant-Velocity Extrapolation (+80ms from t0,t-40ms)\",\n  \"change_details\": [],\n  \"kept_unchanged\": [],\n  \"local_score\": 1.0,\n  \"lb_score\": null,\n  \"local_status\": \"baseline\",\n  \"previous_local_status\": \"baseline\",\n  \"local_delta\": null,\n  \"previous_local_delta\": null,\n  \"decision\": \"baseline_established\",\n  \"active_axis\": null,\n  \"axis_attempt_count\": 0,\n  \"axis_attempt_limit\": 3,\n  \"recommended_base_trial\": \"trial_001\",\n  \"rejected_axes\": [],\n  \"rejected_candidates\": [],\n  \"rejected_candidates_by_axis\": {},\n  \"active_axis_rejected_candidates\": [],\n  \"f"
+      },
+      {
+        "source_path": "memory/236716/latest_decision_card.json",
+        "source_kind": "decision_card",
+        "trial_id": null,
+        "score": 39,
+        "text": "{\n  \"schema_version\": \"1.0\",\n  \"competition\": \"236716\",\n  \"trial_id\": \"trial_001\",\n  \"created_at\": \"2026-07-31T00:04:41.690183+00:00\",\n  \"source_trial_id\": null,\n  \"plan_type\": \"initial_pipeline_plan\",\n  \"change_axis\": \"\",\n  \"local_score\": 1.0,\n  \"lb_score\": null,\n  \"previous_local_score\": null,\n  \"previous_lb_score\": null,\n  \"best_local_score\": null,\n  \"best_lb_score\": null,\n  \"local_delta\": null,\n  \"lb_delta\": null,\n  \"previous_local_delta\": null,\n  \"previous_lb_delta\": null,\n  \"objective\": \"maximize\",\n  \"local_status\": \"baseline\",\n  \"lb_status\": \"missing\",\n  \"previous_local_status\": \"baseline\",\n  \"previous_lb_status\": \"missing\",\n  \"raw_decision\": \"baseline_established\",\n  \"decision\": \"baseline_established\",\n  \"model_type\": \"RuleBasedConstantVelocity\",\n  \"catastrophic_regression\": false,\n  \"estimator_family_changed\": false,\n  \"no_change_suspected\": false,\n  \"active_axis\": null,\n  \"axis"
+      },
+      {
+        "source_path": "memory/236716/latest_trial_memory_card.md",
+        "source_kind": "trial_memory_card",
+        "trial_id": null,
+        "score": 37,
+        "text": "# Trial Memory Card: trial_001\n\n- plan_type: initial_pipeline_plan\n- source_trial_id: None\n- change_axis: \n- candidate_label: Baseline: Constant-Velocity Extrapolation (+80ms from t0,t-40ms)\n- local_score: 1.0\n- local_status: baseline\n- local_delta: None\n- previous_local_status: baseline\n- previous_local_delta: None\n- lb_score: None\n- decision: baseline_established\n- active_axis: None\n- axis_attempt_count: 0/3\n- recommended_base_trial: trial_001\n- model_type: RuleBasedConstantVelocity\n- model: {'estimator': 'RuleBasedConstantVelocity', 'parameters': {}, 'pretrained': False, 'pipeline_container': None}\n- split: {'method': 'random_holdout_by_id', 'test_size': 0.2, 'stratify': False}\n\n## Change Details\n\n- None\n\n## Kept Unchanged\n\n- None\n\n## Features\n\n- feature_columns: []\n- numeric_features: []\n- categorical_features: []\n\n## Rejected Axes\n\n- None\n\n## Rejected Candidates\n\n- None\n\n## Active A"
+      },
+      {
+        "source_path": "memory/236716/latest_decision_card.md",
+        "source_kind": "decision_card",
+        "trial_id": null,
+        "score": 33,
+        "text": "# Trial Decision Card: trial_001\n\n- decision: baseline_established\n- change_axis: None\n- source_trial_id: None\n- recommended_base_trial: trial_001\n- local_score: 1.0\n- local_status: baseline\n- local_delta: None\n- previous_local_status: baseline\n- previous_local_delta: None\n- active_axis: None\n- axis_attempt_count: 0\n- axis_attempt_limit: 3\n- lb_score: None\n- lb_status: missing\n- lb_delta: None\n- previous_lb_status: missing\n- previous_lb_delta: None\n\n## Next Guidance\n\nUse this trial as the baseline. The next trial should change exactly one improvement axis.\n\n## Planner Constraints\n\n- Use `trial_001` as the base trial unless the user explicitly overrides it.\n- Change exactly one primary improvement axis in the next trial.\n- Keep split/model/preprocessing fixed unless selected as the primary axis.\n\n## Rejected Axes\n\n- None\n\n## Rejected Candidates\n\n- None\n\n## Active Axis Rejected Candidates\n"
+      },
+      {
+        "source_path": "competitions/236716/competition_data_card.md",
+        "source_kind": "competition_data_card",
+        "trial_id": null,
+        "score": 68,
+        "text": "# Competition Data Card: 236716\n\n- status: ready\n- task_type: unknown\n- target_column: None\n- id_column: None\n- dataset_layout: per_sample_files\n- train_file: None\n- test_file: None\n- train_dir: train/\n- test_dir: test/\n\n## First Baseline Recommendation\n\n- include_features_first: None\n- defer_features_first: None\n- exclude_columns: None\n- preferred_model_families: logistic_regression_or_linear_classifier_for_binary_classification, small_random_forest_or_gradient_boosted_tree_if_available\n- avoid_first_trial: gaussian_naive_bayes_for_mixed_numeric_and_categorical_data, raw_high_cardinality_text_or_identifier_one_hot_features, broad_schema_discovery_when_target_id_and_columns_are_known\n\n## Files\n\n### sample_submission.csv [sample_submission]\n- id: role=feature, type=categorical_or_text, unique_sample=80, missing_sample=0, baseline_use=defer_or_engineer\n- x: role=feature, type=numeric, uniq"
+      }
+    ],
+    "policy": {
+      "use_rag": true,
+      "task": "experiment_planning",
+      "reason": "first_trial_context_bootstrap"
+    }
+  }
+}

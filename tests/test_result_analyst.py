@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.agents.result_analyst import diagnose_trial
+from research_agent.agents.result_analyst import diagnose_trial
 
 
 class ResultAnalystTest(unittest.TestCase):
@@ -46,7 +46,7 @@ class ResultAnalystTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = diagnose_trial("demo", "trial_001")
 
             self.assertEqual(result["trial_id"], "trial_001")
@@ -92,7 +92,7 @@ class ResultAnalystTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = diagnose_trial("demo", "trial_002")
 
             self.assertIsNone(result["best_lb_before"])
@@ -121,7 +121,7 @@ class ResultAnalystTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = diagnose_trial("demo", "trial_001")
 
             self.assertIsNone(result["best_cv_before"])
@@ -171,7 +171,7 @@ class ResultAnalystTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = diagnose_trial("demo", "trial_002")
 
             self.assertEqual(0.80, result["best_cv_before"])

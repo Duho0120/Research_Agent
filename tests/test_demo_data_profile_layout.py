@@ -4,8 +4,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.demo_one_cycle import _build_demo_data_profile
-from kaggle_research_agent.workspace_coding_handoff import _load_data_card_summary
+from research_agent.demo_one_cycle import _build_demo_data_profile
+from research_agent.workspace_coding_handoff import _load_data_card_summary
 
 
 def _write_per_sample_workspace(root: Path) -> Path:
@@ -41,7 +41,7 @@ class PerSampleFileDatasetProfileTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             project = _write_per_sample_workspace(root)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 profile = _build_demo_data_profile(
                     "demo",
                     {"project_root": str(project)},
@@ -67,7 +67,7 @@ class PerSampleFileDatasetProfileTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             project = _write_per_sample_workspace(root)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 profile = _build_demo_data_profile(
                     "demo",
                     {"project_root": str(project)},
@@ -86,7 +86,7 @@ class PerSampleFileDatasetProfileTest(unittest.TestCase):
             data.mkdir(parents=True)
             (data / "train.csv").write_text("id,feature,target\n1,0.5,1\n", encoding="utf-8")
             (data / "test.csv").write_text("id,feature\n2,0.7\n", encoding="utf-8")
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 profile = _build_demo_data_profile(
                     "demo",
                     {"project_root": str(project), "target_column": "target"},
@@ -102,7 +102,7 @@ class PerSampleFileDatasetProfileTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             project = _write_per_sample_workspace(root)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 _build_demo_data_profile(
                     "demo",
                     {"project_root": str(project)},
@@ -122,7 +122,7 @@ class PerSampleFileDatasetProfileTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             project = _write_per_sample_workspace(root)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 _build_demo_data_profile(
                     "demo",
                     {"project_root": str(project)},

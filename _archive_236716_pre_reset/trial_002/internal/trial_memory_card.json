@@ -1,0 +1,59 @@
+{
+  "schema_version": "1.0",
+  "competition": "236716",
+  "trial_id": "trial_002",
+  "created_at": "2026-07-31T01:06:48.938673+00:00",
+  "plan_type": "continuation_delta_plan",
+  "source_trial_id": "trial_001",
+  "plan_title": "controlled_refinement",
+  "change_axis": "controlled_refinement",
+  "candidate_label": "controlled_refinement: controlled_refinement",
+  "change_details": [
+    "Make one controlled improvement based on the latest diagnosis.",
+    "Keep model family and validation fixed for attribution."
+  ],
+  "kept_unchanged": [],
+  "local_score": 0.591,
+  "lb_score": 0.3876,
+  "local_status": "flat",
+  "previous_local_status": "flat",
+  "local_delta": 0.0,
+  "previous_local_delta": 0.0,
+  "decision": "reject_or_hold",
+  "active_axis": null,
+  "axis_attempt_count": 1,
+  "axis_attempt_limit": 3,
+  "recommended_base_trial": "trial_001",
+  "rejected_axes": [
+    "controlled_refinement"
+  ],
+  "rejected_candidates": [
+    "controlled_refinement: controlled_refinement"
+  ],
+  "rejected_candidates_by_axis": {
+    "controlled_refinement": [
+      "controlled_refinement: controlled_refinement"
+    ]
+  },
+  "active_axis_rejected_candidates": [
+    "controlled_refinement: controlled_refinement"
+  ],
+  "feature_columns": [],
+  "numeric_features": [],
+  "categorical_features": [],
+  "model_type": "RuleBasedConstantVelocity",
+  "model": {
+    "estimator": "RuleBasedConstantVelocity",
+    "parameters": {},
+    "pretrained": false,
+    "pipeline_container": null
+  },
+  "split": {
+    "method": "random_holdout_by_id",
+    "test_size": 0.1,
+    "random_state": 42,
+    "stratify": false
+  },
+  "consistency_issues": [],
+  "next_guidance": "Treat `controlled_refinement` as exhausted for now. Start from `trial_001` and try a different single axis."
+}

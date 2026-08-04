@@ -1,0 +1,31 @@
+{
+  "schema_version": "1.0",
+  "snapshot_dir": "internal/code_snapshot",
+  "files": [
+    {
+      "path": "predict_step.py",
+      "bytes": 6092,
+      "source": "project_root_after_code_writer"
+    },
+    {
+      "path": "workspace_config.json",
+      "bytes": 327,
+      "source": "project_root_after_code_writer"
+    },
+    {
+      "path": "src/baseline.py",
+      "bytes": 7125,
+      "source": "project_root_after_code_writer"
+    },
+    {
+      "path": "train_step.py",
+      "bytes": 3028,
+      "source": "project_root_after_code_writer"
+    },
+    {
+      "path": "test_step.py",
+      "bytes": 5119,
+      "source": "project_root_after_code_writer"
+    }
+  ]
+}

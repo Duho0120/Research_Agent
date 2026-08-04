@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.interface_contract import (
+from research_agent.interface_contract import (
     get_experiment,
     get_pending_request,
     get_trial,
@@ -14,7 +14,7 @@ from kaggle_research_agent.interface_contract import (
     respond_to_request,
     submit_human_insight,
 )
-from kaggle_research_agent.state_db import (
+from research_agent.state_db import (
     create_pending_action,
     initialize_state_db,
     list_pending_actions,
@@ -134,7 +134,7 @@ class InterfaceContractTest(unittest.TestCase):
             _write_contract_fixture(db_path)
             _write_pending_request_fixture(db_path)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = respond_to_request(
                     "review_001",
                     answers={"continue_axis": "continue", "follow_up_action": "try a smaller variant"},
@@ -162,7 +162,7 @@ class InterfaceContractTest(unittest.TestCase):
             db_path = root / "state.sqlite3"
             _write_contract_fixture(db_path)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = respond_to_request(
                     "missing_review",
                     free_text="This must not be recorded.",
@@ -196,7 +196,7 @@ class InterfaceContractTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = respond_to_request(
                     "review_001",
                     answers={"decision": "switch_axis"},
@@ -216,7 +216,7 @@ class InterfaceContractTest(unittest.TestCase):
             db_path = root / "state.sqlite3"
             _write_contract_fixture(db_path)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = submit_human_insight(
                     "demo",
                     "trial_002",

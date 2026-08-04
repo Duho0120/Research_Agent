@@ -6,7 +6,7 @@ from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent import web_app
+from research_agent import web_app
 
 
 def _multipart_body(boundary: str, files: list[tuple[str, bytes]]) -> bytes:
@@ -24,13 +24,13 @@ def _multipart_body(boundary: str, files: list[tuple[str, bytes]]) -> bytes:
 
 class WebAppTest(unittest.TestCase):
     def test_app_state_renders_snapshot(self):
-        with patch("kaggle_research_agent.web_app.selected_competition", return_value="demo"):
+        with patch("research_agent.web_app.selected_competition", return_value="demo"):
             with patch(
-                "kaggle_research_agent.web_app.experiment_snapshot",
+                "research_agent.web_app.experiment_snapshot",
                 return_value={"competition": "demo", "topic": "Demo", "state": "대기 중", "latest": {}, "best": {}},
             ):
-                with patch("kaggle_research_agent.web_app.load_experiments", return_value=[]):
-                    with patch("kaggle_research_agent.web_app.list_pending_requests", return_value={"data": {"requests": []}}):
+                with patch("research_agent.web_app.load_experiments", return_value=[]):
+                    with patch("research_agent.web_app.list_pending_requests", return_value={"data": {"requests": []}}):
                         payload = web_app.app_state()
         self.assertTrue(payload["ok"])
         self.assertIn("선택된 실험: demo", payload["text"])
@@ -157,7 +157,7 @@ class WebAppTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir).resolve()
             artifact = root / "runs" / "demo" / "trial_001" / "01_plan.ko.md"
-            with patch("kaggle_research_agent.web_app.project_root", return_value=root):
+            with patch("research_agent.web_app.project_root", return_value=root):
                 href = web_app.artifact_href(artifact)
 
         self.assertEqual("/artifact?path=runs%2Fdemo%2Ftrial_001%2F01_plan.ko.md", href)
@@ -179,8 +179,8 @@ class WebAppTest(unittest.TestCase):
             connection.execute.return_value = rows
             manager = unittest.mock.MagicMock()
             manager.__enter__.return_value = connection
-            with patch("kaggle_research_agent.web_app.project_root", return_value=root):
-                with patch("kaggle_research_agent.web_app.state_db_connection", return_value=manager):
+            with patch("research_agent.web_app.project_root", return_value=root):
+                with patch("research_agent.web_app.state_db_connection", return_value=manager):
                     html = web_app.trial_artifact_links("demo", "trial_001")
 
         self.assertIn(">계획</button>", html)
@@ -198,7 +198,7 @@ class WebAppTest(unittest.TestCase):
             (out_dir / "next_experiment.md").write_text("# trial_013 Demo Experiment Plan\n", encoding="utf-8")
             (out_dir / "user_view").mkdir()
             (out_dir / "user_view" / "01_plan.ko.md").write_text("# trial_013 실험 계획\n", encoding="utf-8")
-            with patch("kaggle_research_agent.web_app.project_root", return_value=root):
+            with patch("research_agent.web_app.project_root", return_value=root):
                 html = web_app.trial_artifact_links("demo", "trial_013", planned=True)
 
         self.assertIn("data-open-artifact=\"experiments/demo/trial_013/user_view/01_plan.ko.md\"", html)
@@ -217,8 +217,8 @@ class WebAppTest(unittest.TestCase):
             connection.execute.return_value = rows
             manager = unittest.mock.MagicMock()
             manager.__enter__.return_value = connection
-            with patch("kaggle_research_agent.web_app.project_root", return_value=root):
-                with patch("kaggle_research_agent.web_app.state_db_connection", return_value=manager):
+            with patch("research_agent.web_app.project_root", return_value=root):
+                with patch("research_agent.web_app.state_db_connection", return_value=manager):
                     html = web_app.trial_artifact_links("demo", "trial_001")
 
         self.assertIn("data-open-artifact=", html)
@@ -231,9 +231,9 @@ class WebAppTest(unittest.TestCase):
             user_dir = root / "runs" / "demo" / "trial_001" / "user_view"
             user_dir.mkdir(parents=True)
             (user_dir / "01_plan.ko.md").write_text("# plan\n", encoding="utf-8")
-            with patch("kaggle_research_agent.web_app.project_root", return_value=root):
+            with patch("research_agent.web_app.project_root", return_value=root):
                 with patch(
-                    "kaggle_research_agent.web_app.safe_artifact_locations",
+                    "research_agent.web_app.safe_artifact_locations",
                     return_value={"user_view": user_dir},
                 ):
                     html = web_app.artifact_panel("demo", {})
@@ -247,7 +247,7 @@ class WebAppTest(unittest.TestCase):
             existing = root / "runs" / "demo" / "trial_001" / "01_plan.ko.md"
             existing.parent.mkdir(parents=True)
             existing.write_text("# plan body\n", encoding="utf-8")
-            with patch("kaggle_research_agent.web_app.project_root", return_value=root):
+            with patch("research_agent.web_app.project_root", return_value=root):
                 loaded = web_app.load_artifact_content("runs/demo/trial_001/01_plan.ko.md")
 
         self.assertEqual("# plan body\n", loaded["content"])
@@ -273,10 +273,10 @@ class WebAppTest(unittest.TestCase):
                 "error": "recoverable_after_metrics_collection",
             }
         }
-        with patch("kaggle_research_agent.web_app._sqlite_trial_rows", return_value=rows):
-            with patch("kaggle_research_agent.web_app.render_sqlite_trial_detail", return_value="detail"):
-                with patch("kaggle_research_agent.web_app.user_insight_target_trial_ids", return_value=set()):
-                    with patch("kaggle_research_agent.web_app.trial_artifact_links", return_value="-"):
+        with patch("research_agent.web_app._sqlite_trial_rows", return_value=rows):
+            with patch("research_agent.web_app.render_sqlite_trial_detail", return_value="detail"):
+                with patch("research_agent.web_app.user_insight_target_trial_ids", return_value=set()):
+                    with patch("research_agent.web_app.trial_artifact_links", return_value="-"):
                         html = web_app.trial_table("demo", snapshot=snapshot)
 
         self.assertIn("로컬 완료 · 후처리 대기", html)
@@ -295,10 +295,10 @@ class WebAppTest(unittest.TestCase):
                 "is_best_lb": False,
             }
         ]
-        with patch("kaggle_research_agent.web_app._sqlite_trial_rows", return_value=rows):
-            with patch("kaggle_research_agent.web_app.render_sqlite_trial_detail", return_value="detail"):
-                with patch("kaggle_research_agent.web_app.user_insight_target_trial_ids", return_value=set()):
-                    with patch("kaggle_research_agent.web_app.trial_artifact_links", return_value="-"):
+        with patch("research_agent.web_app._sqlite_trial_rows", return_value=rows):
+            with patch("research_agent.web_app.render_sqlite_trial_detail", return_value="detail"):
+                with patch("research_agent.web_app.user_insight_target_trial_ids", return_value=set()):
+                    with patch("research_agent.web_app.trial_artifact_links", return_value="-"):
                         html = web_app.trial_table("demo", snapshot={})
 
         self.assertIn("<th>기준</th>", html)
@@ -310,10 +310,10 @@ class WebAppTest(unittest.TestCase):
             {"trial_id": "trial_003", "status": "completed", "local_score": 0.591, "lb_score": 0.6006},
             {"trial_id": "trial_005", "status": "planned", "local_score": None, "lb_score": None},
         ]
-        with patch("kaggle_research_agent.web_app._sqlite_trial_rows", return_value=rows):
-            with patch("kaggle_research_agent.web_app.render_sqlite_trial_detail", return_value="detail"):
-                with patch("kaggle_research_agent.web_app.user_insight_target_trial_ids", return_value=set()):
-                    with patch("kaggle_research_agent.web_app.trial_artifact_links", return_value="-"):
+        with patch("research_agent.web_app._sqlite_trial_rows", return_value=rows):
+            with patch("research_agent.web_app.render_sqlite_trial_detail", return_value="detail"):
+                with patch("research_agent.web_app.user_insight_target_trial_ids", return_value=set()):
+                    with patch("research_agent.web_app.trial_artifact_links", return_value="-"):
                         html = web_app.trial_table("demo", snapshot={})
 
         self.assertIn("<th>제출</th>", html)
@@ -327,7 +327,7 @@ class WebAppTest(unittest.TestCase):
             artifact = root / "runs" / "demo" / "trial_001" / "01_plan.ko.md"
             artifact.parent.mkdir(parents=True)
             artifact.write_text("plan", encoding="utf-8")
-            with patch("kaggle_research_agent.web_app.project_root", return_value=root):
+            with patch("research_agent.web_app.project_root", return_value=root):
                 resolved = web_app.resolve_project_file(str(artifact))
 
         self.assertEqual(artifact, resolved)
@@ -340,13 +340,13 @@ class WebAppTest(unittest.TestCase):
         self.assertIn("읽기 전용", html)
 
     def test_start_from_form_uses_trial_count_or_continuous_mode(self):
-        with patch("kaggle_research_agent.web_app.selected_competition", return_value="demo"):
-            with patch("kaggle_research_agent.web_app.start_experiment", return_value="started") as start:
+        with patch("research_agent.web_app.selected_competition", return_value="demo"):
+            with patch("research_agent.web_app.start_experiment", return_value="started") as start:
                 self.assertEqual("started", web_app.start_from_form({"trial_count": ["3"]}))
                 start.assert_called_once_with("demo", trial_count=3)
 
-        with patch("kaggle_research_agent.web_app.selected_competition", return_value="demo"):
-            with patch("kaggle_research_agent.web_app.start_experiment", return_value="running") as start:
+        with patch("research_agent.web_app.selected_competition", return_value="demo"):
+            with patch("research_agent.web_app.start_experiment", return_value="running") as start:
                 self.assertEqual("running", web_app.start_from_form({"continuous": ["1"], "trial_count": ["2"]}))
                 start.assert_called_once_with("demo", continuous=True)
 
@@ -358,7 +358,7 @@ class WebAppTest(unittest.TestCase):
     def test_record_insight_returns_readable_summary(self):
         insight = "서로 다른 모델을 비교하고 앙상블하자"
         with patch(
-            "kaggle_research_agent.web_app.app_state",
+            "research_agent.web_app.app_state",
             return_value={
                 "snapshot": {
                     "competition": "demo",
@@ -368,7 +368,7 @@ class WebAppTest(unittest.TestCase):
             },
         ):
             with patch(
-                "kaggle_research_agent.web_app.submit_human_insight",
+                "research_agent.web_app.submit_human_insight",
                 return_value={
                     "ok": True,
                     "data": {
@@ -383,7 +383,7 @@ class WebAppTest(unittest.TestCase):
                     },
                 },
             ):
-                with patch("kaggle_research_agent.web_app._keep_latest_user_insight"):
+                with patch("research_agent.web_app._keep_latest_user_insight"):
                     result = web_app.record_insight(insight)
 
         self.assertTrue(result["ok"])
@@ -401,13 +401,13 @@ class WebAppTest(unittest.TestCase):
         )
 
     def test_feedback_response_records_answer(self):
-        with patch("kaggle_research_agent.web_app.respond_to_request", return_value={"ok": True}) as respond:
+        with patch("research_agent.web_app.respond_to_request", return_value={"ok": True}) as respond:
             message = web_app.record_feedback_response({"request_id": ["req-1"], "answer": ["반영해주세요"]})
         respond.assert_called_once_with("req-1", answers={}, free_text="반영해주세요")
         self.assertIn("답변을 기록했습니다", message)
 
     def test_feedback_response_records_structured_choice_and_optional_note(self):
-        with patch("kaggle_research_agent.web_app.respond_to_request", return_value={"ok": True}) as respond:
+        with patch("research_agent.web_app.respond_to_request", return_value={"ok": True}) as respond:
             message = web_app.record_feedback_response(
                 {
                     "request_id": ["req-2"],
@@ -452,8 +452,8 @@ class WebAppTest(unittest.TestCase):
         self.assertIn("자동 실행하지 않습니다", rendered)
 
     def test_create_experiment_from_form_registers_workspace(self):
-        with patch("kaggle_research_agent.web_app.prepare_workspace", return_value={"status": "needs_data"}) as prepare:
-            with patch("kaggle_research_agent.web_app.select_competition") as select:
+        with patch("research_agent.web_app.prepare_workspace", return_value={"status": "needs_data"}) as prepare:
+            with patch("research_agent.web_app.select_competition") as select:
                 message, competition = web_app.create_experiment_from_form(
                     {
                         "description": ["https://www.kaggle.com/competitions/playground-series-s4e1"],
@@ -483,10 +483,10 @@ class WebAppTest(unittest.TestCase):
         self.assertIsNone(competition)
 
     def test_create_experiment_from_form_sets_dacon_team_name_when_provided(self):
-        with patch("kaggle_research_agent.web_app.prepare_workspace", return_value={"status": "needs_data"}):
-            with patch("kaggle_research_agent.web_app.select_competition"):
-                with patch("kaggle_research_agent.web_app.set_dacon_team_name") as set_team:
-                    with patch("kaggle_research_agent.web_app.refresh_dacon_competition_docs") as refresh_docs:
+        with patch("research_agent.web_app.prepare_workspace", return_value={"status": "needs_data"}):
+            with patch("research_agent.web_app.select_competition"):
+                with patch("research_agent.web_app.set_dacon_team_name") as set_team:
+                    with patch("research_agent.web_app.refresh_dacon_competition_docs") as refresh_docs:
                         web_app.create_experiment_from_form(
                             {
                                 "description": ["https://dacon.io/competitions/official/236716"],
@@ -503,9 +503,9 @@ class WebAppTest(unittest.TestCase):
         refresh_docs.assert_called_once_with("236716")
 
     def test_create_experiment_from_form_skips_doc_refresh_for_non_dacon_platform(self):
-        with patch("kaggle_research_agent.web_app.prepare_workspace", return_value={"status": "needs_data"}):
-            with patch("kaggle_research_agent.web_app.select_competition"):
-                with patch("kaggle_research_agent.web_app.refresh_dacon_competition_docs") as refresh_docs:
+        with patch("research_agent.web_app.prepare_workspace", return_value={"status": "needs_data"}):
+            with patch("research_agent.web_app.select_competition"):
+                with patch("research_agent.web_app.refresh_dacon_competition_docs") as refresh_docs:
                     web_app.create_experiment_from_form(
                         {
                             "description": ["https://www.kaggle.com/competitions/titanic"],
@@ -520,9 +520,9 @@ class WebAppTest(unittest.TestCase):
         refresh_docs.assert_not_called()
 
     def test_create_experiment_from_form_skips_team_name_when_blank(self):
-        with patch("kaggle_research_agent.web_app.prepare_workspace", return_value={"status": "needs_data"}):
-            with patch("kaggle_research_agent.web_app.select_competition"):
-                with patch("kaggle_research_agent.web_app.set_dacon_team_name") as set_team:
+        with patch("research_agent.web_app.prepare_workspace", return_value={"status": "needs_data"}):
+            with patch("research_agent.web_app.select_competition"):
+                with patch("research_agent.web_app.set_dacon_team_name") as set_team:
                     web_app.create_experiment_from_form(
                         {
                             "description": ["https://www.kaggle.com/competitions/titanic"],
@@ -537,8 +537,8 @@ class WebAppTest(unittest.TestCase):
         set_team.assert_not_called()
 
     def test_delete_experiment_from_form_blocks_on_mismatched_confirmation_text(self):
-        with patch("kaggle_research_agent.web_app._filesystem_topic", return_value="모기 비행 궤적 예측"):
-            with patch("kaggle_research_agent.web_app.delete_experiment") as delete:
+        with patch("research_agent.web_app._filesystem_topic", return_value="모기 비행 궤적 예측"):
+            with patch("research_agent.web_app.delete_experiment") as delete:
                 message = web_app.delete_experiment_from_form(
                     {"competition": ["236716"], "confirm_text": ["모기 비행 궤적 예측"]}
                 )
@@ -547,8 +547,8 @@ class WebAppTest(unittest.TestCase):
         self.assertIn("모기 비행 궤적 예측 지우기", message)
 
     def test_delete_experiment_from_form_deletes_on_exact_confirmation_text(self):
-        with patch("kaggle_research_agent.web_app._filesystem_topic", return_value="모기 비행 궤적 예측"):
-            with patch("kaggle_research_agent.web_app.delete_experiment", return_value={"ok": True}) as delete:
+        with patch("research_agent.web_app._filesystem_topic", return_value="모기 비행 궤적 예측"):
+            with patch("research_agent.web_app.delete_experiment", return_value={"ok": True}) as delete:
                 message = web_app.delete_experiment_from_form(
                     {"competition": ["236716"], "confirm_text": ["모기 비행 궤적 예측 지우기"]}
                 )
@@ -645,10 +645,10 @@ class WebAppTest(unittest.TestCase):
                 "is_best_lb": True,
             },
         ]
-        with patch("kaggle_research_agent.web_app._sqlite_trial_rows", return_value=rows):
-            with patch("kaggle_research_agent.web_app.render_sqlite_trial_detail", return_value="detail"):
+        with patch("research_agent.web_app._sqlite_trial_rows", return_value=rows):
+            with patch("research_agent.web_app.render_sqlite_trial_detail", return_value="detail"):
                 with patch(
-                    "kaggle_research_agent.web_app.user_insight_target_trial_ids",
+                    "research_agent.web_app.user_insight_target_trial_ids",
                     return_value={"trial_002"},
                 ):
                     html = web_app.trial_table("demo")
@@ -688,10 +688,10 @@ class WebAppTest(unittest.TestCase):
             plan = root / "experiments" / "demo" / "trial_008" / "next_experiment.md"
             plan.parent.mkdir(parents=True)
             plan.write_text("# trial_008 plan\n", encoding="utf-8")
-            with patch("kaggle_research_agent.web_app._sqlite_trial_rows", return_value=rows):
-                with patch("kaggle_research_agent.web_app.render_sqlite_trial_detail", return_value="detail"):
-                    with patch("kaggle_research_agent.web_app.user_insight_target_trial_ids", return_value=set()):
-                        with patch("kaggle_research_agent.web_app.project_root", return_value=root):
+            with patch("research_agent.web_app._sqlite_trial_rows", return_value=rows):
+                with patch("research_agent.web_app.render_sqlite_trial_detail", return_value="detail"):
+                    with patch("research_agent.web_app.user_insight_target_trial_ids", return_value=set()):
+                        with patch("research_agent.web_app.project_root", return_value=root):
                             html = web_app.trial_table("demo")
 
         self.assertIn("계획 완료", html)
@@ -717,7 +717,7 @@ class WebAppTest(unittest.TestCase):
             "existing_insight": "서로 다른 모델을 비교하고 앙상블하자",
         }
         with patch(
-            "kaggle_research_agent.web_app.latest_user_insight_record",
+            "research_agent.web_app.latest_user_insight_record",
             return_value={
                 "status": "pending",
                 "axis": "model_ensemble",
@@ -755,7 +755,7 @@ class WebAppTest(unittest.TestCase):
             "pending_requests": [],
             "existing_insight": "매월 1~19일을 학습하고 20~31일을 검증하자",
         }
-        with patch("kaggle_research_agent.web_app.latest_user_insight_record", return_value=None):
+        with patch("research_agent.web_app.latest_user_insight_record", return_value=None):
             html = web_app.render_home(payload)
 
         self.assertNotIn('class="notice-title">인사이트:</strong>', html)
@@ -808,24 +808,24 @@ class WebAppTest(unittest.TestCase):
 
 class DaconSubmissionLimitSnapshotTest(unittest.TestCase):
     def test_not_applicable_for_non_dacon_platform(self):
-        with patch("kaggle_research_agent.web_app._load_profile_safely", return_value={"platform": "kaggle"}):
+        with patch("research_agent.web_app._load_profile_safely", return_value={"platform": "kaggle"}):
             result = web_app.dacon_submission_limit_snapshot("demo")
         self.assertEqual({"ok": True, "applicable": False}, result)
 
     def test_includes_auto_submit_flag_when_applicable(self):
-        with patch("kaggle_research_agent.web_app._load_profile_safely", return_value={"platform": "dacon"}):
+        with patch("research_agent.web_app._load_profile_safely", return_value={"platform": "dacon"}):
             with patch(
-                "kaggle_research_agent.web_app.check_dacon_submission_limit",
+                "research_agent.web_app.check_dacon_submission_limit",
                 return_value={"status": "auto_detected", "daily_submission_limit": 5, "remaining": 3, "message": "..."},
             ):
-                with patch("kaggle_research_agent.web_app.dacon_auto_submit_allowed", return_value=True):
+                with patch("research_agent.web_app.dacon_auto_submit_allowed", return_value=True):
                     result = web_app.dacon_submission_limit_snapshot("demo")
         self.assertTrue(result["auto_submit"])
 
     def test_applicable_for_dacon_platform_returns_check_result(self):
-        with patch("kaggle_research_agent.web_app._load_profile_safely", return_value={"platform": "dacon"}):
+        with patch("research_agent.web_app._load_profile_safely", return_value={"platform": "dacon"}):
             with patch(
-                "kaggle_research_agent.web_app.check_dacon_submission_limit",
+                "research_agent.web_app.check_dacon_submission_limit",
                 return_value={
                     "competition": "demo",
                     "status": "auto_detected",
@@ -839,9 +839,9 @@ class DaconSubmissionLimitSnapshotTest(unittest.TestCase):
         self.assertEqual(5, result["daily_submission_limit"])
 
     def test_network_error_does_not_crash_the_dashboard(self):
-        with patch("kaggle_research_agent.web_app._load_profile_safely", return_value={"platform": "dacon"}):
+        with patch("research_agent.web_app._load_profile_safely", return_value={"platform": "dacon"}):
             with patch(
-                "kaggle_research_agent.web_app.check_dacon_submission_limit",
+                "research_agent.web_app.check_dacon_submission_limit",
                 side_effect=RuntimeError("network unreachable"),
             ):
                 result = web_app.dacon_submission_limit_snapshot("demo")
@@ -934,7 +934,7 @@ class UploadDataTest(unittest.TestCase):
             (comp_dir / "workspace_source.json").write_text(
                 json.dumps({"source_path": str(root / "demo_workspaces" / "demo")}), encoding="utf-8"
             )
-            with patch("kaggle_research_agent.web_app.competition_dir", return_value=comp_dir):
+            with patch("research_agent.web_app.competition_dir", return_value=comp_dir):
                 data_dir = web_app.workspace_data_dir("demo")
 
         self.assertEqual(root / "demo_workspaces" / "demo" / "data", data_dir)
@@ -942,7 +942,7 @@ class UploadDataTest(unittest.TestCase):
     def test_workspace_data_dir_returns_none_when_source_record_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
             comp_dir = Path(tmp) / "competitions" / "demo"
-            with patch("kaggle_research_agent.web_app.competition_dir", return_value=comp_dir):
+            with patch("research_agent.web_app.competition_dir", return_value=comp_dir):
                 self.assertIsNone(web_app.workspace_data_dir("demo"))
 
 

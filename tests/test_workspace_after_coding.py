@@ -7,9 +7,9 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent import simple_yaml
-from kaggle_research_agent.cli import main
-from kaggle_research_agent.workspace_after_coding import run_workspace_after_coding
+from research_agent import simple_yaml
+from research_agent.cli import main
+from research_agent.workspace_after_coding import run_workspace_after_coding
 
 
 class WorkspaceAfterCodingTest(unittest.TestCase):
@@ -23,7 +23,7 @@ class WorkspaceAfterCodingTest(unittest.TestCase):
             self._write_profile(root, project)
             self._write_coding_validation(root, status="blocked")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_after_coding("demo", "trial_002", run_now=True)
 
             self.assertEqual("blocked", result["status"])
@@ -41,7 +41,7 @@ class WorkspaceAfterCodingTest(unittest.TestCase):
             self._write_project_scripts(project)
             self._write_coding_validation(root, status="accepted")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_after_coding("demo", "trial_002", run_now=False)
 
             self.assertEqual("ready_to_run", result["status"])
@@ -60,7 +60,7 @@ class WorkspaceAfterCodingTest(unittest.TestCase):
             self._write_project_scripts(project)
             self._write_coding_validation(root, status="accepted")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_after_coding("demo", "trial_002", run_now=True)
 
             trial = root / "experiments" / "demo" / "trial_002"
@@ -85,7 +85,7 @@ class WorkspaceAfterCodingTest(unittest.TestCase):
             self._write_project_scripts(project)
             self._write_coding_validation(root, status="accepted")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(["run-workspace-after-coding", "--competition", "demo", "--trial", "trial_002", "--run-now"])
 

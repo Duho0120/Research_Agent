@@ -4,10 +4,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent import simple_yaml
-from kaggle_research_agent.cli import main
-from kaggle_research_agent.state_db import get_trial_summary
-from kaggle_research_agent.workspace_result_cycle import process_workspace_result
+from research_agent import simple_yaml
+from research_agent.cli import main
+from research_agent.state_db import get_trial_summary
+from research_agent.workspace_result_cycle import process_workspace_result
 
 
 class WorkspaceResultCycleTest(unittest.TestCase):
@@ -26,7 +26,7 @@ class WorkspaceResultCycleTest(unittest.TestCase):
                 },
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = process_workspace_result("demo", "trial_001")
 
             self.assertEqual("completed_review_deferred", result["status"])
@@ -53,7 +53,7 @@ class WorkspaceResultCycleTest(unittest.TestCase):
             self._write_trial(root, "trial_002", {**metrics, "cv_score": 0.72})
             self._write_trial(root, "trial_003", {**metrics, "cv_score": 0.71})
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 first = process_workspace_result("demo", "trial_001")
                 second = process_workspace_result("demo", "trial_002")
                 third = process_workspace_result("demo", "trial_003")
@@ -65,7 +65,7 @@ class WorkspaceResultCycleTest(unittest.TestCase):
             self.assertEqual("request-user-review", third["next_action"])
             self.assertTrue((root / "experiments" / "demo" / "trial_003" / "review_pack" / "manifest.json").exists())
             db_path = root / "memory" / "research_agent.sqlite3"
-            from kaggle_research_agent.state_db import list_pending_actions
+            from research_agent.state_db import list_pending_actions
 
             pending = list_pending_actions("demo", db_path)
             self.assertEqual(1, len(pending))
@@ -87,7 +87,7 @@ class WorkspaceResultCycleTest(unittest.TestCase):
                 {"cv_score": 0.70, "objective": "maximize", "leakage_warning": True},
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = process_workspace_result("demo", "trial_001")
 
             self.assertEqual("awaiting_human_review", result["status"])
@@ -115,7 +115,7 @@ class WorkspaceResultCycleTest(unittest.TestCase):
                 },
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 first = process_workspace_result("demo", "trial_001")
                 second = process_workspace_result("demo", "trial_002")
 
@@ -131,7 +131,7 @@ class WorkspaceResultCycleTest(unittest.TestCase):
             self._write_state(root)
             self._write_trial(root, "trial_001", {"cv_score": 0.70, "objective": "maximize"})
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = process_workspace_result("demo", "trial_001")
 
             self.assertEqual("completed", result["status"])
@@ -156,7 +156,7 @@ class WorkspaceResultCycleTest(unittest.TestCase):
                 collection_status="needs_review",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = process_workspace_result("demo", "trial_001")
 
             self.assertEqual("blocked", result["status"])
@@ -171,7 +171,7 @@ class WorkspaceResultCycleTest(unittest.TestCase):
             self._write_trial(root, "trial_001", {"cv_score": 0.70, "objective": "maximize"})
             (root / "experiments" / "demo" / "trial_001" / "metrics.json").unlink()
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = process_workspace_result("demo", "trial_001")
 
             self.assertEqual("blocked", result["status"])
@@ -184,7 +184,7 @@ class WorkspaceResultCycleTest(unittest.TestCase):
             self._write_state(root)
             self._write_trial(root, "trial_001", {"cv_score": 0.70, "objective": "maximize"})
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 process_workspace_result("demo", "trial_001")
                 duplicate = process_workspace_result("demo", "trial_001")
 
@@ -198,7 +198,7 @@ class WorkspaceResultCycleTest(unittest.TestCase):
             self._write_state(root)
             self._write_trial(root, "trial_001", {"cv_score": 0.70, "objective": "maximize"})
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 code = main(
                     [
                         "process-workspace-result",

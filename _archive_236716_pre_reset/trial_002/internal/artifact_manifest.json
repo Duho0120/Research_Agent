@@ -1,0 +1,295 @@
+{
+  "competition": "236716",
+  "trial_id": "trial_002",
+  "status": "completed",
+  "metric": "R-Hit@1cm",
+  "objective": "maximize",
+  "local_score": 0.591,
+  "metrics": {
+    "metric": "R-Hit@1cm",
+    "objective": "maximize",
+    "validation_method": "random_holdout_by_id",
+    "validation_size": 0.1,
+    "random_seed": 42,
+    "R-Hit@1cm": 0.591,
+    "n_ids": 1000,
+    "total_pairs": 1000,
+    "model_type": "RuleBasedConstantVelocity",
+    "horizon_s": 0.08,
+    "final_features": [
+      "x",
+      "y",
+      "z"
+    ],
+    "time_candidates": [
+      "timestep_ms",
+      "timestamp_ms",
+      "time",
+      "t"
+    ],
+    "competition": "236716",
+    "trial": "trial_002",
+    "trial_id": "trial_002",
+    "base_trial": "trial_001",
+    "change_axis": "controlled_refinement",
+    "cv_score": 0.591,
+    "source_metrics_path": "C:\\Users\\ASUS\\Desktop\\Research_Agent\\demo_workspaces\\236716\\outputs\\metrics.json",
+    "pipeline_summary": {
+      "competition": "236716",
+      "trial": "trial_002",
+      "trial_id": "trial_002",
+      "base_trial": "trial_001",
+      "change_axis": "controlled_refinement"
+    },
+    "source_trial_id": "trial_001",
+    "lb_score": 0.3876,
+    "submitted_lb_score": 0.3876,
+    "submitted_rank": null,
+    "submission_file": "C:\\Users\\ASUS\\Desktop\\Research_Agent\\demo_workspaces\\236716\\outputs\\submission.csv",
+    "submission_status": "submitted",
+    "is_best_submission": false
+  },
+  "score_source": "R-Hit@1cm",
+  "plan_title": null,
+  "changed_files": [
+    "predict_step.py"
+  ],
+  "key_files": [
+    "next_experiment.md",
+    "workspace_coding_result.md",
+    "workspace_run.md",
+    "metrics_collection.md",
+    "workspace_result_cycle.md",
+    "workspace_after_coding_cycle.md",
+    "metrics.json",
+    "submission_run.md",
+    "submission_result.md"
+  ],
+  "log_paths": [
+    "C:/Users/ASUS/Desktop/Research_Agent/experiments/236716/trial_002/workspace_logs/test_01.log",
+    "C:/Users/ASUS/Desktop/Research_Agent/experiments/236716/trial_002/workspace_logs/train_01.log",
+    "C:/Users/ASUS/Desktop/Research_Agent/experiments/236716/trial_002/workspace_logs/predict_01.log"
+  ],
+  "project_root": "C:\\Users\\ASUS\\Desktop\\Research_Agent\\demo_workspaces\\236716",
+  "python": "C:\\Users\\ASUS\\anaconda3\\python.exe",
+  "execution_commands": {
+    "test": [
+      "{python} test_step.py"
+    ],
+    "train": [
+      "{python} train_step.py"
+    ],
+    "predict": [
+      "{python} predict_step.py"
+    ]
+  },
+  "workspace_status": "completed",
+  "metrics_collection_status": "collected",
+  "submit_manifest": {},
+  "submission_run": {
+    "competition": "236716",
+    "trial_id": "trial_002",
+    "version_name": "trial_002_auto",
+    "status": "submitted",
+    "submission_file": "C:\\Users\\ASUS\\Desktop\\Research_Agent\\demo_workspaces\\236716\\outputs\\submission.csv",
+    "previous_lb_score": null,
+    "previous_rank": null,
+    "submitted_lb_score": 0.3876,
+    "submitted_rank": null,
+    "submit_command": null,
+    "submit_result": {
+      "status": "submitted",
+      "returncode": 0,
+      "stdout": "",
+      "stderr": "",
+      "dacon_result": {
+        "action": "submit",
+        "ok": true,
+        "status": "submitted",
+        "raw": {
+          "message": "ok",
+          "point": 1,
+          "data": 0.3876,
+          "status": 1
+        }
+      },
+      "submission_result": {
+        "public_score": 0.3876,
+        "sub_id": 1506753,
+        "submitted_at": "2026-07-31 10:06:45",
+        "file_link": "submission.csv"
+      }
+    },
+    "recorded_submission": {
+      "submission_id": "236716_trial_002_trial_002_auto",
+      "competition": "236716",
+      "trial_id": "trial_002",
+      "version_name": "trial_002_auto",
+      "submitted_at": "2026-07-31T01:06:48.385659+00:00",
+      "submission_file": "C:\\Users\\ASUS\\Desktop\\Research_Agent\\demo_workspaces\\236716\\outputs\\submission.csv",
+      "cv_score": 0.591,
+      "previous_lb_score": null,
+      "previous_rank": null,
+      "submitted_lb_score": 0.3876,
+      "submitted_rank": null,
+      "score_delta": null,
+      "rank_delta": null,
+      "best_reference_score": 0.6006,
+      "is_best": false,
+      "notes": "Submitted by generic_workspace_auto_loop.py"
+    },
+    "dacon_competition_id": "236716",
+    "dacon_team_name": "뚜로"
+  },
+  "submission_result": {
+    "submission_id": "236716_trial_002_trial_002_auto",
+    "competition": "236716",
+    "trial_id": "trial_002",
+    "version_name": "trial_002_auto",
+    "submitted_at": "2026-07-31T01:06:48.385659+00:00",
+    "submission_file": "C:\\Users\\ASUS\\Desktop\\Research_Agent\\demo_workspaces\\236716\\outputs\\submission.csv",
+    "cv_score": 0.591,
+    "previous_lb_score": null,
+    "previous_rank": null,
+    "submitted_lb_score": 0.3876,
+    "submitted_rank": null,
+    "score_delta": null,
+    "rank_delta": null,
+    "best_reference_score": 0.6006,
+    "is_best": false,
+    "notes": "Submitted by generic_workspace_auto_loop.py"
+  },
+  "submission_prepare_status": null,
+  "submission_file": "C:\\Users\\ASUS\\Desktop\\Research_Agent\\demo_workspaces\\236716\\outputs\\submission.csv",
+  "submitted_lb_score": 0.3876,
+  "submitted_rank": null,
+  "is_best_submission": false,
+  "requires_user_approval": null,
+  "decision_card": {
+    "schema_version": "1.0",
+    "competition": "236716",
+    "trial_id": "trial_002",
+    "created_at": "2026-07-31T01:06:48.932500+00:00",
+    "source_trial_id": "trial_001",
+    "plan_type": "continuation_delta_plan",
+    "change_axis": "controlled_refinement",
+    "local_score": 0.591,
+    "lb_score": 0.3876,
+    "previous_local_score": 0.591,
+    "previous_lb_score": 0.6006,
+    "best_local_score": 0.591,
+    "best_lb_score": 0.6006,
+    "local_delta": 0.0,
+    "lb_delta": -0.213,
+    "previous_local_delta": 0.0,
+    "previous_lb_delta": -0.213,
+    "objective": "maximize",
+    "local_status": "flat",
+    "lb_status": "regressed",
+    "previous_local_status": "flat",
+    "previous_lb_status": "regressed",
+    "raw_decision": "reject_or_hold",
+    "decision": "reject_or_hold",
+    "model_type": "RuleBasedConstantVelocity",
+    "catastrophic_regression": true,
+    "estimator_family_changed": false,
+    "no_change_suspected": false,
+    "active_axis": null,
+    "axis_attempt_count": 1,
+    "axis_attempt_limit": 3,
+    "candidate_label": "controlled_refinement: controlled_refinement",
+    "rejected_candidates": [
+      "controlled_refinement: controlled_refinement"
+    ],
+    "rejected_candidates_by_axis": {
+      "controlled_refinement": [
+        "controlled_refinement: controlled_refinement"
+      ]
+    },
+    "active_axis_rejected_candidates": [
+      "controlled_refinement: controlled_refinement"
+    ],
+    "recommended_base_trial": "trial_001",
+    "rejected_axes": [
+      "controlled_refinement"
+    ],
+    "accepted_axes": [],
+    "next_guidance": "Treat `controlled_refinement` as exhausted for now. Start from `trial_001` and try a different single axis.",
+    "planner_constraints": [
+      "Use `trial_001` as the base trial unless the user explicitly overrides it.",
+      "Change exactly one primary improvement axis in the next trial.",
+      "Keep split/model/preprocessing fixed unless selected as the primary axis.",
+      "FACT: `controlled_refinement` regressed the score by more than 25% -- far beyond tuning noise. The idea itself is wrong for this data; do not retry it with different parameters, and do not retry it under a different axis name.",
+      "Do not keep stacking on rejected axis `controlled_refinement`.",
+      "If the rejected axis was implemented in the last trial, roll back to the recommended base before applying a new change."
+    ]
+  },
+  "trial_decision": "reject_or_hold",
+  "recommended_base_trial": "trial_001",
+  "rejected_axes": [
+    "controlled_refinement"
+  ],
+  "moved_debug_files": [],
+  "moved_internal_files": [],
+  "pipeline_structure_file": "internal/pipeline_structure.json",
+  "effective_plan_file": "internal/effective_plan.json",
+  "pipeline_delta_file": "internal/pipeline_delta_applied.json",
+  "executed_trial_facts_file": "internal/executed_trial_facts.json",
+  "executed_trial_facts": {
+    "schema_version": "1.0",
+    "competition": "236716",
+    "trial_id": "trial_002",
+    "source_trial_id": "trial_001",
+    "plan_type": "continuation_delta_plan",
+    "primary_change_axis": "controlled_refinement",
+    "candidate": {},
+    "change_details": [
+      "Make one controlled improvement based on the latest diagnosis.",
+      "Keep model family and validation fixed for attribution."
+    ],
+    "keep_unchanged": [],
+    "model": {
+      "estimator": "RuleBasedConstantVelocity",
+      "parameters": {},
+      "pretrained": false,
+      "pipeline_container": null
+    },
+    "preprocessing": {},
+    "validation": {
+      "method": "random_holdout_by_id",
+      "test_size": 0.1,
+      "random_state": 42,
+      "stratify": false
+    },
+    "features": {},
+    "submission": {
+      "submission_path": "outputs/submission.csv",
+      "id_column": "id",
+      "prediction_column": "target",
+      "postprocessing": []
+    },
+    "scores": {
+      "metric": "R-Hit@1cm",
+      "objective": "maximize",
+      "local": 0.591,
+      "submission": 0.3876,
+      "rank": null
+    },
+    "consistency_issues": [],
+    "sources": {
+      "plan": "next_experiment.json,internal/effective_plan.json:current_delta,delta_plan.json",
+      "model": "internal/pipeline_structure.json:model_definition",
+      "scores": "metrics.json+submission_log"
+    }
+  },
+  "user_view_files": [
+    "01_plan.ko.md",
+    "02_pipeline_structure.ko.md",
+    "03_scores.ko.md"
+  ],
+  "browse_view_files": [
+    "01_plan.ko.md",
+    "02_pipeline_structure.ko.md",
+    "03_scores.ko.md"
+  ]
+}

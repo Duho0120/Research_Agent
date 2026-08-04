@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.agents.submission import prepare_submission, submit_trial
+from research_agent.agents.submission import prepare_submission, submit_trial
 
 
 class SubmissionAgentTest(unittest.TestCase):
@@ -19,7 +19,7 @@ class SubmissionAgentTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 manifest = prepare_submission(
                     competition="demo",
                     trial_id="trial_001",
@@ -44,7 +44,7 @@ class SubmissionAgentTest(unittest.TestCase):
             trial.mkdir(parents=True)
             (trial / "submission.csv").write_text("id,target\n1,0\n", encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 manifest = prepare_submission(
                     competition="demo",
                     trial_id="trial_missing_metrics",
@@ -68,7 +68,7 @@ class SubmissionAgentTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = submit_trial(
                     competition="demo",
                     trial_id="trial_001",
@@ -110,7 +110,7 @@ class SubmissionAgentTest(unittest.TestCase):
             before.write_text(json.dumps({"score": 0.7, "rank": 200}), encoding="utf-8")
             after.write_text(json.dumps({"score": 0.76, "rank": 150}), encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = submit_trial(
                     competition="demo",
                     trial_id="trial_002",
@@ -152,7 +152,7 @@ class SubmissionAgentTest(unittest.TestCase):
                     return {"returncode": 0, "stdout": "teamId,teamName,score\n22,my team,0.87\n", "stderr": ""}
                 return {"returncode": 1, "stdout": "", "stderr": "unexpected command"}
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = submit_trial(
                     competition="demo",
                     trial_id="trial_kaggle",
@@ -207,7 +207,7 @@ class SubmissionAgentTest(unittest.TestCase):
                     }
                 return {"returncode": 1, "stdout": "", "stderr": "unexpected command"}
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = submit_trial(
                     competition="demo",
                     trial_id="trial_kaggle_score",
@@ -254,7 +254,7 @@ class SubmissionAgentTest(unittest.TestCase):
                     raise AssertionError("existing submission must not be submitted again")
                 return {"returncode": 1, "stdout": "", "stderr": "unexpected command"}
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = submit_trial(
                     competition="demo",
                     trial_id="trial_existing",
@@ -301,7 +301,7 @@ class SubmissionAgentTest(unittest.TestCase):
                     raise AssertionError("pending submission must not be submitted again")
                 return {"returncode": 1, "stdout": "", "stderr": "unexpected command"}
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = submit_trial(
                     competition="demo",
                     trial_id="trial_pending",
@@ -333,7 +333,7 @@ class SubmissionAgentTest(unittest.TestCase):
                     return {"returncode": 1, "stdout": "", "stderr": "Could not find kaggle.json\n"}
                 return {"returncode": 1, "stdout": "", "stderr": "should not submit"}
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = submit_trial(
                     competition="demo",
                     trial_id="trial_auth_fail",
@@ -370,7 +370,7 @@ class SubmissionAgentTest(unittest.TestCase):
                     return {"returncode": 0, "stdout": "teamId,teamName,score\n11,other,0.88\n", "stderr": ""}
                 return {"returncode": 1, "stdout": "", "stderr": "unexpected command"}
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = submit_trial(
                     competition="demo",
                     trial_id="trial_poll_timeout",
@@ -392,7 +392,7 @@ class SubmissionAgentTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "experiments" / "demo" / "trial_003").mkdir(parents=True)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = submit_trial(
                     competition="demo",
                     trial_id="trial_003",
@@ -424,7 +424,7 @@ class DaconSubmitTrialDispatchTest(unittest.TestCase):
                 calls.append((file_path, token, competition_id, team_name, memo))
                 return {"message": "ok"}
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with patch.dict("os.environ", {"DACON_PERSONAL_TOKEN": "test-token"}, clear=False):
                     result = submit_trial(
                         competition="demo",
@@ -463,7 +463,7 @@ class DaconSubmitTrialDispatchTest(unittest.TestCase):
                 captured["content_at_call_time"] = Path(file_path).read_text(encoding="utf-8")
                 return {"message": "ok"}
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with patch.dict("os.environ", {"DACON_PERSONAL_TOKEN": "test-token"}, clear=False):
                     submit_trial(
                         competition="demo",
@@ -510,7 +510,7 @@ class DaconSubmitTrialDispatchTest(unittest.TestCase):
                     ],
                 }
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with patch.dict("os.environ", {"DACON_PERSONAL_TOKEN": "test-token"}, clear=False):
                     result = submit_trial(
                         competition="demo",
@@ -544,7 +544,7 @@ class DaconSubmitTrialDispatchTest(unittest.TestCase):
             def failing_fetch(competition_id, **kwargs):
                 raise RuntimeError("session token expired")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with patch.dict("os.environ", {"DACON_PERSONAL_TOKEN": "test-token"}, clear=False):
                     result = submit_trial(
                         competition="demo",
@@ -584,7 +584,7 @@ class DaconSubmitTrialDispatchTest(unittest.TestCase):
                     ],
                 }
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with patch.dict("os.environ", {"DACON_PERSONAL_TOKEN": "test-token"}, clear=False):
                     result = submit_trial(
                         competition="demo",
@@ -616,7 +616,7 @@ class DaconSubmitTrialDispatchTest(unittest.TestCase):
                 calls.append(args)
                 return {"message": "ok"}
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with patch.dict("os.environ", {}, clear=True):
                     result = submit_trial(
                         competition="demo",

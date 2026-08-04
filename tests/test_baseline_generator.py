@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.baseline_generator import generate_baseline_pipeline
+from research_agent.baseline_generator import generate_baseline_pipeline
 
 
 class BaselineGeneratorTest(unittest.TestCase):
@@ -28,7 +28,7 @@ class BaselineGeneratorTest(unittest.TestCase):
             root = Path(tmp)
             self._write_titanic_data(root)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = generate_baseline_pipeline("titanic", "trial_001")
 
             trial = root / "experiments" / "titanic" / "trial_001"
@@ -45,7 +45,7 @@ class BaselineGeneratorTest(unittest.TestCase):
             root = Path(tmp)
             self._write_titanic_data(root)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = generate_baseline_pipeline("titanic", "trial_001")
 
             completed = subprocess.run(
@@ -75,7 +75,7 @@ class BaselineGeneratorTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = generate_baseline_pipeline("titanic", "trial_001")
 
             self.assertEqual(result["status"], "blocked")
@@ -111,7 +111,7 @@ class BaselineGeneratorTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = generate_baseline_pipeline("titanic", "trial_001")
 
             self.assertEqual(result["status"], "ready")

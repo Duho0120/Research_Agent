@@ -1,0 +1,501 @@
+{
+  "schema_version": "1.0",
+  "competition": "236716",
+  "trial_id": "trial_001",
+  "source": "rule_based_trial_artifact_analysis",
+  "metric": "R-Hit@1cm",
+  "objective": "maximize",
+  "project_root": "C:\\Users\\ASUS\\Desktop\\Research_Agent\\demo_workspaces\\236716",
+  "notes": [
+    "실행 코드는 .py 파일을 기준으로 유지합니다.",
+    "이 구조 명세는 노트북처럼 위에서 아래로 읽히도록 생성된 사용자/에이전트 공용 컨텍스트입니다.",
+    "다음 trial에서는 stages[].included, code_locations, improvement_handles를 참고해 수정 축을 정합니다."
+  ],
+  "consistency_issues": [],
+  "stages": [
+    {
+      "id": "imports_setup",
+      "name": "Imports & Setup",
+      "included": true,
+      "required": true,
+      "reason": "모든 실행 파이프라인은 import와 workspace 경로/config 초기화가 필요합니다.",
+      "role": "실험 실행에 필요한 라이브러리, 경로, 설정값을 준비합니다.",
+      "code_locations": [
+        "src/baseline.py",
+        "train_step.py",
+        "predict_step.py",
+        "test_step.py"
+      ],
+      "inputs": [
+        "workspace_config.json",
+        "Execution Profile",
+        "Python runtime"
+      ],
+      "outputs": [
+        "reproducible runtime context"
+      ],
+      "checks": [
+        "필요 패키지가 import 되는지",
+        "입출력 경로가 workspace 내부인지"
+      ],
+      "actual_applied": [
+        "사용 라이브러리/도구: pathlib.Path.",
+        "workspace 기준 경로 상수 CONFIG_PATH, DATA_DIR, MODEL_PATH, SUBMISSION_PATH를 정의합니다."
+      ],
+      "structured_details": {},
+      "improvement_handles": []
+    },
+    {
+      "id": "data_load",
+      "name": "Data Load",
+      "included": true,
+      "required": true,
+      "reason": "사용자가 제공한 데이터 파일을 읽는 단계입니다.",
+      "role": "원본 train/test 데이터를 읽고 이후 단계에 전달합니다.",
+      "code_locations": [
+        "src/baseline.py",
+        "train_step.py",
+        "predict_step.py",
+        "test_step.py",
+        "workspace_config.json"
+      ],
+      "inputs": [
+        "data/train.csv",
+        "data/test.csv",
+        "workspace data directory"
+      ],
+      "outputs": [
+        "raw train/test dataframe or dataset objects"
+      ],
+      "checks": [
+        "파일 존재 여부",
+        "target/id column 확인",
+        "row/column schema 확인"
+      ],
+      "actual_applied": [
+        "`pd.read_csv`로 train_labels.csv, sample_submission.csv를 읽습니다.",
+        "학습 타깃은 `x,y,z`, 제출 ID는 `id`로 사용합니다."
+      ],
+      "structured_details": {
+        "required_files": [
+          "train_labels.csv",
+          "sample_submission.csv"
+        ],
+        "target_column": "x,y,z",
+        "id_column": "id",
+        "loader": "pandas.read_csv"
+      },
+      "improvement_handles": [
+        "data quality",
+        "schema validation"
+      ]
+    },
+    {
+      "id": "preprocessing",
+      "name": "Preprocessing",
+      "included": true,
+      "required": true,
+      "reason": "결측치, 범주형 변수, 스케일 처리를 명시해야 다음 실험에서 무엇을 바꿀지 판단할 수 있습니다.",
+      "role": "원본 데이터를 모델 입력 가능한 형태로 정리합니다.",
+      "code_locations": [
+        "train_step.py"
+      ],
+      "inputs": [
+        "raw features"
+      ],
+      "outputs": [
+        "model-ready features"
+      ],
+      "checks": [
+        "결측치 처리 방식",
+        "categorical/numeric feature 분리",
+        "train/test transform 일관성"
+      ],
+      "actual_applied": [],
+      "structured_details": {},
+      "improvement_handles": [
+        "missing value policy",
+        "categorical encoding",
+        "scaling",
+        "leakage prevention"
+      ]
+    },
+    {
+      "id": "data_split_cv",
+      "name": "Data Split / CV Strategy",
+      "included": true,
+      "required": true,
+      "reason": "검증 점수의 의미를 판단하려면 split/CV 전략이 명확해야 합니다.",
+      "role": "학습/검증 분리 또는 CV 전략을 정의합니다.",
+      "code_locations": [
+        "src/baseline.py",
+        "train_step.py",
+        "predict_step.py",
+        "test_step.py"
+      ],
+      "inputs": [
+        "training data",
+        "target"
+      ],
+      "outputs": [
+        "validation score",
+        "fold scores or holdout score"
+      ],
+      "checks": [
+        "stratify/group/time split 필요 여부",
+        "random seed",
+        "metric과 split의 적합성"
+      ],
+      "actual_applied": [
+        "`metrics.json` 기준 검증 방식은 `random_holdout_by_id`입니다."
+      ],
+      "structured_details": {
+        "method": "random_holdout_by_id",
+        "test_size": 0.1,
+        "random_state": 42,
+        "stratify": false
+      },
+      "improvement_handles": [
+        "validation strategy",
+        "CV configuration",
+        "seed stability"
+      ]
+    },
+    {
+      "id": "feature_representation",
+      "name": "Feature / Representation Construction",
+      "included": true,
+      "required": false,
+      "reason": "원본 feature를 그대로 쓰지 않고 파생변수, 토큰, 임베딩 등을 만들 때 포함됩니다.",
+      "role": "모델이 학습할 입력 표현이나 파생 피처를 구성합니다.",
+      "code_locations": [
+        "train_step.py",
+        "test_step.py"
+      ],
+      "inputs": [
+        "preprocessed features"
+      ],
+      "outputs": [
+        "derived features or representations"
+      ],
+      "checks": [
+        "생성된 feature 목록",
+        "leakage 가능성",
+        "train/test 동일 적용"
+      ],
+      "actual_applied": [],
+      "structured_details": {},
+      "improvement_handles": [
+        "feature engineering",
+        "representation learning"
+      ]
+    },
+    {
+      "id": "data_augmentation",
+      "name": "Data Augmentation",
+      "included": false,
+      "required": false,
+      "reason": "이번 trial에서는 명시적 augmentation 로직을 찾지 못했습니다.",
+      "role": "학습 데이터에 변형을 적용해 일반화를 돕습니다.",
+      "code_locations": [],
+      "inputs": [
+        "training samples"
+      ],
+      "outputs": [
+        "augmented training samples"
+      ],
+      "checks": [
+        "검증/테스트에는 augmentation 미적용",
+        "label 보존 여부",
+        "seed/reproducibility"
+      ],
+      "actual_applied": [
+        "이번 tabular baseline에서는 데이터 증강을 적용하지 않았습니다."
+      ],
+      "structured_details": {},
+      "improvement_handles": [
+        "augmentation policy",
+        "generalization"
+      ]
+    },
+    {
+      "id": "dataset_dataloader",
+      "name": "Dataset / DataLoader",
+      "included": false,
+      "required": false,
+      "reason": "이번 trial은 sklearn tabular pipeline이라 Dataset/DataLoader가 필요하지 않습니다.",
+      "role": "배치 단위 학습을 위한 데이터 접근 골격을 제공합니다.",
+      "code_locations": [
+        "train_step.py"
+      ],
+      "inputs": [
+        "preprocessed samples"
+      ],
+      "outputs": [
+        "batch iterator"
+      ],
+      "checks": [
+        "Dataset 내부에 전처리/증강 로직을 숨기지 않았는지",
+        "batch shape",
+        "shuffle 설정"
+      ],
+      "actual_applied": [
+        "이번 실험에서는 해당 단계를 적용하지 않았습니다."
+      ],
+      "structured_details": {},
+      "improvement_handles": [
+        "batching",
+        "sampling",
+        "data pipeline speed"
+      ]
+    },
+    {
+      "id": "model_definition",
+      "name": "Model Definition",
+      "included": true,
+      "required": true,
+      "reason": "어떤 모델을 학습했는지 명확해야 성능 변화 원인을 해석할 수 있습니다.",
+      "role": "모델 family와 주요 hyperparameter를 정의합니다.",
+      "code_locations": [
+        "src/baseline.py",
+        "test_step.py"
+      ],
+      "inputs": [
+        "model-ready features"
+      ],
+      "outputs": [
+        "untrained model or estimator"
+      ],
+      "checks": [
+        "model family",
+        "주요 hyperparameter",
+        "pretrained/fine-tuning 여부"
+      ],
+      "actual_applied": [
+        "모델 family는 `RuleBasedConstantVelocity`입니다."
+      ],
+      "structured_details": {
+        "estimator": "RuleBasedConstantVelocity",
+        "parameters": {},
+        "pretrained": false,
+        "pipeline_container": null
+      },
+      "improvement_handles": [
+        "model family",
+        "architecture",
+        "pretraining"
+      ]
+    },
+    {
+      "id": "loss_objective",
+      "name": "Loss Function / Objective",
+      "included": true,
+      "required": true,
+      "reason": "loss/objective와 competition metric이 맞는지 확인해야 합니다.",
+      "role": "학습 최적화 목표와 평가 metric의 관계를 명시합니다.",
+      "code_locations": [
+        "src/baseline.py",
+        "test_step.py",
+        "workspace_config.json"
+      ],
+      "inputs": [
+        "model predictions",
+        "target"
+      ],
+      "outputs": [
+        "optimization objective"
+      ],
+      "checks": [
+        "loss와 metric이 어긋나지 않는지",
+        "class imbalance 처리 필요 여부"
+      ],
+      "actual_applied": [
+        "평가 지표는 `R-Hit@1cm`이며 목표 방향은 `maximize`입니다.",
+        "명시적 loss 구현 대신 `RuleBasedConstantVelocity`의 내부 학습 목적을 사용합니다."
+      ],
+      "structured_details": {
+        "metric": "R-Hit@1cm",
+        "objective": "maximize",
+        "explicit_loss": null,
+        "library_objective": "RuleBasedConstantVelocity"
+      },
+      "improvement_handles": [
+        "loss/metric alignment",
+        "class imbalance"
+      ]
+    },
+    {
+      "id": "training",
+      "name": "Training",
+      "included": true,
+      "required": true,
+      "reason": "실험 파이프라인에는 모델 학습 단계가 반드시 필요합니다.",
+      "role": "모델을 학습하고 재현 가능한 학습 결과를 생성합니다.",
+      "code_locations": [
+        "src/baseline.py",
+        "train_step.py",
+        "test_step.py",
+        "workspace_config.json"
+      ],
+      "inputs": [
+        "train split",
+        "model",
+        "objective"
+      ],
+      "outputs": [
+        "trained model"
+      ],
+      "checks": [
+        "seed",
+        "fit 호출",
+        "학습 시간",
+        "학습 실패 로그"
+      ],
+      "actual_applied": [],
+      "structured_details": {
+        "fit_detected": false,
+        "checkpoint_path": null,
+        "train_rows": null,
+        "validation_rows": null
+      },
+      "improvement_handles": [
+        "hyperparameters",
+        "optimizer",
+        "runtime"
+      ]
+    },
+    {
+      "id": "training_curve",
+      "name": "Training Curve",
+      "included": false,
+      "required": false,
+      "reason": "이번 trial은 단일 sklearn estimator 기반이라 training curve를 생성하지 않았습니다.",
+      "role": "epoch별 학습 과정을 기록해 과적합/과소적합을 확인합니다.",
+      "code_locations": [],
+      "inputs": [
+        "per-epoch training logs"
+      ],
+      "outputs": [
+        "curve data or plot"
+      ],
+      "checks": [
+        "train/validation divergence",
+        "early stopping 근거"
+      ],
+      "actual_applied": [
+        "이번 실험에서는 해당 단계를 적용하지 않았습니다."
+      ],
+      "structured_details": {},
+      "improvement_handles": [
+        "overfitting diagnosis",
+        "early stopping"
+      ]
+    },
+    {
+      "id": "evaluation",
+      "name": "Evaluation",
+      "included": true,
+      "required": true,
+      "reason": "다음 개선 방향을 판단하려면 metric 기록이 필요합니다.",
+      "role": "로컬 검증 metric을 계산하고 기록합니다.",
+      "code_locations": [
+        "src/baseline.py",
+        "test_step.py"
+      ],
+      "inputs": [
+        "validation predictions",
+        "validation target"
+      ],
+      "outputs": [
+        "metrics.json",
+        "cv_score"
+      ],
+      "checks": [
+        "metric key",
+        "objective direction",
+        "score reproducibility"
+      ],
+      "actual_applied": [
+        "`cv_score`는 0.591입니다."
+      ],
+      "structured_details": {
+        "score_source": "R-Hit@1cm",
+        "cv_score": 0.591,
+        "validation_accuracy": null,
+        "fold_scores": null
+      },
+      "improvement_handles": [
+        "metric reliability",
+        "error analysis"
+      ]
+    },
+    {
+      "id": "model_checkpoint",
+      "name": "Model Save / Checkpoint",
+      "included": false,
+      "required": false,
+      "reason": "이번 trial에서는 제외되었습니다: 다음 trial 재사용, 롤백, 제출 재현이 필요하면 포함합니다.",
+      "role": "학습된 모델 또는 checkpoint를 저장합니다.",
+      "code_locations": [],
+      "inputs": [
+        "trained model"
+      ],
+      "outputs": [
+        "model artifact"
+      ],
+      "checks": [
+        "저장 위치가 outputs/ 또는 허용된 artifact 경로인지",
+        "재로드 가능성"
+      ],
+      "actual_applied": [
+        "이번 실험에서는 별도 모델 checkpoint 저장을 확인하지 못했습니다."
+      ],
+      "structured_details": {},
+      "improvement_handles": [
+        "rollback",
+        "reproducibility"
+      ]
+    },
+    {
+      "id": "test_inference_output",
+      "name": "Test Inference / Output",
+      "included": true,
+      "required": true,
+      "reason": "대회 제출 또는 결과 검증을 위해 test inference 단계가 필요합니다.",
+      "role": "test set 예측과 제출/출력 파일을 생성합니다.",
+      "code_locations": [
+        "src/baseline.py",
+        "train_step.py",
+        "predict_step.py",
+        "test_step.py",
+        "workspace_config.json"
+      ],
+      "inputs": [
+        "test data",
+        "trained model"
+      ],
+      "outputs": [
+        "submission.csv or prediction artifact"
+      ],
+      "checks": [
+        "id column 보존",
+        "submission format",
+        "row count"
+      ],
+      "actual_applied": [
+        "`outputs/submission.csv`를 생성합니다.",
+        "제출 파일은 `id`, `x`, `y`, `z` 컬럼을 사용합니다."
+      ],
+      "structured_details": {
+        "submission_path": "outputs/submission.csv",
+        "id_column": "id",
+        "prediction_column": "x,y,z",
+        "postprocessing": []
+      },
+      "improvement_handles": [
+        "submission format",
+        "post-processing"
+      ]
+    }
+  ]
+}

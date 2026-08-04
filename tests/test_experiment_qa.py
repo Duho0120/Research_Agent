@@ -5,12 +5,12 @@ import sqlite3
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.experiment_qa import (
+from research_agent.experiment_qa import (
     _question_payload,
     answer_experiment_question,
     collect_experiment_evidence,
 )
-from kaggle_research_agent.experiment_qa_retrieval import MAX_CONTEXT_CHARS, _requested_trials
+from research_agent.experiment_qa_retrieval import MAX_CONTEXT_CHARS, _requested_trials
 
 
 class FakeClient:
@@ -39,7 +39,7 @@ class ExperimentQuestionTest(unittest.TestCase):
                 if path.is_file()
             }
 
-            with patch("kaggle_research_agent.experiment_qa.project_root", return_value=root):
+            with patch("research_agent.experiment_qa.project_root", return_value=root):
                 result = answer_experiment_question(
                     "demo",
                     "trial_001",
@@ -63,9 +63,9 @@ class ExperimentQuestionTest(unittest.TestCase):
             scores = root / "runs" / "titanic" / "trial_003" / "03_scores.ko.md"
             scores.parent.mkdir(parents=True)
             scores.write_text("Kaggle 제출 점수: 0.77272", encoding="utf-8")
-            with patch("kaggle_research_agent.experiment_qa.project_root", return_value=root):
+            with patch("research_agent.experiment_qa.project_root", return_value=root):
                 with patch(
-                    "kaggle_research_agent.agents.memory.competition_memory_dir",
+                    "research_agent.agents.memory.competition_memory_dir",
                     return_value=root / "memory" / "titanic",
                 ):
                     result = answer_experiment_question(
@@ -85,7 +85,7 @@ class ExperimentQuestionTest(unittest.TestCase):
             scores = root / "runs" / "titanic" / "trial_003" / "03_scores.ko.md"
             scores.parent.mkdir(parents=True)
             scores.write_text("- 제출 점수: 0.77272\n- 로컬 점수: 0.854749", encoding="utf-8")
-            with patch("kaggle_research_agent.experiment_qa.project_root", return_value=root):
+            with patch("research_agent.experiment_qa.project_root", return_value=root):
                 result = answer_experiment_question(
                     "titanic", "trial_003", "제출 점수는?", client=FailingClient()
                 )
@@ -116,7 +116,7 @@ class ExperimentQuestionTest(unittest.TestCase):
                     encoding="utf-8",
                 )
 
-            with patch("kaggle_research_agent.experiment_qa.project_root", return_value=root):
+            with patch("research_agent.experiment_qa.project_root", return_value=root):
                 evidence = collect_experiment_evidence("titanic", "trial_003")
 
             summary = "\n".join(content for _, content in evidence)
@@ -174,7 +174,7 @@ class ExperimentQuestionTest(unittest.TestCase):
             irrelevant.parent.mkdir(parents=True)
             irrelevant.write_text("질문과 관계없는 매우 긴 계획", encoding="utf-8")
 
-            with patch("kaggle_research_agent.experiment_qa.project_root", return_value=root):
+            with patch("research_agent.experiment_qa.project_root", return_value=root):
                 evidence = collect_experiment_evidence(
                     "titanic",
                     "trial_002",
@@ -202,7 +202,7 @@ class ExperimentQuestionTest(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(content, encoding="utf-8")
 
-            with patch("kaggle_research_agent.experiment_qa.project_root", return_value=root):
+            with patch("research_agent.experiment_qa.project_root", return_value=root):
                 evidence = collect_experiment_evidence(
                     "titanic",
                     "trial_007",
@@ -252,7 +252,7 @@ class ExperimentQuestionTest(unittest.TestCase):
             stale_plan.parent.mkdir(parents=True)
             stale_plan.write_text("plan only: set max_iter=300", encoding="utf-8")
 
-            with patch("kaggle_research_agent.experiment_qa.project_root", return_value=root):
+            with patch("research_agent.experiment_qa.project_root", return_value=root):
                 evidence = collect_experiment_evidence(
                     "bike",
                     "trial_005",
@@ -292,7 +292,7 @@ class ExperimentQuestionTest(unittest.TestCase):
                     encoding="utf-8",
                 )
 
-            with patch("kaggle_research_agent.experiment_qa.project_root", return_value=root):
+            with patch("research_agent.experiment_qa.project_root", return_value=root):
                 evidence = collect_experiment_evidence(
                     "bike",
                     "trial_027",
@@ -310,7 +310,7 @@ class ExperimentQuestionTest(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(f"앙상블 모델 실행 기록 {index} " + ("내용 " * 2000), encoding="utf-8")
 
-            with patch("kaggle_research_agent.experiment_qa.project_root", return_value=root):
+            with patch("research_agent.experiment_qa.project_root", return_value=root):
                 evidence = collect_experiment_evidence(
                     "titanic",
                     "trial_007",
@@ -372,7 +372,7 @@ class ExperimentQuestionTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            with patch("kaggle_research_agent.experiment_qa.project_root", return_value=root):
+            with patch("research_agent.experiment_qa.project_root", return_value=root):
                 with patch.dict(
                     "os.environ",
                     {

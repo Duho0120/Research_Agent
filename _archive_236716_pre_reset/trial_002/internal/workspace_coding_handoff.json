@@ -1,0 +1,218 @@
+{
+  "schema_version": "1.0",
+  "request_id": "236716:trial_002:workspace-coding",
+  "competition": "236716",
+  "trial_id": "trial_002",
+  "handoff_type": "workspace_coding_agent_request",
+  "status": "ready",
+  "objective": "Implement the next workspace experiment within the Execution Profile write scope.",
+  "project_root": "C:\\Users\\ASUS\\Desktop\\Research_Agent\\demo_workspaces\\236716",
+  "platform": "dacon",
+  "continuation_mode": "can_continue",
+  "source_trial_id": "trial_001",
+  "code_base_trial_id": "trial_001",
+  "recommended_base_trial": "trial_001",
+  "pending_human_review": false,
+  "review_source_trial": null,
+  "context_files": [
+    "experiments/236716/trial_002/next_experiment.md",
+    "experiments/236716/trial_002/continuation_context.json",
+    "experiments/236716/trial_002/continuation_context.md",
+    "experiments/236716/trial_002/workspace_context_snapshot.md"
+  ],
+  "snapshot_mode": "standard",
+  "retry_reason": null,
+  "runtime_failure_context": {},
+  "retrieval_context": {
+    "task": "workspace_code_writing",
+    "query": null,
+    "document_count": 0,
+    "skipped": true,
+    "skip_reason": "continuation_uses_structured_memory_and_code_snapshot",
+    "policy": {
+      "use_rag": false,
+      "task": "workspace_code_writing",
+      "reason": "continuation_uses_structured_memory_and_code_snapshot"
+    },
+    "context_pack_file": null,
+    "context_pack_md_file": null,
+    "retrieval_manifest_file": null,
+    "documents": []
+  },
+  "data_card_summary": {
+    "task_type": "unknown",
+    "target_column": null,
+    "id_column": null,
+    "submission_prediction_column": null,
+    "train_file": null,
+    "test_file": null,
+    "sample_submission_file": "sample_submission.csv",
+    "dataset_layout": "per_sample_files",
+    "train_dir": "train/",
+    "test_dir": "test/",
+    "directory_datasets": [
+      {
+        "name": "test/",
+        "role": "test",
+        "file_count": 10000,
+        "filename_pattern": "TEST_#####.csv",
+        "example_files": [
+          "TEST_00001.csv",
+          "TEST_00002.csv",
+          "TEST_00003.csv"
+        ],
+        "per_file_columns": [
+          "timestep_ms",
+          "x",
+          "y",
+          "z"
+        ],
+        "sample_id_source": "filename_stem",
+        "id_matched_files": [
+          "sample_submission.csv:id"
+        ],
+        "notes": [
+          "Each CSV in this directory is ONE sample; the sample id is the filename stem.",
+          "Load every file in the directory and derive features per sample -- do not expect a single flat table."
+        ]
+      },
+      {
+        "name": "train/",
+        "role": "train",
+        "file_count": 10000,
+        "filename_pattern": "TRAIN_#####.csv",
+        "example_files": [
+          "TRAIN_00001.csv",
+          "TRAIN_00002.csv",
+          "TRAIN_00003.csv"
+        ],
+        "per_file_columns": [
+          "timestep_ms",
+          "x",
+          "y",
+          "z"
+        ],
+        "sample_id_source": "filename_stem",
+        "id_matched_files": [
+          "train_labels.csv:id"
+        ],
+        "notes": [
+          "Each CSV in this directory is ONE sample; the sample id is the filename stem.",
+          "Load every file in the directory and derive features per sample -- do not expect a single flat table."
+        ]
+      }
+    ],
+    "include_features_first": [],
+    "defer_features_first": [],
+    "exclude_columns": [],
+    "preferred_model_families": [
+      "logistic_regression_or_linear_classifier_for_binary_classification",
+      "small_random_forest_or_gradient_boosted_tree_if_available"
+    ],
+    "avoid_first_trial": [
+      "gaussian_naive_bayes_for_mixed_numeric_and_categorical_data",
+      "raw_high_cardinality_text_or_identifier_one_hot_features",
+      "broad_schema_discovery_when_target_id_and_columns_are_known"
+    ]
+  },
+  "edit_policy": {
+    "mode": "patch_only",
+    "prefer_patch_updates": true,
+    "allow_full_file_updates": false,
+    "restore_base_before_patch": true,
+    "base_code_source": "experiments/236716/trial_001/internal/code_snapshot",
+    "patch_budget": 2,
+    "patch_schema": {
+      "path": "project-root-relative file path",
+      "find": "exact existing text to replace",
+      "replace": "replacement text",
+      "reason": "short reason for the localized change"
+    }
+  },
+  "allowed_write_paths": [
+    "src/",
+    "tests/",
+    "train_step.py",
+    "predict_step.py",
+    "test_step.py",
+    "workspace_config.json"
+  ],
+  "forbidden_paths": [
+    "data/",
+    "outputs/metrics.json",
+    "outputs/submission.csv"
+  ],
+  "validation_commands": [
+    "{python} test_step.py"
+  ],
+  "execution_constraints": {
+    "do_not_run_training": true,
+    "do_not_submit": true,
+    "do_not_edit_data_or_outputs": true,
+    "do_not_write_outside_allowed_paths": true,
+    "use_project_root_as_cwd": true,
+    "base_trial_code_is_authoritative": true
+  },
+  "metrics_output_contract": {
+    "path": "outputs/metrics.json",
+    "score_key": "cv_score",
+    "required_keys": [
+      "cv_score",
+      "metric",
+      "objective"
+    ],
+    "notes": [
+      "Training code must write a finite numeric cv_score to the metrics artifact.",
+      "metric should match the competition metric name when known.",
+      "objective must be maximize or minimize.",
+      "Additional diagnostic keys such as validation_accuracy are allowed, but cv_score is the canonical score.",
+      "Every metrics and pipeline-summary value must be JSON serializable. Convert numpy scalars, callables, estimators, paths, and other objects to primitive values or stable strings before json.dumps."
+    ]
+  },
+  "artifact_policy": {
+    "save_submission": true,
+    "save_metrics": true,
+    "save_code_snapshot": true,
+    "save_pipeline_summary": true,
+    "save_model": {
+      "default": false,
+      "allowed_when": [
+        "required_for_separate_predict_command",
+        "best_trial",
+        "submitted_trial",
+        "expensive_to_retrain",
+        "ensemble_candidate",
+        "user_requested"
+      ],
+      "require_reason": true,
+      "prefer_small_serialized_artifact": true,
+      "cleanup_non_best_models": true
+    },
+    "notes": [
+      "A trial should not persist trained model artifacts by default.",
+      "Submission, metrics, code snapshot, and pipeline summary are the primary memory artifacts.",
+      "If a model artifact is persisted, the plan/code should record why it is needed."
+    ]
+  },
+  "required_output": {
+    "json_file": "experiments/236716/trial_002/workspace_coding_result.json",
+    "markdown_file": "experiments/236716/trial_002/workspace_coding_result.md",
+    "required_fields": [
+      "status",
+      "summary",
+      "changed_files",
+      "validation_results",
+      "blocking_issues"
+    ],
+    "status_values": [
+      "completed",
+      "blocked",
+      "failed"
+    ],
+    "next_action": "validate-workspace-code-change"
+  },
+  "profile_validation_status": "ready",
+  "profile_validation_issues": [],
+  "blocking_issues": [],
+  "next_action": "send-to-workspace-coding-agent"
+}

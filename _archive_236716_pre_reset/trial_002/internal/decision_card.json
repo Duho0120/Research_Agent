@@ -1,0 +1,59 @@
+{
+  "schema_version": "1.0",
+  "competition": "236716",
+  "trial_id": "trial_002",
+  "created_at": "2026-07-31T01:06:48.932500+00:00",
+  "source_trial_id": "trial_001",
+  "plan_type": "continuation_delta_plan",
+  "change_axis": "controlled_refinement",
+  "local_score": 0.591,
+  "lb_score": 0.3876,
+  "previous_local_score": 0.591,
+  "previous_lb_score": 0.6006,
+  "best_local_score": 0.591,
+  "best_lb_score": 0.6006,
+  "local_delta": 0.0,
+  "lb_delta": -0.213,
+  "previous_local_delta": 0.0,
+  "previous_lb_delta": -0.213,
+  "objective": "maximize",
+  "local_status": "flat",
+  "lb_status": "regressed",
+  "previous_local_status": "flat",
+  "previous_lb_status": "regressed",
+  "raw_decision": "reject_or_hold",
+  "decision": "reject_or_hold",
+  "model_type": "RuleBasedConstantVelocity",
+  "catastrophic_regression": true,
+  "estimator_family_changed": false,
+  "no_change_suspected": false,
+  "active_axis": null,
+  "axis_attempt_count": 1,
+  "axis_attempt_limit": 3,
+  "candidate_label": "controlled_refinement: controlled_refinement",
+  "rejected_candidates": [
+    "controlled_refinement: controlled_refinement"
+  ],
+  "rejected_candidates_by_axis": {
+    "controlled_refinement": [
+      "controlled_refinement: controlled_refinement"
+    ]
+  },
+  "active_axis_rejected_candidates": [
+    "controlled_refinement: controlled_refinement"
+  ],
+  "recommended_base_trial": "trial_001",
+  "rejected_axes": [
+    "controlled_refinement"
+  ],
+  "accepted_axes": [],
+  "next_guidance": "Treat `controlled_refinement` as exhausted for now. Start from `trial_001` and try a different single axis.",
+  "planner_constraints": [
+    "Use `trial_001` as the base trial unless the user explicitly overrides it.",
+    "Change exactly one primary improvement axis in the next trial.",
+    "Keep split/model/preprocessing fixed unless selected as the primary axis.",
+    "FACT: `controlled_refinement` regressed the score by more than 25% -- far beyond tuning noise. The idea itself is wrong for this data; do not retry it with different parameters, and do not retry it under a different axis name.",
+    "Do not keep stacking on rejected axis `controlled_refinement`.",
+    "If the rejected axis was implemented in the last trial, roll back to the recommended base before applying a new change."
+  ]
+}

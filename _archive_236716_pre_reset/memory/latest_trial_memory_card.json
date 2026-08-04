@@ -1,0 +1,71 @@
+{
+  "schema_version": "1.0",
+  "competition": "236716",
+  "trial_id": "trial_003",
+  "created_at": "2026-07-31T02:01:30.882573+00:00",
+  "plan_type": "continuation_delta_plan",
+  "source_trial_id": "trial_002",
+  "plan_title": "Rollback to trial_001 and align submission schema to id,x,y,z",
+  "change_axis": "submission_schema_alignment",
+  "candidate_label": "submission_schema_alignment: Inference | Output | Predict | Update",
+  "change_details": [
+    "Test Inference Output: Change submission prediction columns from ['target'] to ['x','y','z']",
+    "Test Inference Output: Write outputs/submission.csv with column order exactly: id,x,y,z; enforce float32 for x,y,z",
+    "Predict Step.Py: Update _read_sample_submission to expect/propagate ['id','x','y','z'] header",
+    "Predict Step.Py: Modify prediction assembly to return a dict/array with keys/cols ['x','y','z'] from the constant-velocity estimate"
+  ],
+  "kept_unchanged": [
+    "Train File: train_labels.csv",
+    "Sample Submission: sample_submission.csv",
+    "Id Column: id",
+    "Method: random_holdout_by_id",
+    "Test Size: 0.1"
+  ],
+  "local_score": 0.591,
+  "lb_score": 0.6006,
+  "local_status": "flat",
+  "previous_local_status": "flat",
+  "local_delta": 0.0,
+  "previous_local_delta": 0.0,
+  "decision": "continue_axis_refinement",
+  "active_axis": "submission_schema_alignment",
+  "axis_attempt_count": 1,
+  "axis_attempt_limit": 3,
+  "recommended_base_trial": "trial_001",
+  "rejected_axes": [
+    "controlled_refinement"
+  ],
+  "rejected_candidates": [
+    "controlled_refinement: controlled_refinement",
+    "submission_schema_alignment: Inference | Output | Predict | Update"
+  ],
+  "rejected_candidates_by_axis": {
+    "controlled_refinement": [
+      "controlled_refinement: controlled_refinement"
+    ],
+    "submission_schema_alignment": [
+      "submission_schema_alignment: Inference | Output | Predict | Update"
+    ]
+  },
+  "active_axis_rejected_candidates": [
+    "submission_schema_alignment: Inference | Output | Predict | Update"
+  ],
+  "feature_columns": [],
+  "numeric_features": [],
+  "categorical_features": [],
+  "model_type": "RuleBasedConstantVelocity",
+  "model": {
+    "estimator": "RuleBasedConstantVelocity",
+    "parameters": {},
+    "pretrained": false,
+    "pipeline_container": null
+  },
+  "split": {
+    "method": "random_holdout_by_id",
+    "test_size": 0.1,
+    "random_state": 42,
+    "stratify": false
+  },
+  "consistency_issues": [],
+  "next_guidance": "`submission_schema_alignment` has not improved yet, but the axis is not rejected. Start from best/base trial `trial_001` and apply another candidate or parameter variant within the same axis."
+}

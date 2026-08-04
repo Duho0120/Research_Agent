@@ -4,8 +4,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.agents.research_protocol import build_research_protocol
-from kaggle_research_agent.cli import main
+from research_agent.agents.research_protocol import build_research_protocol
+from research_agent.cli import main
 
 
 class ResearchProtocolTest(unittest.TestCase):
@@ -19,7 +19,7 @@ class ResearchProtocolTest(unittest.TestCase):
                 {"cv_score": 0.61, "lb_score": 0.70, "objective": "minimize"},
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = build_research_protocol("demo", "trial_001", "trial_002")
 
             self.assertEqual("controlled_improvement", result["recommended_action"]["strategy"])
@@ -47,7 +47,7 @@ class ResearchProtocolTest(unittest.TestCase):
                 {"cv_score": 0.59, "lb_score": 0.70, "objective": "minimize"},
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = build_research_protocol("demo", "trial_001", "trial_002")
 
             self.assertEqual("validation_review", result["recommended_action"]["strategy"])
@@ -95,7 +95,7 @@ class ResearchProtocolTest(unittest.TestCase):
                 {"cv_score": 0.59, "lb_score": 0.70, "objective": "minimize"},
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = build_research_protocol("demo", "trial_002", "trial_003")
 
             self.assertEqual(0.60, result["evidence"]["best_score_before"])
@@ -109,7 +109,7 @@ class ResearchProtocolTest(unittest.TestCase):
             self._write_competition(root)
             self._write_trial(root, "trial_001", {"cv_score": 0.61, "objective": "minimize"})
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 code = main(
                     ["research-protocol", "--competition", "demo", "--trial", "trial_001", "--next-trial", "trial_002"]
                 )

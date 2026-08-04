@@ -1,0 +1,47 @@
+{
+  "schema_version": "1.0",
+  "competition": "236716",
+  "trial_id": "trial_001",
+  "task": "workspace_code_writing",
+  "built_at": "2026-07-31T00:45:30.711172+00:00",
+  "query": "next experiment current project code competition data card data profile target columns feature recommendations previous trial metrics result pipeline structure decision card rejected axes recommended base workspace context snapshot validation allowed write files",
+  "budget": {
+    "max_documents": 3,
+    "max_chars_per_document": 750,
+    "prompt_chars_per_document": 450
+  },
+  "document_count": 3,
+  "documents": [
+    {
+      "document_id": "236716:ebf85d96152298fb",
+      "source_path": "memory/236716/latest_decision_card.md",
+      "source_kind": "decision_card",
+      "trial_id": null,
+      "score": 52,
+      "title": "decision_card: latest_decision_card.md",
+      "content_type": "text/markdown",
+      "text": "# Trial Decision Card: trial_001\n\n- decision: baseline_established\n- change_axis: None\n- source_trial_id: None\n- recommended_base_trial: trial_001\n- local_score: 1.0\n- local_status: baseline\n- local_delta: None\n- previous_local_status: baseline\n- previous_local_delta: None\n- active_axis: None\n- axis_attempt_count: 0\n- axis_attempt_limit: 3\n- lb_score: None\n- lb_status: missing\n- lb_delta: None\n- previous_lb_status: missing\n- previous_lb_delta: None\n\n## Next Guidance\n\nUse this trial as the baseline. The next trial should change exactly one improvement axis.\n\n## Planner Constraints\n\n- Use `trial_001` as the base trial unless the user explicitly overrides it.\n- Change exactly one primary improvement axis in the next trial.\n- Keep split/model/p"
+    },
+    {
+      "document_id": "236716:c265eb781bf4f8ec",
+      "source_path": "memory/236716/latest_trial_memory_card.md",
+      "source_kind": "trial_memory_card",
+      "trial_id": null,
+      "score": 48,
+      "title": "trial_memory_card: latest_trial_memory_card.md",
+      "content_type": "text/markdown",
+      "text": "# Trial Memory Card: trial_001\n\n- plan_type: initial_pipeline_plan\n- source_trial_id: None\n- change_axis: \n- candidate_label: Baseline: Constant-Velocity Extrapolation (+80ms from t0,t-40ms)\n- local_score: 1.0\n- local_status: baseline\n- local_delta: None\n- previous_local_status: baseline\n- previous_local_delta: None\n- lb_score: None\n- decision: baseline_established\n- active_axis: None\n- axis_attempt_count: 0/3\n- recommended_base_trial: trial_001\n- model_type: RuleBasedConstantVelocity\n- model: {'estimator': 'RuleBasedConstantVelocity', 'parameters': {}, 'pretrained': False, 'pipeline_container': None}\n- split: {'method': 'random_holdout_by_id', 'test_size': 0.2, 'stratify': False}\n\n## Change Details\n\n- None\n\n## Kept Unchanged\n\n- None\n\n## Fe"
+    },
+    {
+      "document_id": "236716:31d4c840da93529f",
+      "source_path": "memory/236716/latest_decision_card.json",
+      "source_kind": "decision_card",
+      "trial_id": null,
+      "score": 41,
+      "title": "decision_card: latest_decision_card.json",
+      "content_type": "application/json",
+      "text": "{\n  \"schema_version\": \"1.0\",\n  \"competition\": \"236716\",\n  \"trial_id\": \"trial_001\",\n  \"created_at\": \"2026-07-31T00:04:41.690183+00:00\",\n  \"source_trial_id\": null,\n  \"plan_type\": \"initial_pipeline_plan\",\n  \"change_axis\": \"\",\n  \"local_score\": 1.0,\n  \"lb_score\": null,\n  \"previous_local_score\": null,\n  \"previous_lb_score\": null,\n  \"best_local_score\": null,\n  \"best_lb_score\": null,\n  \"local_delta\": null,\n  \"lb_delta\": null,\n  \"previous_local_delta\": null,\n  \"previous_lb_delta\": null,\n  \"objective\": \"maximize\",\n  \"local_status\": \"baseline\",\n  \"lb_status\": \"missing\",\n  \"previous_local_status\": \"baseline\",\n  \"previous_lb_status\": \"missing\",\n  \"raw_decision\": \"baseline_established\",\n  \"decision\": \"baseline_established\",\n  \"model_type\": \"RuleBasedCons"
+    }
+  ],
+  "retrieval_manifest_file": "experiments/236716/trial_001/retrieval_manifest_workspace_code_writing.json"
+}

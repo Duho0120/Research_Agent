@@ -6,9 +6,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent import simple_yaml
-from kaggle_research_agent.cli import main
-from kaggle_research_agent.workspace_runner import run_workspace_pipeline
+from research_agent import simple_yaml
+from research_agent.cli import main
+from research_agent.workspace_runner import run_workspace_pipeline
 
 
 class WorkspaceRunnerTest(unittest.TestCase):
@@ -25,7 +25,7 @@ class WorkspaceRunnerTest(unittest.TestCase):
                 test_commands=[f'{{python}} -c "from pathlib import Path; Path(r\'{marker}\').write_text(\'ran\')"'],
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_pipeline("demo", "trial_001", run_now=False)
 
             self.assertEqual("planned", result["status"])
@@ -65,7 +65,7 @@ class WorkspaceRunnerTest(unittest.TestCase):
                 predict_commands=["{python} predict_step.py"],
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_pipeline("demo", "trial_001", run_now=True)
 
             self.assertEqual("completed", result["status"])
@@ -96,7 +96,7 @@ class WorkspaceRunnerTest(unittest.TestCase):
                 predict_commands=["{python} later.py"],
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_pipeline("demo", "trial_002", run_now=True)
 
             self.assertEqual("failed", result["status"])
@@ -114,7 +114,7 @@ class WorkspaceRunnerTest(unittest.TestCase):
             self._write_profile(root, project)
             project.rmdir()
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_pipeline("demo", "trial_003", run_now=True)
 
             self.assertEqual("blocked", result["status"])
@@ -125,7 +125,7 @@ class WorkspaceRunnerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_pipeline("demo", "trial_006", run_now=True)
 
             self.assertEqual("blocked", result["status"])
@@ -141,7 +141,7 @@ class WorkspaceRunnerTest(unittest.TestCase):
             project.mkdir()
             self._write_profile(root, project)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_pipeline("demo", "trial_004", run_now=True)
 
             self.assertEqual("incomplete_artifacts", result["status"])
@@ -173,7 +173,7 @@ class WorkspaceRunnerTest(unittest.TestCase):
                 predict_commands=["{python} predict.py"],
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_pipeline("demo", "trial_007", run_now=True)
 
             self.assertEqual("invalid_artifacts", result["status"])
@@ -216,7 +216,7 @@ class WorkspaceRunnerTest(unittest.TestCase):
                 predict_commands=["{python} predict_step.py"],
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_pipeline("demo", "trial_008", run_now=True)
 
             self.assertEqual("invalid_artifacts", result["status"])
@@ -254,7 +254,7 @@ class WorkspaceRunnerTest(unittest.TestCase):
                 predict_commands=["{python} predict_step.py"],
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_pipeline("demo", "trial_009", run_now=True)
 
             self.assertEqual("completed", result["status"])
@@ -288,7 +288,7 @@ class WorkspaceRunnerTest(unittest.TestCase):
                 predict_commands=["{python} predict_step.py"],
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_pipeline("demo", "trial_010", run_now=True)
 
             self.assertEqual("completed", result["status"])
@@ -320,7 +320,7 @@ class WorkspaceRunnerTest(unittest.TestCase):
                 predict_commands=["{python} predict_step.py"],
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_pipeline("demo", "trial_011", run_now=True)
 
             self.assertEqual("completed", result["status"])
@@ -351,7 +351,7 @@ class WorkspaceRunnerTest(unittest.TestCase):
                 predict_commands=["{python} predict_step.py"],
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_pipeline("demo", "trial_012", run_now=True)
 
             self.assertEqual("failed", result["status"])
@@ -383,7 +383,7 @@ class WorkspaceRunnerTest(unittest.TestCase):
                 predict_commands=["{python} predict_step.py"],
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 code = main(
                     [
                         "run-workspace-pipeline",

@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.agents.patch_validator import validate_patch_plan
+from research_agent.agents.patch_validator import validate_patch_plan
 
 
 class PatchValidatorTest(unittest.TestCase):
@@ -31,7 +31,7 @@ class PatchValidatorTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_patch_plan("demo", "trial_002")
 
             self.assertEqual(result["status"], "blocked")
@@ -66,7 +66,7 @@ class PatchValidatorTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_patch_plan("demo", "trial_002")
 
             self.assertEqual(result["status"], "blocked")
@@ -91,14 +91,14 @@ class PatchValidatorTest(unittest.TestCase):
                         "target_files": ["experiments/demo/trial_002/config.yaml"],
                         "config_changes": {"training.sampler": "balanced"},
                         "validation_commands": [
-                            "python -B -m kaggle_research_agent.cli validate-config --competition demo --trial trial_002"
+                            "python -B -m research_agent.cli validate-config --competition demo --trial trial_002"
                         ],
                     }
                 ),
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_patch_plan("demo", "trial_002")
 
             self.assertEqual(result["status"], "ready")
@@ -113,7 +113,7 @@ class PatchValidatorTest(unittest.TestCase):
                 json.dumps({"model": {"type": "lightgbm"}, "features": {}, "cv": {"n_splits": 5}}),
                 encoding="utf-8",
             )
-            new_file = "kaggle_research_agent/pipeline/dataset.py"
+            new_file = "research_agent/pipeline/dataset.py"
             (trial / "code_patch_plan.json").write_text(
                 json.dumps(
                     {
@@ -128,7 +128,7 @@ class PatchValidatorTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_patch_plan("demo", "trial_002")
 
             self.assertEqual(result["status"], "ready")
@@ -159,7 +159,7 @@ class PatchValidatorTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_patch_plan("demo", "trial_002")
 
             self.assertEqual(result["status"], "ready")

@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.agents.post_validation_executor import run_after_validation
+from research_agent.agents.post_validation_executor import run_after_validation
 
 
 class PostValidationExecutorTest(unittest.TestCase):
@@ -16,7 +16,7 @@ class PostValidationExecutorTest(unittest.TestCase):
             (trial / "config.yaml").write_text("model:\n  type: lightgbm\n", encoding="utf-8")
             self._write_validation_run(trial, "passed")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_after_validation("demo", "trial_002", command="python train.py")
 
             self.assertEqual(result["status"], "job_created")
@@ -40,7 +40,7 @@ class PostValidationExecutorTest(unittest.TestCase):
                 "Path(r'experiments/demo/trial_002/metrics.json').write_text('{\\\"cv_score\\\": 0.7, \\\"objective\\\": \\\"maximize\\\"}', encoding='utf-8')\""
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_after_validation("demo", "trial_002", command=command, run_now=True)
 
             self.assertEqual(result["status"], "executed")
@@ -55,7 +55,7 @@ class PostValidationExecutorTest(unittest.TestCase):
             trial.mkdir(parents=True)
             self._write_validation_run(trial, "failed")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_after_validation("demo", "trial_002", command="python train.py", run_now=True)
 
             self.assertEqual(result["status"], "blocked")

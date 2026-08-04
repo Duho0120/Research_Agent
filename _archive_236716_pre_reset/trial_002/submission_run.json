@@ -1,0 +1,55 @@
+{
+  "competition": "236716",
+  "trial_id": "trial_002",
+  "version_name": "trial_002_auto",
+  "status": "submitted",
+  "submission_file": "C:\\Users\\ASUS\\Desktop\\Research_Agent\\demo_workspaces\\236716\\outputs\\submission.csv",
+  "previous_lb_score": null,
+  "previous_rank": null,
+  "submitted_lb_score": 0.3876,
+  "submitted_rank": null,
+  "submit_command": null,
+  "submit_result": {
+    "status": "submitted",
+    "returncode": 0,
+    "stdout": "",
+    "stderr": "",
+    "dacon_result": {
+      "action": "submit",
+      "ok": true,
+      "status": "submitted",
+      "raw": {
+        "message": "ok",
+        "point": 1,
+        "data": 0.3876,
+        "status": 1
+      }
+    },
+    "submission_result": {
+      "public_score": 0.3876,
+      "sub_id": 1506753,
+      "submitted_at": "2026-07-31 10:06:45",
+      "file_link": "submission.csv"
+    }
+  },
+  "recorded_submission": {
+    "submission_id": "236716_trial_002_trial_002_auto",
+    "competition": "236716",
+    "trial_id": "trial_002",
+    "version_name": "trial_002_auto",
+    "submitted_at": "2026-07-31T01:06:48.385659+00:00",
+    "submission_file": "C:\\Users\\ASUS\\Desktop\\Research_Agent\\demo_workspaces\\236716\\outputs\\submission.csv",
+    "cv_score": 0.591,
+    "previous_lb_score": null,
+    "previous_rank": null,
+    "submitted_lb_score": 0.3876,
+    "submitted_rank": null,
+    "score_delta": null,
+    "rank_delta": null,
+    "best_reference_score": 0.6006,
+    "is_best": false,
+    "notes": "Submitted by generic_workspace_auto_loop.py"
+  },
+  "dacon_competition_id": "236716",
+  "dacon_team_name": "뚜로"
+}

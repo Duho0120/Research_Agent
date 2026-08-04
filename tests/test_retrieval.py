@@ -4,11 +4,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.cli import main
-from kaggle_research_agent.retrieval.context_pack import build_context_pack
-from kaggle_research_agent.retrieval.document_registry import collect_retrieval_documents
-from kaggle_research_agent.retrieval.index_builder import build_document_index
-from kaggle_research_agent.retrieval.retriever import retrieve_documents
+from research_agent.cli import main
+from research_agent.retrieval.context_pack import build_context_pack
+from research_agent.retrieval.document_registry import collect_retrieval_documents
+from research_agent.retrieval.index_builder import build_document_index
+from research_agent.retrieval.retriever import retrieve_documents
 
 
 class RetrievalIndexTest(unittest.TestCase):
@@ -17,7 +17,7 @@ class RetrievalIndexTest(unittest.TestCase):
             root = Path(tmp)
             self._write_sample_project(root)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 docs = collect_retrieval_documents("demo")
 
             paths = {doc.source_path for doc in docs}
@@ -35,7 +35,7 @@ class RetrievalIndexTest(unittest.TestCase):
             root = Path(tmp)
             self._write_sample_project(root)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 manifest = build_document_index("demo")
 
             memory = root / "memory" / "demo"
@@ -56,7 +56,7 @@ class RetrievalIndexTest(unittest.TestCase):
             root = Path(tmp)
             self._write_sample_project(root)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 build_document_index("demo")
                 result = retrieve_documents("demo", "pipeline logistic regression FamilySize", limit=3)
 
@@ -69,7 +69,7 @@ class RetrievalIndexTest(unittest.TestCase):
             root = Path(tmp)
             self._write_sample_project(root)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 pack = build_context_pack(
                     "demo",
                     "trial_001",
@@ -103,7 +103,7 @@ class RetrievalIndexTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 pack = build_context_pack(
                     "demo",
                     "trial_002",
@@ -121,7 +121,7 @@ class RetrievalIndexTest(unittest.TestCase):
             root = Path(tmp)
             self._write_sample_project(root)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 code = main(["build-retrieval-index", "--competition", "demo"])
 
             self.assertEqual(0, code)

@@ -1,0 +1,39 @@
+{
+  "schema_version": "1.0",
+  "competition": "236716",
+  "trial_id": "trial_001",
+  "task": "workspace_code_writing",
+  "built_at": "2026-07-31T00:45:30.711172+00:00",
+  "query": "next experiment current project code competition data card data profile target columns feature recommendations previous trial metrics result pipeline structure decision card rejected axes recommended base workspace context snapshot validation allowed write files",
+  "budget": {
+    "max_documents": 3,
+    "max_chars_per_document": 750,
+    "prompt_chars_per_document": 450
+  },
+  "index_file": "memory/236716/document_index.jsonl",
+  "context_pack_file": "experiments/236716/trial_001/context_pack_workspace_code_writing.json",
+  "context_pack_md_file": "experiments/236716/trial_001/context_pack_workspace_code_writing.md",
+  "retrieved_documents": [
+    {
+      "document_id": "236716:ebf85d96152298fb",
+      "source_path": "memory/236716/latest_decision_card.md",
+      "source_kind": "decision_card",
+      "trial_id": null,
+      "score": 52
+    },
+    {
+      "document_id": "236716:c265eb781bf4f8ec",
+      "source_path": "memory/236716/latest_trial_memory_card.md",
+      "source_kind": "trial_memory_card",
+      "trial_id": null,
+      "score": 48
+    },
+    {
+      "document_id": "236716:31d4c840da93529f",
+      "source_path": "memory/236716/latest_decision_card.json",
+      "source_kind": "decision_card",
+      "trial_id": null,
+      "score": 41
+    }
+  ]
+}

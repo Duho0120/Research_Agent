@@ -1,0 +1,54 @@
+{
+  "status": "completed",
+  "summary": "Updated predict_step._predict_last_cv to use a recent-window linear regression extrapolation instead of a single-step velocity estimate.",
+  "changed_files": [
+    "predict_step.py"
+  ],
+  "patch_updates": [
+    {
+      "path": "predict_step.py",
+      "find": "def _predict_last_cv(times: List[float], poss: List[Tuple[float, float, float]]) -> Tuple[float, float, float]:\n    if not times or not poss:\n        return (0.0, 0.0, 0.0)\n    if len(times) == 1 or len(poss) == 1:\n        return poss[-1]\n    t0, t1 = times[-2], times[-1]\n    p0, p1 = poss[-2], poss[-1]\n    dt_ms = t1 - t0\n    if dt_ms <= 0:\n        return p1\n    scale = HORIZON_S / (dt_ms / 1000.0)\n    vx = (p1[0] - p0[0]) * scale\n    vy = (p1[1] - p0[1]) * scale\n    vz = (p1[2] - p0[2]) * scale\n    pred = (p1[0] + vx, p1[1] + vy, p1[2] + vz)\n    if any(not math.isfinite(v) for v in pred):\n        return p1\n    return pred\n",
+      "replace": "def _predict_last_cv(times: List[float], poss: List[Tuple[float, float, float]]) -> Tuple[float, float, float]:\n    if not times or not poss:\n        return (0.0, 0.0, 0.0)\n    if len(times) == 1 or len(poss) == 1:\n        return poss[-1]\n    # Use a recent time window (<=200ms, up to 10 last points) and fit linear trend for smoother extrapolation\n    t_last = times[-1]\n    H_ms = HORIZON_S * 1000.0\n    end_idx = len(times) - 1\n    start_idx = end_idx\n    while start_idx - 1 >= 0 and (t_last - times[start_idx - 1]) <= 200.0 and (end_idx - (start_idx - 1) + 1) <= 10:\n        start_idx -= 1\n    if end_idx - start_idx + 1 < 2:\n        start_idx = max(0, end_idx - 1)\n    ts = times[start_idx : end_idx + 1]\n    xs = [p[0] for p in poss[start_idx : end_idx + 1]]\n    ys = [p[1] for p in poss[start_idx : end_idx + 1]]\n    zs = [p[2] for p in poss[start_idx : end_idx + 1]]\n    n = len(ts)\n    tbar = sum(ts) / n\n    def _slope(tseq: List[float], vseq: List[float]) -> float | None:\n        vbar = sum(vseq) / n\n        num = 0.0\n        den = 0.0\n        for i in range(n):\n            dt = tseq[i] - tbar\n            dv = vseq[i] - vbar\n            num += dt * dv\n            den += dt * dt\n        if den <= 0.0:\n            return None\n        return num / den  # units per ms\n    sx = _slope(ts, xs)\n    sy = _slope(ts, ys)\n    sz = _slope(ts, zs)\n    p_now = poss[-1]\n    bad = any(v is None or not math.isfinite(v) for v in (sx, sy, sz))\n    if bad:\n        # Fallback to last two-point extrapolation\n        t0, t1 = times[-2], times[-1]\n        p0, p1 = poss[-2], poss[-1]\n        dt_ms = t1 - t0\n        if dt_ms <= 0:\n            return p1\n        scale = HORIZON_S / (dt_ms / 1000.0)\n        vx = (p1[0] - p0[0]) * scale\n        vy = (p1[1] - p0[1]) * scale\n        vz = (p1[2] - p0[2]) * scale\n        pred = (p1[0] + vx, p1[1] + vy, p1[2] + vz)\n    else:\n        dx = sx * H_ms  # displacement over horizon in same units as position\n        dy = sy * H_ms\n        dz = sz * H_ms\n        pred = (p_now[0] + dx, p_now[1] + dy, p_now[2] + dz)\n    if any(not math.isfinite(v) for v in pred):\n        return p_now\n    return pred\n",
+      "reason": "Use robust recent-window linear regression for velocity to reduce noise and improve extrapolation."
+    }
+  ],
+  "file_updates": [],
+  "validation_results": [],
+  "blocking_issues": [],
+  "schema_version": "1.0",
+  "request_id": "236716:trial_002:workspace-coding",
+  "competition": "236716",
+  "trial_id": "trial_002",
+  "next_action": "validate-workspace-code-change",
+  "code_snapshot": {
+    "schema_version": "1.0",
+    "snapshot_dir": "internal/code_snapshot",
+    "files": [
+      {
+        "path": "predict_step.py",
+        "bytes": 6092,
+        "source": "project_root_after_code_writer"
+      },
+      {
+        "path": "workspace_config.json",
+        "bytes": 327,
+        "source": "project_root_after_code_writer"
+      },
+      {
+        "path": "src/baseline.py",
+        "bytes": 7125,
+        "source": "project_root_after_code_writer"
+      },
+      {
+        "path": "train_step.py",
+        "bytes": 3028,
+        "source": "project_root_after_code_writer"
+      },
+      {
+        "path": "test_step.py",
+        "bytes": 5119,
+        "source": "project_root_after_code_writer"
+      }
+    ]
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "schema_version": "1.0",
+  "competition": "236716",
+  "trial_id": "trial_001",
+  "task": "experiment_planning",
+  "built_at": "2026-07-31T00:44:25.815249+00:00",
+  "query": "competition overview metric data notes source materials execution profile competition data card data profile target id columns feature recommendations previous trial plan metrics pipeline structure result",
+  "budget": {
+    "max_documents": 5,
+    "max_chars_per_document": 900,
+    "prompt_chars_per_document": 650
+  },
+  "document_count": 5,
+  "documents": [
+    {
+      "document_id": "236716:6d714194d73cbfdd",
+      "source_path": "memory/236716/latest_trial_memory_card.json",
+      "source_kind": "trial_memory_card",
+      "trial_id": null,
+      "score": 41,
+      "title": "trial_memory_card: latest_trial_memory_card.json",
+      "content_type": "application/json",
+      "text": "{\n  \"schema_version\": \"1.0\",\n  \"competition\": \"236716\",\n  \"trial_id\": \"trial_001\",\n  \"created_at\": \"2026-07-31T00:04:41.695235+00:00\",\n  \"plan_type\": \"initial_pipeline_plan\",\n  \"source_trial_id\": null,\n  \"plan_title\": \"Baseline: Constant-Velocity Extrapolation (+80ms from t0,t-40ms)\",\n  \"change_axis\": \"\",\n  \"candidate_label\": \"Baseline: Constant-Velocity Extrapolation (+80ms from t0,t-40ms)\",\n  \"change_details\": [],\n  \"kept_unchanged\": [],\n  \"local_score\": 1.0,\n  \"lb_score\": null,\n  \"local_status\": \"baseline\",\n  \"previous_local_status\": \"baseline\",\n  \"local_delta\": null,\n  \"previous_local_delta\": null,\n  \"decision\": \"baseline_established\",\n  \"active_axis\": null,\n  \"axis_attempt_count\": 0,\n  \"axis_attempt_limit\": 3,\n  \"recommended_base_trial\": \"trial_001\",\n  \"rejected_axes\": [],\n  \"rejected_candidates\": [],\n  \"rejected_candidates_by_axis\": {},\n  \"active_axis_rejected_candidates\": [],\n  \"f"
+    },
+    {
+      "document_id": "236716:31d4c840da93529f",
+      "source_path": "memory/236716/latest_decision_card.json",
+      "source_kind": "decision_card",
+      "trial_id": null,
+      "score": 39,
+      "title": "decision_card: latest_decision_card.json",
+      "content_type": "application/json",
+      "text": "{\n  \"schema_version\": \"1.0\",\n  \"competition\": \"236716\",\n  \"trial_id\": \"trial_001\",\n  \"created_at\": \"2026-07-31T00:04:41.690183+00:00\",\n  \"source_trial_id\": null,\n  \"plan_type\": \"initial_pipeline_plan\",\n  \"change_axis\": \"\",\n  \"local_score\": 1.0,\n  \"lb_score\": null,\n  \"previous_local_score\": null,\n  \"previous_lb_score\": null,\n  \"best_local_score\": null,\n  \"best_lb_score\": null,\n  \"local_delta\": null,\n  \"lb_delta\": null,\n  \"previous_local_delta\": null,\n  \"previous_lb_delta\": null,\n  \"objective\": \"maximize\",\n  \"local_status\": \"baseline\",\n  \"lb_status\": \"missing\",\n  \"previous_local_status\": \"baseline\",\n  \"previous_lb_status\": \"missing\",\n  \"raw_decision\": \"baseline_established\",\n  \"decision\": \"baseline_established\",\n  \"model_type\": \"RuleBasedConstantVelocity\",\n  \"catastrophic_regression\": false,\n  \"estimator_family_changed\": false,\n  \"no_change_suspected\": false,\n  \"active_axis\": null,\n  \"axis"
+    },
+    {
+      "document_id": "236716:c265eb781bf4f8ec",
+      "source_path": "memory/236716/latest_trial_memory_card.md",
+      "source_kind": "trial_memory_card",
+      "trial_id": null,
+      "score": 37,
+      "title": "trial_memory_card: latest_trial_memory_card.md",
+      "content_type": "text/markdown",
+      "text": "# Trial Memory Card: trial_001\n\n- plan_type: initial_pipeline_plan\n- source_trial_id: None\n- change_axis: \n- candidate_label: Baseline: Constant-Velocity Extrapolation (+80ms from t0,t-40ms)\n- local_score: 1.0\n- local_status: baseline\n- local_delta: None\n- previous_local_status: baseline\n- previous_local_delta: None\n- lb_score: None\n- decision: baseline_established\n- active_axis: None\n- axis_attempt_count: 0/3\n- recommended_base_trial: trial_001\n- model_type: RuleBasedConstantVelocity\n- model: {'estimator': 'RuleBasedConstantVelocity', 'parameters': {}, 'pretrained': False, 'pipeline_container': None}\n- split: {'method': 'random_holdout_by_id', 'test_size': 0.2, 'stratify': False}\n\n## Change Details\n\n- None\n\n## Kept Unchanged\n\n- None\n\n## Features\n\n- feature_columns: []\n- numeric_features: []\n- categorical_features: []\n\n## Rejected Axes\n\n- None\n\n## Rejected Candidates\n\n- None\n\n## Active A"
+    },
+    {
+      "document_id": "236716:ebf85d96152298fb",
+      "source_path": "memory/236716/latest_decision_card.md",
+      "source_kind": "decision_card",
+      "trial_id": null,
+      "score": 33,
+      "title": "decision_card: latest_decision_card.md",
+      "content_type": "text/markdown",
+      "text": "# Trial Decision Card: trial_001\n\n- decision: baseline_established\n- change_axis: None\n- source_trial_id: None\n- recommended_base_trial: trial_001\n- local_score: 1.0\n- local_status: baseline\n- local_delta: None\n- previous_local_status: baseline\n- previous_local_delta: None\n- active_axis: None\n- axis_attempt_count: 0\n- axis_attempt_limit: 3\n- lb_score: None\n- lb_status: missing\n- lb_delta: None\n- previous_lb_status: missing\n- previous_lb_delta: None\n\n## Next Guidance\n\nUse this trial as the baseline. The next trial should change exactly one improvement axis.\n\n## Planner Constraints\n\n- Use `trial_001` as the base trial unless the user explicitly overrides it.\n- Change exactly one primary improvement axis in the next trial.\n- Keep split/model/preprocessing fixed unless selected as the primary axis.\n\n## Rejected Axes\n\n- None\n\n## Rejected Candidates\n\n- None\n\n## Active Axis Rejected Candidates\n"
+    },
+    {
+      "document_id": "236716:b970f6bc466eea67",
+      "source_path": "competitions/236716/competition_data_card.md",
+      "source_kind": "competition_data_card",
+      "trial_id": null,
+      "score": 68,
+      "title": "competition_data_card: competition_data_card.md",
+      "content_type": "text/markdown",
+      "text": "# Competition Data Card: 236716\n\n- status: ready\n- task_type: unknown\n- target_column: None\n- id_column: None\n- dataset_layout: per_sample_files\n- train_file: None\n- test_file: None\n- train_dir: train/\n- test_dir: test/\n\n## First Baseline Recommendation\n\n- include_features_first: None\n- defer_features_first: None\n- exclude_columns: None\n- preferred_model_families: logistic_regression_or_linear_classifier_for_binary_classification, small_random_forest_or_gradient_boosted_tree_if_available\n- avoid_first_trial: gaussian_naive_bayes_for_mixed_numeric_and_categorical_data, raw_high_cardinality_text_or_identifier_one_hot_features, broad_schema_discovery_when_target_id_and_columns_are_known\n\n## Files\n\n### sample_submission.csv [sample_submission]\n- id: role=feature, type=categorical_or_text, unique_sample=80, missing_sample=0, baseline_use=defer_or_engineer\n- x: role=feature, type=numeric, uniq"
+    }
+  ],
+  "retrieval_manifest_file": "experiments/236716/trial_001/retrieval_manifest_experiment_planning.json"
+}

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import unittest
 
-from kaggle_research_agent.integrations import dacon_api
+from research_agent.integrations import dacon_api
 
 
 class DaconApiTest(unittest.TestCase):

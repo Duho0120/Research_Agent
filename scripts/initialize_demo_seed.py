@@ -11,9 +11,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from kaggle_research_agent import simple_yaml
-from kaggle_research_agent.state_db import default_db_path, state_db_connection
-from kaggle_research_agent.state_db_sync import sync_state_db
+from research_agent import simple_yaml
+from research_agent.state_db import default_db_path, state_db_connection
+from research_agent.state_db_sync import sync_state_db
 
 
 SEED_NAMESPACES = [

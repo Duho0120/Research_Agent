@@ -1,0 +1,15 @@
+{
+  "competition": "236716",
+  "trial_id": "trial_001",
+  "status": "collected",
+  "workspace_run_status": "completed",
+  "profile_status": "ready",
+  "source_metrics_path": "C:\\Users\\ASUS\\Desktop\\Research_Agent\\demo_workspaces\\236716\\outputs\\metrics.json",
+  "score_source": "R-Hit@1cm",
+  "cv_score": 0.591,
+  "metric": "R-Hit@1cm",
+  "objective": "maximize",
+  "issues": [],
+  "review_questions": [],
+  "next_action": "evaluate-trial"
+}

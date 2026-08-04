@@ -6,7 +6,7 @@ from pathlib import Path
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
-from kaggle_research_agent.cli import main
+from research_agent.cli import main
 
 
 class CliLoopCoreTest(unittest.TestCase):
@@ -24,7 +24,7 @@ class CliLoopCoreTest(unittest.TestCase):
                 "competition:\n  objective: maximize\ncurrent_state:\n  consecutive_failures: 0\n",
                 encoding="utf-8",
             )
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(["diagnose", "--competition", "demo", "--trial", "trial_001"])
             self.assertEqual(code, 0)
@@ -58,7 +58,7 @@ class CliLoopCoreTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(["request-review", "--competition", "demo", "--trial", "trial_001"])
 
@@ -70,7 +70,7 @@ class CliLoopCoreTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(
                         [
@@ -103,8 +103,8 @@ class CliLoopCoreTest(unittest.TestCase):
                     return {"returncode": 0, "stdout": "name,size\ntrain.csv,10KB\n", "stderr": ""}
                 return {"returncode": 1, "stdout": "", "stderr": "unexpected command"}
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.integrations.kaggle_cli.run_args", side_effect=runner):
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.integrations.kaggle_cli.run_args", side_effect=runner):
                     with redirect_stdout(io.StringIO()):
                         code = main(
                             [
@@ -130,8 +130,8 @@ class CliLoopCoreTest(unittest.TestCase):
                     return {"returncode": 0, "stdout": "name,size\ntrain.csv,10KB\nsample_submission.csv,2KB\n", "stderr": ""}
                 return {"returncode": 1, "stdout": "", "stderr": "unexpected command"}
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.integrations.kaggle_cli.run_args", side_effect=runner):
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.integrations.kaggle_cli.run_args", side_effect=runner):
                     with redirect_stdout(io.StringIO()):
                         code = main(
                             [
@@ -158,7 +158,7 @@ class CliLoopCoreTest(unittest.TestCase):
             (data / "test.csv").write_text("id,x\n2,11\n", encoding="utf-8")
             (data / "sample_submission.csv").write_text("id,target\n2,0\n", encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(["profile-data", "--competition", "titanic"])
 
@@ -176,7 +176,7 @@ class CliLoopCoreTest(unittest.TestCase):
             (data / "test.csv").write_text("id,x\n4,13\n", encoding="utf-8")
             (data / "sample_submission.csv").write_text("id,target\n4,0\n", encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(["generate-baseline", "--competition", "titanic", "--trial", "trial_001"])
 
@@ -189,7 +189,7 @@ class CliLoopCoreTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "experiments" / "demo" / "trial_001").mkdir(parents=True)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(
                         [
@@ -227,7 +227,7 @@ class CliLoopCoreTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(
                         [
@@ -264,7 +264,7 @@ class CliLoopCoreTest(unittest.TestCase):
                 json.dumps({"cv_score": 0.83, "objective": "maximize"}),
                 encoding="utf-8",
             )
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(
                         [
@@ -304,8 +304,8 @@ class CliLoopCoreTest(unittest.TestCase):
         # since until now only --kaggle-* flags were wired up here.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.cli.submit_trial") as fake_submit:
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.cli.submit_trial") as fake_submit:
                     fake_submit.return_value = {"trial_id": "trial_001", "status": "submitted"}
                     with redirect_stdout(io.StringIO()):
                         code = main(
@@ -346,7 +346,7 @@ class CliLoopCoreTest(unittest.TestCase):
                 json.dumps({"cv_score": 0.83, "objective": "maximize"}),
                 encoding="utf-8",
             )
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(
                         [
@@ -390,7 +390,7 @@ class CliLoopCoreTest(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(
                         [
@@ -434,7 +434,7 @@ class CliLoopCoreTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(["plan-improvement", "--competition", "demo", "--trial", "trial_001"])
 
@@ -463,7 +463,7 @@ class CliLoopCoreTest(unittest.TestCase):
             trial.mkdir(parents=True)
             (trial / "metrics.json").write_text(json.dumps({"cv_score": 0.71, "objective": "maximize"}), encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(["advise-models", "--competition", "demo", "--trial", "trial_001"])
 
@@ -496,7 +496,7 @@ class CliLoopCoreTest(unittest.TestCase):
                 "# trial_002 Next Experiment\n\n## Strategy\n\ncontrolled_refinement\n",
                 encoding="utf-8",
             )
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(
                         [
@@ -536,7 +536,7 @@ class CliLoopCoreTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(["validate-patch", "--competition", "demo", "--trial", "trial_002"])
 
@@ -560,13 +560,13 @@ class CliLoopCoreTest(unittest.TestCase):
                         "strategy": "controlled_refinement",
                         "target_files": ["experiments/demo/trial_002/config.yaml"],
                         "validation_commands": [
-                            "python -B -m kaggle_research_agent.cli validate-config --competition demo --trial trial_002"
+                            "python -B -m research_agent.cli validate-config --competition demo --trial trial_002"
                         ],
                     }
                 ),
                 encoding="utf-8",
             )
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(["apply-patch", "--competition", "demo", "--trial", "trial_002"])
             self.assertEqual(code, 0)
@@ -591,13 +591,13 @@ class CliLoopCoreTest(unittest.TestCase):
                         "target_files": ["experiments/demo/trial_002/config.yaml"],
                         "implementation_steps": ["Add balanced sampler support."],
                         "validation_commands": [
-                            "python -B -m kaggle_research_agent.cli validate-config --competition demo --trial trial_002"
+                            "python -B -m research_agent.cli validate-config --competition demo --trial trial_002"
                         ],
                     }
                 ),
                 encoding="utf-8",
             )
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(["prepare-handoff", "--competition", "demo", "--trial", "trial_002"])
             self.assertEqual(code, 0)
@@ -611,7 +611,7 @@ class CliLoopCoreTest(unittest.TestCase):
             trial.mkdir(parents=True)
             self._write_coding_handoff(trial)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(["write-code-dry-run", "--competition", "demo", "--trial", "trial_002"])
 
@@ -638,7 +638,7 @@ class CliLoopCoreTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(["validate-coding-result", "--competition", "demo", "--trial", "trial_002"])
 
@@ -678,7 +678,7 @@ class CliLoopCoreTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(
                         [
@@ -734,7 +734,7 @@ class CliLoopCoreTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(
                         [
@@ -772,7 +772,7 @@ class CliLoopCoreTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(["run-validation-commands", "--competition", "demo", "--trial", "trial_002"])
 
@@ -800,7 +800,7 @@ class CliLoopCoreTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(
                         [
@@ -857,7 +857,7 @@ class CliLoopCoreTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(
                         [
@@ -897,7 +897,7 @@ class CliLoopCoreTest(unittest.TestCase):
             response_path = root / "mock_response.json"
             self._write_mock_code_response(response_path)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(
                         [
@@ -979,7 +979,7 @@ class CliLoopCoreTest(unittest.TestCase):
             )
             (trial / "metrics.json").write_text(json.dumps({"cv_score": 0.71, "objective": "maximize"}), encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(
                         [
@@ -1042,7 +1042,7 @@ class CliLoopCoreTest(unittest.TestCase):
             (trial / "config.yaml").write_text(json.dumps({"model": {"type": "lightgbm"}, "features": {}, "cv": {}}), encoding="utf-8")
             (trial / "metrics.json").write_text(json.dumps({"cv_score": 0.71, "objective": "maximize"}), encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(
                         [
@@ -1117,7 +1117,7 @@ class CliLoopCoreTest(unittest.TestCase):
             )
             (trial / "metrics.json").write_text(json.dumps({"cv_score": 0.72, "objective": "maximize"}), encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(["run-graph-cycle", "--competition", "demo", "--trial", "trial_001", "--no-job"])
 

@@ -2,7 +2,7 @@ import json
 import unittest
 from pathlib import Path
 
-from kaggle_research_agent import simple_yaml
+from research_agent import simple_yaml
 
 
 class EtriOnboardingTest(unittest.TestCase):

@@ -1,6 +1,6 @@
 import unittest
 
-from kaggle_research_agent.interaction_contract import interaction_contract
+from research_agent.interaction_contract import interaction_contract
 
 
 class InteractionContractTest(unittest.TestCase):

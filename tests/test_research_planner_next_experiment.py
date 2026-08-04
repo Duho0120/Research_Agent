@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.agents.research_planner import propose_next_experiment
+from research_agent.agents.research_planner import propose_next_experiment
 
 
 class ResearchPlannerNextExperimentTest(unittest.TestCase):
@@ -39,7 +39,7 @@ class ResearchPlannerNextExperimentTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 plan = propose_next_experiment("demo", "trial_001", "trial_002")
 
             self.assertEqual(plan["strategy"], "controlled_refinement")
@@ -97,7 +97,7 @@ class ResearchPlannerNextExperimentTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 plan = propose_next_experiment("demo", "trial_004", "trial_005")
 
             self.assertEqual(plan["strategy"], "model_family_change")
@@ -147,7 +147,7 @@ class ResearchPlannerNextExperimentTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 plan = propose_next_experiment("demo", "trial_006", "trial_007")
 
             self.assertEqual("validation_review", plan["strategy"])
@@ -181,7 +181,7 @@ class ResearchPlannerNextExperimentTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 plan = propose_next_experiment("demo", "trial_001", "trial_002")
 
             self.assertEqual("sota_architecture_attempt", plan["strategy"])
@@ -232,7 +232,7 @@ class ResearchPlannerNextExperimentTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 plan = propose_next_experiment("demo", "trial_008", "trial_009")
 
             self.assertNotEqual("validation_review", plan["strategy"])
@@ -281,7 +281,7 @@ class ResearchPlannerNextExperimentTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 plan = propose_next_experiment("demo", "trial_001", "trial_002")
 
             self.assertEqual(plan["strategy"], "validation_review")
@@ -316,7 +316,7 @@ class ResearchPlannerNextExperimentTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 plan = propose_next_experiment("demo", "trial_005", "trial_006")
 
             self.assertEqual("model_ensemble", plan["strategy"])

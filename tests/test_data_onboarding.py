@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.data_onboarding import profile_competition_data
+from research_agent.data_onboarding import profile_competition_data
 
 
 class DataOnboardingTest(unittest.TestCase):
@@ -17,7 +17,7 @@ class DataOnboardingTest(unittest.TestCase):
             (data / "test.csv").write_text("datetime,temp\n2020-01-02,11\n", encoding="utf-8")
             (data / "sampleSubmission.csv").write_text("datetime,count\n2020-01-02,0\n", encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 profile = profile_competition_data("bike")
 
         roles = {item["role"]: item["name"] for item in profile["files"]}
@@ -41,7 +41,7 @@ class DataOnboardingTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 profile = profile_competition_data("titanic")
 
             self.assertEqual(profile["status"], "ready")
@@ -77,7 +77,7 @@ class DataOnboardingTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 profile = profile_competition_data("titanic")
 
             self.assertEqual(profile["status"], "needs_data_download")

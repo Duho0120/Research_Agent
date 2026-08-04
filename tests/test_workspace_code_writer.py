@@ -6,8 +6,8 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.cli import main
-from kaggle_research_agent.workspace_code_writer import (
+from research_agent.cli import main
+from research_agent.workspace_code_writer import (
     _context_file_prompt_limit,
     _normalize_coding_result,
     _read_context,
@@ -72,7 +72,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 }
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
 
             trial = root / "experiments" / "demo" / "trial_002"
@@ -139,7 +139,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 }
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
 
             self.assertEqual("accepted", result["status"])
@@ -169,7 +169,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 }
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
 
             self.assertEqual("accepted", result["status"])
@@ -207,7 +207,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 }
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
 
             self.assertEqual("blocked", result["status"])
@@ -220,7 +220,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
             project = self._write_project(root)
             self._write_handoff(root, project)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_code_writer("demo", "trial_002")
 
             self.assertEqual("blocked", result["status"])
@@ -245,7 +245,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_workspace_coding_result("demo", "trial_002")
 
             self.assertEqual("blocked", result["status"])
@@ -286,7 +286,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_workspace_coding_result("demo", "trial_002")
 
             self.assertEqual("blocked", result["status"])
@@ -318,7 +318,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_workspace_coding_result("demo", "trial_002")
 
             self.assertEqual("blocked", result["status"])
@@ -366,7 +366,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_workspace_coding_result("demo", "trial_002")
 
             self.assertEqual("blocked", result["status"])
@@ -412,7 +412,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_workspace_coding_result("demo", "trial_002")
 
             self.assertEqual("blocked", result["status"])
@@ -450,7 +450,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_workspace_coding_result("demo", "trial_002")
 
             self.assertEqual("accepted", result["status"])
@@ -491,7 +491,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_workspace_coding_result("demo", "trial_002")
 
             self.assertEqual("blocked", result["status"])
@@ -539,7 +539,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_workspace_coding_result("demo", "trial_002")
 
             self.assertEqual("accepted", result["status"])
@@ -593,7 +593,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_workspace_coding_result("demo", "trial_002")
 
             self.assertEqual("blocked", result["status"])
@@ -644,7 +644,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_workspace_coding_result("demo", "trial_002")
 
             self.assertEqual("accepted", result["status"])
@@ -684,7 +684,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_workspace_coding_result("demo", "trial_002")
 
             self.assertEqual("blocked", result["status"])
@@ -731,7 +731,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_workspace_coding_result("demo", "trial_002")
 
             self.assertEqual("accepted", result["status"])
@@ -783,7 +783,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_workspace_coding_result("demo", "trial_002")
 
             self.assertEqual("accepted", result["status"])
@@ -826,7 +826,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_workspace_coding_result("demo", "trial_002")
 
             self.assertEqual("blocked", result["status"])
@@ -881,7 +881,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_workspace_coding_result("demo", "trial_002")
 
             self.assertEqual("blocked", result["status"])
@@ -922,7 +922,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_workspace_coding_result("demo", "trial_002")
 
             self.assertEqual("accepted", result["status"])
@@ -945,7 +945,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
             self.assertGreater(len(content), 2500)
             (out_dir / "predict_script_context.md").write_text(content, encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 rendered = _read_context(["experiments/demo/_harness_init/predict_script_context.md"])
 
             self.assertIn("def load_samples", rendered)
@@ -1044,7 +1044,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_workspace_coding_result("demo", "trial_002")
 
             self.assertEqual("blocked", result["status"])
@@ -1071,7 +1071,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = validate_workspace_coding_result("demo", "trial_002")
 
             self.assertEqual("accepted", result["status"])
@@ -1101,7 +1101,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with redirect_stdout(io.StringIO()):
                     code = main(
                         [
@@ -1152,7 +1152,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 }
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
 
             self.assertEqual("blocked", result["status"])
@@ -1197,7 +1197,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 }
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
 
             self.assertEqual("blocked", result["status"])
@@ -1236,7 +1236,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 }
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
 
             self.assertEqual("blocked", result["status"])
@@ -1281,7 +1281,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 }
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
 
             self.assertEqual("accepted", result["status"])
@@ -1341,7 +1341,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 }
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
 
             self.assertEqual("blocked", result["status"])
@@ -1398,7 +1398,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 }
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
 
             self.assertEqual("accepted", result["status"])
@@ -1460,7 +1460,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 }
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
 
             self.assertEqual("accepted", result["status"])
@@ -1486,7 +1486,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 }
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
 
             self.assertEqual("blocked", result["status"])
@@ -1529,7 +1529,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 }
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
 
             self.assertEqual("accepted", result["status"])
@@ -1556,7 +1556,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 }
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
 
             self.assertEqual("blocked", result["status"])
@@ -1583,7 +1583,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 }
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
 
             self.assertEqual("blocked", result["status"])
@@ -1615,7 +1615,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                 }
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_workspace_code_writer("demo", "trial_002", client=client, allow_api=True)
 
             self.assertEqual("blocked", result["status"])
@@ -1773,7 +1773,7 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "experiments" / "demo" / "trial_003").mkdir(parents=True)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 payload = build_workspace_code_writer_payload(handoff, model="gpt-5")
         prompt = payload["input"][1]["content"]
         self.assertIn("load_samples(data_dir, split)", prompt)
@@ -1795,7 +1795,7 @@ class PerSampleLoaderCheckTest(unittest.TestCase):
     CONTRACT = {"per_sample_dirs": {"train_dir": "train", "test_dir": "test"}}
 
     def _check(self, content, contract=None):
-        from kaggle_research_agent.workspace_code_writer import _per_sample_load_issues
+        from research_agent.workspace_code_writer import _per_sample_load_issues
 
         return _per_sample_load_issues(content, self.CONTRACT if contract is None else contract, "predict_step.py")
 

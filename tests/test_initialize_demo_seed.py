@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent import paths, simple_yaml
+from research_agent import paths, simple_yaml
 from scripts.initialize_demo_seed import initialize_demo_seed
 
 

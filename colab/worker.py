@@ -11,7 +11,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Callable
 
-from kaggle_research_agent import simple_yaml
+from research_agent import simple_yaml
 
 ROOT = Path.cwd()
 JOBS_DIR = ROOT / "jobs"

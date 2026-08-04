@@ -5,7 +5,7 @@ from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.state_db import (
+from research_agent.state_db import (
     create_chat_session,
     create_pending_action,
     get_active_chat_session,
@@ -33,7 +33,7 @@ class StateDbTest(unittest.TestCase):
     def test_initialize_state_db_creates_minimal_tables(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 db_path = initialize_state_db()
 
             self.assertEqual(root / "memory" / "research_agent.sqlite3", db_path)

@@ -7,19 +7,19 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent import simple_yaml
-from kaggle_research_agent.cli import main
-from kaggle_research_agent.demo_one_cycle import (
+from research_agent import simple_yaml
+from research_agent.cli import main
+from research_agent.demo_one_cycle import (
     _demo_baseline_recommendation,
     _infer_demo_file_role,
     _infer_demo_task_type,
     build_demo_plan_payload,
     run_demo_one_cycle,
 )
-from kaggle_research_agent.graph.demo_auto_loop import run_demo_graph_auto_loop
-from kaggle_research_agent.graph.demo_cycle_graph import run_demo_graph_cycle
-from kaggle_research_agent.state_db import get_trial_summary
-from kaggle_research_agent.trial_artifacts import trial_artifact_exists
+from research_agent.graph.demo_auto_loop import run_demo_graph_auto_loop
+from research_agent.graph.demo_cycle_graph import run_demo_graph_cycle
+from research_agent.state_db import get_trial_summary
+from research_agent.trial_artifacts import trial_artifact_exists
 
 
 class DemoOneCycleTest(unittest.TestCase):
@@ -93,7 +93,7 @@ class DemoOneCycleTest(unittest.TestCase):
             plan_response = self._write_plan_response(root)
             code_response = self._write_code_response(root)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_demo_one_cycle(
                     "demo",
                     "trial_001",
@@ -167,7 +167,7 @@ class DemoOneCycleTest(unittest.TestCase):
             plan_response = self._write_plan_response(root)
             code_response = self._write_code_response(root)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_demo_graph_cycle(
                     "demo",
                     "trial_001",
@@ -221,7 +221,7 @@ class DemoOneCycleTest(unittest.TestCase):
             plan_response = self._write_plan_response(root)
             code_response = self._write_code_response(root)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_demo_graph_auto_loop(
                     "demo",
                     start_trial_id="trial_001",
@@ -271,7 +271,7 @@ class DemoOneCycleTest(unittest.TestCase):
             plan_response = self._write_plan_response(root)
             code_response = self._write_code_response(root)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_demo_graph_auto_loop(
                     "demo",
                     start_trial_id="trial_001",
@@ -298,7 +298,7 @@ class DemoOneCycleTest(unittest.TestCase):
             plan_response = self._write_plan_response(root)
             code_response = self._write_code_response(root)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 code = main(
                     [
                         "demo-graph-auto-loop",
@@ -386,9 +386,9 @@ class DemoOneCycleTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            from kaggle_research_agent.demo_one_cycle import load_demo_context
+            from research_agent.demo_one_cycle import load_demo_context
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 context = load_demo_context("demo", "trial_002")
 
             self.assertEqual("continuation_delta_plan", context["plan_type"])
@@ -403,14 +403,14 @@ class DemoOneCycleTest(unittest.TestCase):
             self._write_state(root)
             self._write_profile(root, project)
 
-            from kaggle_research_agent.demo_one_cycle import (
+            from research_agent.demo_one_cycle import (
                 _build_planning_context_pack_if_needed,
                 build_demo_plan_payload,
                 load_demo_context,
             )
-            from kaggle_research_agent.trial_decision import write_trial_decision_card
+            from research_agent.trial_decision import write_trial_decision_card
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 write_trial_decision_card(
                     "demo",
                     "trial_001",
@@ -449,7 +449,7 @@ class DemoOneCycleTest(unittest.TestCase):
             self.assertIn("RAG is intentionally skipped", prompt)
 
     def test_planning_rag_policy_skips_plain_continuation_without_trigger(self):
-        from kaggle_research_agent.demo_one_cycle import _build_planning_context_pack_if_needed
+        from research_agent.demo_one_cycle import _build_planning_context_pack_if_needed
 
         context = {
             "source_trial_id": "trial_001",
@@ -459,7 +459,7 @@ class DemoOneCycleTest(unittest.TestCase):
             },
         }
 
-        with patch("kaggle_research_agent.demo_one_cycle.build_context_pack") as build_pack:
+        with patch("research_agent.demo_one_cycle.build_context_pack") as build_pack:
             pack = _build_planning_context_pack_if_needed("demo", "trial_002", context)
 
         self.assertTrue(pack["skipped"])
@@ -467,7 +467,7 @@ class DemoOneCycleTest(unittest.TestCase):
         build_pack.assert_not_called()
 
     def test_planning_rag_policy_uses_rag_when_user_feedback_is_present(self):
-        from kaggle_research_agent.demo_one_cycle import _build_planning_context_pack_if_needed
+        from research_agent.demo_one_cycle import _build_planning_context_pack_if_needed
 
         context = {
             "source_trial_id": "trial_001",
@@ -485,7 +485,7 @@ class DemoOneCycleTest(unittest.TestCase):
             "documents": [{"source_path": "memory/demo/user_feedback.jsonl", "source_kind": "user_feedback", "text": "x"}],
         }
 
-        with patch("kaggle_research_agent.demo_one_cycle.build_context_pack", return_value=fake_pack) as build_pack:
+        with patch("research_agent.demo_one_cycle.build_context_pack", return_value=fake_pack) as build_pack:
             pack = _build_planning_context_pack_if_needed("demo", "trial_002", context)
 
         self.assertFalse(pack.get("skipped", False))
@@ -501,10 +501,10 @@ class DemoOneCycleTest(unittest.TestCase):
             self._write_state(root)
             self._write_profile(root, project)
 
-            from kaggle_research_agent.demo_one_cycle import build_demo_plan_payload, load_demo_context
-            from kaggle_research_agent.trial_decision import write_trial_decision_card
+            from research_agent.demo_one_cycle import build_demo_plan_payload, load_demo_context
+            from research_agent.trial_decision import write_trial_decision_card
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 write_trial_decision_card(
                     "demo",
                     "trial_001",
@@ -546,10 +546,10 @@ class DemoOneCycleTest(unittest.TestCase):
             self._write_state(root)
             self._write_profile(root, project)
 
-            from kaggle_research_agent.demo_one_cycle import load_demo_context
-            from kaggle_research_agent.trial_decision import write_trial_decision_card
+            from research_agent.demo_one_cycle import load_demo_context
+            from research_agent.trial_decision import write_trial_decision_card
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 write_trial_decision_card(
                     "demo",
                     "trial_001",
@@ -593,9 +593,9 @@ class DemoOneCycleTest(unittest.TestCase):
             root = Path(tmp) / "agent"
             root.mkdir()
 
-            from kaggle_research_agent.demo_one_cycle import _write_plan_result
+            from research_agent.demo_one_cycle import _write_plan_result
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 plan = _write_plan_result(
                     "demo",
                     "trial_002",
@@ -639,9 +639,9 @@ class DemoOneCycleTest(unittest.TestCase):
             root = Path(tmp) / "agent"
             root.mkdir()
 
-            from kaggle_research_agent.trial_decision import write_trial_decision_card
+            from research_agent.trial_decision import write_trial_decision_card
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 write_trial_decision_card(
                     "demo",
                     "trial_001",
@@ -672,9 +672,9 @@ class DemoOneCycleTest(unittest.TestCase):
             root = Path(tmp) / "agent"
             root.mkdir()
 
-            from kaggle_research_agent.trial_decision import write_trial_decision_card
+            from research_agent.trial_decision import write_trial_decision_card
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 write_trial_decision_card(
                     "demo",
                     "trial_001",
@@ -709,10 +709,10 @@ class DemoOneCycleTest(unittest.TestCase):
             root = Path(tmp) / "agent"
             root.mkdir()
 
-            from kaggle_research_agent.paths import competition_memory_dir
-            from kaggle_research_agent.trial_decision import write_trial_decision_card
+            from research_agent.paths import competition_memory_dir
+            from research_agent.trial_decision import write_trial_decision_card
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 memory = competition_memory_dir("demo")
                 memory.mkdir(parents=True)
                 legacy = {
@@ -747,9 +747,9 @@ class DemoOneCycleTest(unittest.TestCase):
             root = Path(tmp) / "agent"
             root.mkdir()
 
-            from kaggle_research_agent.trial_decision import write_trial_decision_card
+            from research_agent.trial_decision import write_trial_decision_card
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 baseline = write_trial_decision_card(
                     "demo",
                     "trial_001",
@@ -792,9 +792,9 @@ class DemoOneCycleTest(unittest.TestCase):
             root = Path(tmp) / "agent"
             root.mkdir()
 
-            from kaggle_research_agent.trial_decision import write_trial_decision_card
+            from research_agent.trial_decision import write_trial_decision_card
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 write_trial_decision_card(
                     "demo",
                     "trial_001",
@@ -851,9 +851,9 @@ class DemoOneCycleTest(unittest.TestCase):
             root = Path(tmp) / "agent"
             root.mkdir()
 
-            from kaggle_research_agent.trial_decision import write_trial_decision_card
+            from research_agent.trial_decision import write_trial_decision_card
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 write_trial_decision_card(
                     "demo",
                     "trial_001",
@@ -903,9 +903,9 @@ class DemoOneCycleTest(unittest.TestCase):
             root = Path(tmp) / "agent"
             root.mkdir()
 
-            from kaggle_research_agent.trial_decision import load_latest_decision_context, write_trial_decision_card
+            from research_agent.trial_decision import load_latest_decision_context, write_trial_decision_card
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 write_trial_decision_card(
                     "demo",
                     "trial_001",
@@ -968,9 +968,9 @@ class DemoOneCycleTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            from kaggle_research_agent.demo_one_cycle import _write_continuation_context
+            from research_agent.demo_one_cycle import _write_continuation_context
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 _write_continuation_context("demo", "trial_002")
 
             context = json.loads(
@@ -995,10 +995,10 @@ class DemoOneCycleTest(unittest.TestCase):
             self._write_state(root)
             self._write_profile(root, project)
 
-            from kaggle_research_agent.demo_one_cycle import _write_continuation_context
-            from kaggle_research_agent.trial_decision import write_trial_decision_card
+            from research_agent.demo_one_cycle import _write_continuation_context
+            from research_agent.trial_decision import write_trial_decision_card
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 write_trial_decision_card(
                     "demo",
                     "trial_001",
@@ -1055,7 +1055,7 @@ class DemoOneCycleTest(unittest.TestCase):
             )
 
     def test_find_duplicate_candidate_detects_repeated_candidate_for_same_axis(self):
-        from kaggle_research_agent.trial_decision import find_duplicate_candidate
+        from research_agent.trial_decision import find_duplicate_candidate
 
         decision_context = {
             "rejected_candidates_by_axis": {
@@ -1088,8 +1088,8 @@ class DemoOneCycleTest(unittest.TestCase):
             self._write_state(root)
             self._write_profile(root, project)
 
-            from kaggle_research_agent.demo_one_cycle import prepare_workspace_trial_plan
-            from kaggle_research_agent.trial_decision import write_trial_decision_card
+            from research_agent.demo_one_cycle import prepare_workspace_trial_plan
+            from research_agent.trial_decision import write_trial_decision_card
 
             duplicate_plan = {
                 "status": "ready",
@@ -1108,7 +1108,7 @@ class DemoOneCycleTest(unittest.TestCase):
                 "change_details": ["Candidate: group k-fold"],
             }
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 write_trial_decision_card(
                     "demo",
                     "trial_001",
@@ -1127,7 +1127,7 @@ class DemoOneCycleTest(unittest.TestCase):
                     metrics={"cv_score": 0.83, "objective": "maximize"},
                 )
                 with patch(
-                    "kaggle_research_agent.demo_one_cycle.create_demo_experiment_plan",
+                    "research_agent.demo_one_cycle.create_demo_experiment_plan",
                     side_effect=[duplicate_plan, fresh_plan],
                 ) as mock_create_plan:
                     result = prepare_workspace_trial_plan(
@@ -1154,7 +1154,7 @@ class DemoOneCycleTest(unittest.TestCase):
             self._write_state(root)
             self._write_profile(root, project)
 
-            from kaggle_research_agent.demo_one_cycle import prepare_workspace_trial_plan
+            from research_agent.demo_one_cycle import prepare_workspace_trial_plan
 
             fresh_plan = {
                 "status": "ready",
@@ -1165,9 +1165,9 @@ class DemoOneCycleTest(unittest.TestCase):
                 "change_details": ["Name: windspeed_is_zero"],
             }
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with patch(
-                    "kaggle_research_agent.demo_one_cycle.create_demo_experiment_plan",
+                    "research_agent.demo_one_cycle.create_demo_experiment_plan",
                     return_value=fresh_plan,
                 ):
                     result = prepare_workspace_trial_plan(
@@ -1195,8 +1195,8 @@ class DemoOneCycleTest(unittest.TestCase):
             self._write_state(root)
             self._write_profile(root, project)
 
-            from kaggle_research_agent.demo_one_cycle import prepare_workspace_trial_plan
-            from kaggle_research_agent.trial_decision import write_trial_decision_card
+            from research_agent.demo_one_cycle import prepare_workspace_trial_plan
+            from research_agent.trial_decision import write_trial_decision_card
 
             duplicate_plan = {
                 "status": "ready",
@@ -1207,7 +1207,7 @@ class DemoOneCycleTest(unittest.TestCase):
                 "change_details": ["Candidate: time series cv"],
             }
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 write_trial_decision_card(
                     "demo",
                     "trial_001",
@@ -1226,7 +1226,7 @@ class DemoOneCycleTest(unittest.TestCase):
                     metrics={"cv_score": 0.83, "objective": "maximize"},
                 )
                 with patch(
-                    "kaggle_research_agent.demo_one_cycle.create_demo_experiment_plan",
+                    "research_agent.demo_one_cycle.create_demo_experiment_plan",
                     side_effect=[duplicate_plan, duplicate_plan],
                 ) as mock_create_plan:
                     result = prepare_workspace_trial_plan(
@@ -1280,7 +1280,7 @@ class DemoOneCycleTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_demo_one_cycle("demo", "trial_001", run_now=True)
 
             self.assertEqual("completed", result["status"])
@@ -1346,7 +1346,7 @@ class DemoOneCycleTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_demo_one_cycle("demo", "trial_001", run_now=True)
 
             self.assertEqual("completed", result["status"])
@@ -1364,7 +1364,7 @@ class DemoOneCycleTest(unittest.TestCase):
             self._write_profile(root, project)
             self._write_project_scripts(project)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_demo_one_cycle("demo", "trial_001")
 
             self.assertEqual("blocked", result["status"])
@@ -1382,7 +1382,7 @@ class DemoOneCycleTest(unittest.TestCase):
             plan_response = self._write_plan_response(root)
             code_response = self._write_code_response(root)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 output = io.StringIO()
                 with redirect_stdout(output):
                     code = main(
@@ -1420,7 +1420,7 @@ class DemoOneCycleTest(unittest.TestCase):
             plan_response = self._write_plan_response(root)
             code_response = self._write_code_response(root)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 run_demo_one_cycle(
                     "demo",
                     "trial_001",
@@ -1594,7 +1594,7 @@ class PerSampleDatasetPlanningInstructionsTest(unittest.TestCase):
         }
 
     def test_per_sample_layout_demands_reading_the_real_feature_files(self):
-        from kaggle_research_agent.demo_one_cycle import _per_sample_dataset_instructions
+        from research_agent.demo_one_cycle import _per_sample_dataset_instructions
 
         lines = _per_sample_dataset_instructions(self._profile())
         joined = "\n".join(lines)
@@ -1604,13 +1604,13 @@ class PerSampleDatasetPlanningInstructionsTest(unittest.TestCase):
         self.assertIn("constant", joined)
 
     def test_flat_table_competitions_get_no_extra_instructions(self):
-        from kaggle_research_agent.demo_one_cycle import _per_sample_dataset_instructions
+        from research_agent.demo_one_cycle import _per_sample_dataset_instructions
 
         self.assertEqual([], _per_sample_dataset_instructions({"dataset_layout": "flat_tables"}))
         self.assertEqual([], _per_sample_dataset_instructions({}))
 
     def test_instructions_reach_both_first_trial_and_continuation_prompts(self):
-        from kaggle_research_agent.demo_one_cycle import build_demo_plan_payload, build_delta_plan_payload
+        from research_agent.demo_one_cycle import build_demo_plan_payload, build_delta_plan_payload
 
         context = {"data_profile": self._profile(), "planning_context_pack": {"skipped": True}}
         first = build_demo_plan_payload(context, model="gpt-5")["input"][1]["content"]

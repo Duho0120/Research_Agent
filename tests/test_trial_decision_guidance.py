@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.trial_decision import (
+from research_agent.trial_decision import (
     _base_trial_change_axis,
     _planner_constraints,
     write_trial_decision_card,
@@ -82,7 +82,7 @@ class WriteTrialDecisionCardAxisFactTest(unittest.TestCase):
         # trial_014 (still the old axis's code) as the base.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 write_trial_decision_card(
                     "demo",
                     "trial_014",
@@ -130,7 +130,7 @@ class CatastrophicRegressionTest(unittest.TestCase):
         # axis immediately.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 write_trial_decision_card(
                     "demo",
                     "trial_014",
@@ -156,7 +156,7 @@ class CatastrophicRegressionTest(unittest.TestCase):
     def test_mild_regression_still_gets_refinement_attempts(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 write_trial_decision_card(
                     "demo",
                     "trial_001",
@@ -187,7 +187,7 @@ class EstimatorFamilySwapTest(unittest.TestCase):
         # land in rejected_axes and the planner must be told explicitly.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 write_trial_decision_card(
                     "demo",
                     "trial_014",
@@ -218,7 +218,7 @@ class NoChangeSuspectedTest(unittest.TestCase):
         # had run and failed.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 write_trial_decision_card(
                     "demo",
                     "trial_003",
@@ -242,7 +242,7 @@ class NoChangeSuspectedTest(unittest.TestCase):
 
 class AxisNormalizationTest(unittest.TestCase):
     def test_prefix_synonyms_and_spacing_count_as_the_same_axis(self):
-        from kaggle_research_agent.trial_decision import _normalize_axis
+        from research_agent.trial_decision import _normalize_axis
 
         self.assertEqual(
             _normalize_axis("model_params:increase_l2"),
@@ -260,7 +260,7 @@ class AxisNormalizationTest(unittest.TestCase):
 
 class CandidateLabelTest(unittest.TestCase):
     def test_class_names_are_not_truncated_mid_word(self):
-        from kaggle_research_agent.trial_decision import _candidate_label
+        from research_agent.trial_decision import _candidate_label
 
         # Regression: details were pre-truncated to 90 chars before signal
         # extraction, so long class names near the boundary were stored as

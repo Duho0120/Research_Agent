@@ -15,7 +15,7 @@
         "python",
         "-B",
         "-m",
-        "kaggle_research_agent.cli_app",
+        "research_agent.cli_app",
         "--no-sync",
         "--status"
       ],

@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import call, patch
 
-from kaggle_research_agent.workspace_preparer import prepare_workspace
+from research_agent.workspace_preparer import prepare_workspace
 from scripts import generic_workspace_auto_loop
 
 
@@ -330,7 +330,7 @@ class GenericWorkspaceAutoLoopTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 recovered = generic_workspace_auto_loop._recover_completed_execution(
                     "demo",
                     "trial_005",
@@ -363,7 +363,7 @@ class GenericWorkspaceAutoLoopTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             runtime = root / "runtime"
-            with patch("kaggle_research_agent.paths.ROOT", root):
+            with patch("research_agent.paths.ROOT", root):
                 prepare_workspace(
                     "demo",
                     topic="Demo",
@@ -399,7 +399,7 @@ class GenericWorkspaceAutoLoopTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             runtime = root / "runtime"
-            with patch("kaggle_research_agent.paths.ROOT", root):
+            with patch("research_agent.paths.ROOT", root):
                 prepare_workspace(
                     "demo",
                     topic="Demo",
@@ -748,7 +748,7 @@ class GenericWorkspaceAutoLoopTest(unittest.TestCase):
                 "metrics_collection": {"status": "collected"},
             }
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 with patch.object(
                     generic_workspace_auto_loop, "prepare_workspace_coding_handoff", return_value=handoff
                 ):

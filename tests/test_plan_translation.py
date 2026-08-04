@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.plan_translation import render_plan_ko
+from research_agent.plan_translation import render_plan_ko
 
 
 class RenderPlanKoTest(unittest.TestCase):
@@ -46,7 +46,7 @@ class RenderPlanKoTest(unittest.TestCase):
     def test_uses_translated_text_when_api_allowed_and_call_succeeds(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 content = render_plan_ko(
                     root / "experiments" / "demo" / "trial_013",
                     {"competition": "demo", "trial_id": "trial_013"},
@@ -62,7 +62,7 @@ class RenderPlanKoTest(unittest.TestCase):
     def test_falls_back_to_template_when_api_not_allowed(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 content = render_plan_ko(
                     root / "experiments" / "demo" / "trial_013",
                     {"competition": "demo", "trial_id": "trial_013"},
@@ -76,7 +76,7 @@ class RenderPlanKoTest(unittest.TestCase):
     def test_falls_back_to_template_when_translation_call_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 content = render_plan_ko(
                     root / "experiments" / "demo" / "trial_013",
                     {"competition": "demo", "trial_id": "trial_013"},
@@ -91,7 +91,7 @@ class RenderPlanKoTest(unittest.TestCase):
     def test_falls_back_to_template_when_translation_response_is_empty(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 content = render_plan_ko(
                     root / "experiments" / "demo" / "trial_013",
                     {"competition": "demo", "trial_id": "trial_013"},
@@ -112,7 +112,7 @@ class RenderPlanKoTest(unittest.TestCase):
             root = Path(tmp)
             out_dir = root / "experiments" / "demo" / "trial_013"
             client = self._CountingTranslationClient("# trial_013 실험 계획\n\n번역된 본문입니다.")
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 first = render_plan_ko(
                     out_dir,
                     {"competition": "demo", "trial_id": "trial_013"},
@@ -138,7 +138,7 @@ class RenderPlanKoTest(unittest.TestCase):
             client = self._CountingTranslationClient("# trial_013 실험 계획\n\n번역된 본문입니다.")
             revised_plan = dict(self.PLAN)
             revised_plan["primary_change_axis"] = "user_insight_axis"
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 render_plan_ko(
                     out_dir,
                     {"competition": "demo", "trial_id": "trial_013"},
@@ -165,7 +165,7 @@ class RenderPlanKoTest(unittest.TestCase):
             root = Path(tmp)
             out_dir = root / "experiments" / "demo" / "trial_013"
             client = self._CountingTranslationClient("# trial_013 실험 계획\n\n번역된 본문입니다.")
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 render_plan_ko(
                     out_dir,
                     {"competition": "demo", "trial_id": "trial_013"},

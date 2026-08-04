@@ -1,0 +1,62 @@
+{
+  "competition": "236716",
+  "trial_id": "trial_002",
+  "status": "completed",
+  "run_now": true,
+  "profile_status": "ready",
+  "profile_issues": [],
+  "project_root": "C:\\Users\\ASUS\\Desktop\\Research_Agent\\demo_workspaces\\236716",
+  "commands": {
+    "test": [
+      "C:\\Users\\ASUS\\anaconda3\\python.exe test_step.py"
+    ],
+    "train": [
+      "C:\\Users\\ASUS\\anaconda3\\python.exe train_step.py"
+    ],
+    "predict": [
+      "C:\\Users\\ASUS\\anaconda3\\python.exe predict_step.py"
+    ]
+  },
+  "command_results": [
+    {
+      "stage": "test",
+      "index": 1,
+      "command": "C:\\Users\\ASUS\\anaconda3\\python.exe test_step.py",
+      "returncode": 0,
+      "log_path": "C:/Users/ASUS/Desktop/Research_Agent/experiments/236716/trial_002/workspace_logs/test_01.log"
+    },
+    {
+      "stage": "train",
+      "index": 1,
+      "command": "C:\\Users\\ASUS\\anaconda3\\python.exe train_step.py",
+      "returncode": 0,
+      "log_path": "C:/Users/ASUS/Desktop/Research_Agent/experiments/236716/trial_002/workspace_logs/train_01.log"
+    },
+    {
+      "stage": "predict",
+      "index": 1,
+      "command": "C:\\Users\\ASUS\\anaconda3\\python.exe predict_step.py",
+      "returncode": 0,
+      "log_path": "C:/Users/ASUS/Desktop/Research_Agent/experiments/236716/trial_002/workspace_logs/predict_01.log"
+    }
+  ],
+  "artifacts": {
+    "metrics": [
+      {
+        "path": "outputs/metrics.json",
+        "absolute_path": "C:\\Users\\ASUS\\Desktop\\Research_Agent\\demo_workspaces\\236716\\outputs\\metrics.json",
+        "exists": true,
+        "size": 438
+      }
+    ],
+    "submission": [
+      {
+        "path": "outputs/submission.csv",
+        "absolute_path": "C:\\Users\\ASUS\\Desktop\\Research_Agent\\demo_workspaces\\236716\\outputs\\submission.csv",
+        "exists": true,
+        "size": 399165
+      }
+    ]
+  },
+  "next_action": "collect-metrics"
+}

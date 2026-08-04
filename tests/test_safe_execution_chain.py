@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.agents.safe_execution_chain import run_safe_execution_chain
+from research_agent.agents.safe_execution_chain import run_safe_execution_chain
 
 
 class FakeCodeWriterClient:
@@ -51,7 +51,7 @@ class SafeExecutionChainTest(unittest.TestCase):
                 }
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_safe_execution_chain("demo", "trial_002", client=client, command="python train.py")
 
             self.assertEqual(result["status"], "job_created")
@@ -85,7 +85,7 @@ class SafeExecutionChainTest(unittest.TestCase):
                 }
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_safe_execution_chain("demo", "trial_002", client=client, command="python train.py")
 
             self.assertEqual(result["status"], "validation_failed")

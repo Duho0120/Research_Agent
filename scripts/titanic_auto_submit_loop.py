@@ -25,7 +25,7 @@ for path in [ROOT, SCRIPTS_DIR]:
     if text not in sys.path:
         sys.path.insert(0, text)
 
-from kaggle_research_agent.agents.submission import record_submission_result  # noqa: E402
+from research_agent.agents.submission import record_submission_result  # noqa: E402
 
 from titanic_run_5_trials import (  # noqa: E402
     ROOT,

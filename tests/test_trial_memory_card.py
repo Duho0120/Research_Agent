@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from kaggle_research_agent.trial_memory_card import MAX_TEXT_CHARS, _compact_text
+from research_agent.trial_memory_card import MAX_TEXT_CHARS, _compact_text
 
 
 class TrialMemoryCardTextTest(unittest.TestCase):

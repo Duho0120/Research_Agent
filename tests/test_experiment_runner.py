@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.agents.experiment_runner import apply_patch_plan, run_local_job
+from research_agent.agents.experiment_runner import apply_patch_plan, run_local_job
 
 
 class ExperimentRunnerTest(unittest.TestCase):
@@ -16,7 +16,7 @@ class ExperimentRunnerTest(unittest.TestCase):
             trial.mkdir(parents=True)
             command = f'{sys.executable} -c "import definitely_missing_package_for_agent_test"'
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 job = run_local_job("demo", "trial_001", command=command)
 
             self.assertEqual(job["status"], "failed")
@@ -46,14 +46,14 @@ class ExperimentRunnerTest(unittest.TestCase):
                         "strategy": "controlled_refinement",
                         "target_files": ["experiments/demo/trial_002/config.yaml"],
                         "validation_commands": [
-                            "python -B -m kaggle_research_agent.cli validate-config --competition demo --trial trial_002"
+                            "python -B -m research_agent.cli validate-config --competition demo --trial trial_002"
                         ],
                     }
                 ),
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = apply_patch_plan("demo", "trial_002")
 
             self.assertEqual(result["status"], "ready")
@@ -78,14 +78,14 @@ class ExperimentRunnerTest(unittest.TestCase):
                         "strategy": "controlled_refinement",
                         "target_files": ["experiments/demo/trial_002/missing_target.py"],
                         "validation_commands": [
-                            "python -B -m kaggle_research_agent.cli validate-config --competition demo --trial trial_002"
+                            "python -B -m research_agent.cli validate-config --competition demo --trial trial_002"
                         ],
                     }
                 ),
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = apply_patch_plan("demo", "trial_002")
 
             self.assertEqual(result["status"], "blocked")
@@ -144,7 +144,7 @@ class ExperimentRunnerTest(unittest.TestCase):
                             str((Path(__file__).resolve().parents[1] / "scripts" / "demo_train.py")),
                         ],
                         "validation_commands": [
-                            "python -B -m kaggle_research_agent.cli validate-config --competition demo --trial trial_002"
+                            "python -B -m research_agent.cli validate-config --competition demo --trial trial_002"
                         ],
                     }
                 ),
@@ -157,7 +157,7 @@ class ExperimentRunnerTest(unittest.TestCase):
                 f"--output {trial}"
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = apply_patch_plan("demo", "trial_002", run_command=command)
 
             self.assertEqual(result["status"], "executed")

@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.agents.validation_command_runner import run_validation_commands
+from research_agent.agents.validation_command_runner import run_validation_commands
 
 
 class ValidationCommandRunnerTest(unittest.TestCase):
@@ -25,7 +25,7 @@ class ValidationCommandRunnerTest(unittest.TestCase):
             )
             self._write_coding_validation(trial, "accepted")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_validation_commands("demo", "trial_002")
 
             self.assertEqual(result["status"], "passed")
@@ -46,7 +46,7 @@ class ValidationCommandRunnerTest(unittest.TestCase):
             self._write_handoff(trial, ["python -c \"raise SystemExit(0)\""])
             self._write_coding_validation(trial, "blocked")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_validation_commands("demo", "trial_002")
 
             self.assertEqual(result["status"], "blocked")
@@ -61,7 +61,7 @@ class ValidationCommandRunnerTest(unittest.TestCase):
             self._write_handoff(trial, ["python -c \"raise SystemExit(3)\""])
             self._write_coding_validation(trial, "accepted")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_validation_commands("demo", "trial_002")
 
             self.assertEqual(result["status"], "failed")

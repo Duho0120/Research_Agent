@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.agents.code_writer_adapter import (
+from research_agent.agents.code_writer_adapter import (
     build_anthropic_messages_payload,
     normalize_anthropic_messages_response,
     run_code_writer,
@@ -84,7 +84,7 @@ class CodeWriterAdapterTest(unittest.TestCase):
                 }
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_code_writer("demo", "trial_002", client=client, allow_api=True)
 
             self.assertEqual(result["status"], "accepted")
@@ -111,7 +111,7 @@ class CodeWriterAdapterTest(unittest.TestCase):
             self._write_handoff(trial)
             client = FakeCodeWriterClient({"output_text": "{}"})
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_code_writer("demo", "trial_002", client=client, allow_api=True, trial_llm_calls=10)
 
             self.assertEqual(result["status"], "blocked")
@@ -148,7 +148,7 @@ class CodeWriterAdapterTest(unittest.TestCase):
                 }
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_code_writer("demo", "trial_002", client=client, allow_api=True)
 
             self.assertEqual(result["status"], "blocked")

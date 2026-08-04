@@ -10,8 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from kaggle_research_agent.agents.code_writer_adapter import OpenAIResponsesClient
-from kaggle_research_agent.policies import load_policy, resolve_model_for_call
+from research_agent.agents.code_writer_adapter import OpenAIResponsesClient
+from research_agent.policies import load_policy, resolve_model_for_call
 
 
 def main() -> int:

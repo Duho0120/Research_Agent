@@ -4,8 +4,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent import simple_yaml
-from kaggle_research_agent.trial_artifacts import (
+from research_agent import simple_yaml
+from research_agent.trial_artifacts import (
     _extract_pipeline_details,
     _extract_pipeline_facts,
     _pipeline_submission_columns,
@@ -13,7 +13,7 @@ from kaggle_research_agent.trial_artifacts import (
     reconcile_trial_execution_metadata,
     trial_artifact_exists,
 )
-from kaggle_research_agent.trial_user_view import _plan_note_lines, render_user_plan, render_user_scores
+from research_agent.trial_user_view import _plan_note_lines, render_user_plan, render_user_scores
 
 
 class TrialArtifactsTest(unittest.TestCase):
@@ -164,21 +164,21 @@ class TrialArtifactsTest(unittest.TestCase):
                 "primary_change_axis": "model_ensemble",
             }
 
-            with patch("kaggle_research_agent.paths.ROOT", root):
+            with patch("research_agent.paths.ROOT", root):
                 with patch(
-                    "kaggle_research_agent.trial_artifacts.build_trial_summary",
+                    "research_agent.trial_artifacts.build_trial_summary",
                     return_value={"trial_id": "trial_002"},
                 ):
                     with patch(
-                        "kaggle_research_agent.trial_artifacts.build_pipeline_structure",
+                        "research_agent.trial_artifacts.build_pipeline_structure",
                         return_value=structure,
                     ):
                         with patch(
-                            "kaggle_research_agent.trial_artifacts.resolve_trial_plan",
+                            "research_agent.trial_artifacts.resolve_trial_plan",
                             return_value=plan,
                         ):
                             with patch(
-                                "kaggle_research_agent.trial_artifacts.write_executed_trial_facts",
+                                "research_agent.trial_artifacts.write_executed_trial_facts",
                                 return_value={"model": "VotingClassifier"},
                             ):
                                 result = reconcile_trial_execution_metadata("demo", "trial_002")
@@ -291,7 +291,7 @@ class TrialArtifactsTest(unittest.TestCase):
             (trial / "workspace_coding_api_request.json").write_text("{}", encoding="utf-8")
             (trial / "workspace_coding_api_response.json").write_text("{}", encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = organize_trial_artifacts(
                     "demo",
                     "trial_001",
@@ -471,7 +471,7 @@ class TrialArtifactsTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 organize_trial_artifacts("demo", "trial_001")
 
             structure = json.loads((trial / "internal" / "pipeline_structure.json").read_text(encoding="utf-8"))
@@ -570,7 +570,7 @@ class TrialArtifactsTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 organize_trial_artifacts("bike", "trial_001")
 
             structure = json.loads((trial / "internal" / "pipeline_structure.json").read_text(encoding="utf-8"))
@@ -695,7 +695,7 @@ class TrialArtifactsTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 organize_trial_artifacts("demo", "trial_001")
 
             structure = json.loads((trial / "internal" / "pipeline_structure.json").read_text(encoding="utf-8"))
@@ -746,7 +746,7 @@ class TrialArtifactsTest(unittest.TestCase):
             "metrics": {},
         }
         with patch(
-            "kaggle_research_agent.trial_artifacts._workspace_pipeline_summary",
+            "research_agent.trial_artifacts._workspace_pipeline_summary",
             return_value={"submission": {"columns": ["id", "x", "y", "z"]}},
         ):
             details = _extract_pipeline_details(summary, code_files=[], code_text="")
@@ -761,7 +761,7 @@ class TrialArtifactsTest(unittest.TestCase):
         # assert a "target" column that was never detected.
         summary = {"project_root": "/does/not/matter", "metrics": {}}
         with patch(
-            "kaggle_research_agent.trial_artifacts._workspace_pipeline_summary",
+            "research_agent.trial_artifacts._workspace_pipeline_summary",
             return_value={"submission": {"columns": ["id", "x", "y", "z"]}},
         ):
             facts = _extract_pipeline_facts(summary, code_files=[], code_text="")
@@ -815,7 +815,7 @@ class TrialArtifactsTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 organize_trial_artifacts("demo", "trial_001")
 
             self.assertFalse((root / "runs" / "demo" / "trial_001" / "code").exists())

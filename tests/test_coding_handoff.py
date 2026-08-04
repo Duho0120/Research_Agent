@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.agents.coding_handoff import prepare_coding_handoff
+from research_agent.agents.coding_handoff import prepare_coding_handoff
 
 
 class CodingHandoffTest(unittest.TestCase):
@@ -30,14 +30,14 @@ class CodingHandoffTest(unittest.TestCase):
                         "config_changes": {"training.sampler": "balanced"},
                         "implementation_steps": ["Add balanced sampler support."],
                         "validation_commands": [
-                            "python -B -m kaggle_research_agent.cli validate-config --competition demo --trial trial_002"
+                            "python -B -m research_agent.cli validate-config --competition demo --trial trial_002"
                         ],
                     }
                 ),
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_coding_handoff("demo", "trial_002")
 
             self.assertEqual(result["status"], "ready")
@@ -93,7 +93,7 @@ class CodingHandoffTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_coding_handoff("demo", "trial_002")
 
             self.assertEqual(result["status"], "blocked")
@@ -148,7 +148,7 @@ class CodingHandoffTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_coding_handoff("demo", "trial_002")
 
             self.assertEqual(result["status"], "ready")

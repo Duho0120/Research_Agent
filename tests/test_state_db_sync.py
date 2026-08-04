@@ -6,8 +6,8 @@ from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.cli import main
-from kaggle_research_agent.state_db import (
+from research_agent.cli import main
+from research_agent.state_db import (
     get_best_trial,
     get_trial_summary,
     initialize_state_db,
@@ -16,7 +16,7 @@ from kaggle_research_agent.state_db import (
     upsert_trial,
     upsert_trial_artifact,
 )
-from kaggle_research_agent.state_db_sync import sync_state_db
+from research_agent.state_db_sync import sync_state_db
 
 
 class StateDbSyncTest(unittest.TestCase):
@@ -43,7 +43,7 @@ class StateDbSyncTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 sync_state_db("demo", db_path=db_path)
 
             self.assertEqual("Bike Sharing Demand", list_competitions(db_path)[0]["topic"])
@@ -54,7 +54,7 @@ class StateDbSyncTest(unittest.TestCase):
             db_path = root / "memory" / "research_agent.sqlite3"
             _write_demo_competition_tree(root)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = sync_state_db("demo", db_path=db_path)
                 second_result = sync_state_db("demo", db_path=db_path)
 
@@ -122,7 +122,7 @@ class StateDbSyncTest(unittest.TestCase):
                 db_path,
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = sync_state_db("demo", db_path=db_path)
 
             self.assertEqual("completed", result["status"])
@@ -137,7 +137,7 @@ class StateDbSyncTest(unittest.TestCase):
             _write_demo_competition_tree(root)
             _write_manual_trial_tree(root, "trial_003")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = sync_state_db("demo", db_path=db_path)
 
             summary = get_trial_summary("demo", "trial_003", db_path)
@@ -187,7 +187,7 @@ class StateDbSyncTest(unittest.TestCase):
             _write_demo_competition_tree(root)
             _write_json(root / "experiments" / "demo" / "trial_001" / "demo_graph_cycle.json", {"status": "blocked"})
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 sync_state_db("demo", db_path=db_path)
 
             self.assertEqual("blocked", get_trial_summary("demo", "trial_001", db_path)["status"])
@@ -213,7 +213,7 @@ class StateDbSyncTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 sync_state_db("demo", db_path=db_path)
 
             self.assertEqual("hyperparameter", get_trial_summary("demo", "trial_002", db_path)["primary_change_axis"])
@@ -235,7 +235,7 @@ class StateDbSyncTest(unittest.TestCase):
                 },
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 sync_state_db("demo", db_path=db_path)
 
             summary = get_trial_summary("demo", "trial_001", db_path)
@@ -263,7 +263,7 @@ class StateDbSyncTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 sync_state_db("demo", db_path=db_path)
 
             summary = get_trial_summary("demo", "trial_002", db_path)
@@ -280,7 +280,7 @@ class StateDbSyncTest(unittest.TestCase):
             db_path = root / "memory" / "state.sqlite3"
             _write_demo_competition_tree(root)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 exit_code = main(["sync-state-db", "--competition", "demo", "--db-path", str(db_path)])
 
             self.assertEqual(0, exit_code)

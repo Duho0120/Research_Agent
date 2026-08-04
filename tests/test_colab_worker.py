@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from colab.worker import load_job, run_pending_jobs
-from kaggle_research_agent import simple_yaml
+from research_agent import simple_yaml
 
 
 class ColabWorkerTest(unittest.TestCase):

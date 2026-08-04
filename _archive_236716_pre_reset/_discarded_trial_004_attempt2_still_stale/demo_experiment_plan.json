@@ -1,0 +1,125 @@
+{
+  "plan_type": "delta_patch",
+  "plan_title": "Mirror sample_submission schema in submission.csv",
+  "source_trial_id": "trial_001",
+  "primary_change_axis": "submission_schema_alignment",
+  "candidate": {
+    "name": "SampleSubmission Schema Mirror",
+    "description": "Make submission.csv mirror sample_submission.csv columns (e.g., id,x,y,z) exactly, replacing the current id,target layout.",
+    "implementation_hint": "In predict_step.py, read sample_submission to get header; build submission with same column order and dtypes; map model outputs to pred_cols, pad missing dims with 0.0; write CSV with index=False."
+  },
+  "do_not_repeat": [
+    "submission_schema_alignment: Inference | Output | Predict | Update"
+  ],
+  "keep_unchanged": [
+    "data_load",
+    "preprocessing",
+    "data_split_cv",
+    "model_definition",
+    "training"
+  ],
+  "change_details": [
+    "predict_step._read_sample_submission: return (df, id_col=first column, pred_cols=columns[1:]).",
+    "predict_step.main: construct submission = sample_df.copy(); fill submission[pred_cols] from predictions; if fewer dims than pred_cols, pad remaining with 0.0; ensure float32; drop any 'target'; preserve column order.",
+    "test_step.main: align local write to use sample_submission header and same fill logic."
+  ],
+  "affected_stages": [
+    "test_inference_output"
+  ],
+  "required_code_symbols": [
+    "predict_step._read_sample_submission",
+    "predict_step.main",
+    "test_step.main"
+  ],
+  "expected_metadata_changes": [
+    "test_inference_output.prediction_column: target -> [x,y,z] (mirror sample_submission)",
+    "test_inference_output.id_column: remains id"
+  ],
+  "code_change_targets": [
+    "predict_step.py",
+    "test_step.py"
+  ],
+  "success_criteria": [
+    "outputs/submission.csv columns exactly equal sample_submission.csv columns and order",
+    "no schema/key errors during local run",
+    "server accepts submission without schema rejection"
+  ],
+  "failure_decision": [
+    "If submission header mismatch persists or file write fails, mark this candidate failed and keep axis for next attempt"
+  ],
+  "expected_outputs": [
+    "outputs/submission.csv with columns [id, x, y, z] and float values (no 'target' column)"
+  ],
+  "schema_version": "1.0",
+  "objective": "Create and run one local experiment for 236716.",
+  "rationale": "Use the available Execution Profile and local metric artifact to verify the loop.",
+  "pipeline_blueprint": [],
+  "implementation_notes": [],
+  "issues": [],
+  "competition": "236716",
+  "trial_id": "trial_004",
+  "status": "ready",
+  "token_decision": {
+    "decision": "call_llm",
+    "reason": "experiment_planning",
+    "within_budget": true,
+    "trial_llm_calls": 1,
+    "strategy_calls_today": 9,
+    "counts_source": "decision_log",
+    "summarize_logs_before_llm": true,
+    "avoid_raw_training_logs_in_prompt": true,
+    "log": {
+      "time": "2026-07-31T04:38:33.048605+00:00",
+      "competition": "236716",
+      "trial_id": "trial_004",
+      "decision_type": "llm_call",
+      "decision": "call_llm",
+      "reason": "Token policy evaluated LLM reason: experiment_planning.",
+      "evidence": {
+        "llm_reason": "experiment_planning",
+        "trial_llm_calls": 1,
+        "strategy_calls_today": 9,
+        "counts_source": "decision_log",
+        "within_budget": true,
+        "summarize_logs_before_llm": true,
+        "avoid_raw_training_logs_in_prompt": true,
+        "prompt_summary_path": "experiments/236716/trial_004/demo_context.md"
+      },
+      "user_input_used": false,
+      "next_action": "call-llm"
+    }
+  },
+  "token_usage": {
+    "time": "2026-07-31T04:39:56.817128+00:00",
+    "competition": "236716",
+    "trial_id": "trial_004",
+    "provider": "openai_responses",
+    "model": "gpt-5",
+    "call_type": "experiment_planning",
+    "request_id": "resp_0e3559d4d22abf91006a6c26c9ab3081989e1619b6b4e4a0a6",
+    "input_tokens": 2229,
+    "output_tokens": 3585,
+    "total_tokens": 5814,
+    "raw_usage": {
+      "input_tokens": 2229,
+      "input_tokens_details": {
+        "cache_write_tokens": 0,
+        "cached_tokens": 0
+      },
+      "output_tokens": 3585,
+      "output_tokens_details": {
+        "reasoning_tokens": 3008
+      },
+      "total_tokens": 5814
+    }
+  },
+  "model_config": {
+    "tier": "high_cost",
+    "provider": "openai",
+    "api": "responses",
+    "model": "gpt-5",
+    "call_type": "experiment_planning",
+    "override": true
+  },
+  "next_action": "prepare-workspace-handoff"
+}

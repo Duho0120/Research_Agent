@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.competition_inspector import inspect_competition
+from research_agent.competition_inspector import inspect_competition
 
 
 class CompetitionInspectorTest(unittest.TestCase):
@@ -25,7 +25,7 @@ class CompetitionInspectorTest(unittest.TestCase):
                     }
                 return {"returncode": 1, "stdout": "", "stderr": "unexpected command"}
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = inspect_competition("https://www.kaggle.com/competitions/titanic", runner=runner)
 
             self.assertEqual(result["status"], "ready")
@@ -49,7 +49,7 @@ class CompetitionInspectorTest(unittest.TestCase):
                     return {"returncode": 1, "stdout": "", "stderr": "Could not find kaggle.json\n"}
                 return {"returncode": 1, "stdout": "", "stderr": "should not fetch"}
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = inspect_competition("titanic", runner=runner)
 
             self.assertEqual(result["status"], "auth_failed")

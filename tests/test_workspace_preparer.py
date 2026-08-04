@@ -6,9 +6,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent import simple_yaml
-from kaggle_research_agent.cli import main
-from kaggle_research_agent.workspace_preparer import prepare_workspace, refresh_workspace_inventory
+from research_agent import simple_yaml
+from research_agent.cli import main
+from research_agent.workspace_preparer import prepare_workspace, refresh_workspace_inventory
 
 
 class WorkspacePreparerTest(unittest.TestCase):
@@ -25,7 +25,7 @@ class WorkspacePreparerTest(unittest.TestCase):
             (source / "outputs" / "metrics.json").write_text("{}\n", encoding="utf-8")
             (source / "outputs" / "submission.csv").write_text("id,target\n", encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_workspace(
                     "demo",
                     source_path=str(source),
@@ -53,7 +53,7 @@ class WorkspacePreparerTest(unittest.TestCase):
             (source / "experiment.ipynb").write_text("{}\n", encoding="utf-8")
             (source / "train.csv").write_text("id,target\n1,0\n", encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_workspace("demo", source_path=str(source), topic="Binary classification")
 
             self.assertEqual("needs_review", result["status"])
@@ -66,7 +66,7 @@ class WorkspacePreparerTest(unittest.TestCase):
     def test_topic_only_creates_workspace_without_execution_profile(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_workspace("topic_demo", topic="Forecast energy demand")
 
             self.assertEqual("needs_project_path", result["status"])
@@ -78,7 +78,7 @@ class WorkspacePreparerTest(unittest.TestCase):
             root = Path(tmp) / "agent"
             root.mkdir()
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_workspace(
                     "titanic_demo",
                     topic="Titanic survival prediction",
@@ -108,7 +108,7 @@ class WorkspacePreparerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "agent"
             root.mkdir()
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_workspace(
                     "titanic_demo",
                     topic="Titanic survival prediction",
@@ -149,7 +149,7 @@ class WorkspacePreparerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "agent"
             root.mkdir()
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = prepare_workspace(
                     "bike_demo",
                     topic="Bike sharing demand",
@@ -197,7 +197,7 @@ class WorkspacePreparerTest(unittest.TestCase):
             source = Path(tmp) / "source"
             root.mkdir()
             source.mkdir()
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 code = main(
                     [
                         "prepare-workspace",
@@ -217,7 +217,7 @@ class WorkspacePreparerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "agent"
             root.mkdir()
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 code = main(
                     [
                         "prepare-workspace",
@@ -254,8 +254,8 @@ class RefreshWorkspaceInventoryTest(unittest.TestCase):
             source = Path(tmp) / "source"
             source.mkdir(parents=True)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
-                with patch("kaggle_research_agent.workspace_preparer.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
+                with patch("research_agent.workspace_preparer.paths.project_root", return_value=root):
                     prepare_workspace(
                         "demo",
                         source_path=str(source),

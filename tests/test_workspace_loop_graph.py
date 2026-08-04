@@ -4,7 +4,7 @@ from pathlib import Path
 
 from langgraph.checkpoint.memory import MemorySaver
 
-from kaggle_research_agent.graph.workspace_loop_graph import (
+from research_agent.graph.workspace_loop_graph import (
     WorkspaceLoopCallbacks,
     resume_workspace_loop_graph,
     run_workspace_loop_graph,

@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 from unittest.mock import patch
 
-from kaggle_research_agent.agents.orchestrator import run_auto_research_loop, run_cycle
+from research_agent.agents.orchestrator import run_auto_research_loop, run_cycle
 
 
 class OrchestratorDiagnosisTest(unittest.TestCase):
@@ -67,7 +67,7 @@ class OrchestratorDiagnosisTest(unittest.TestCase):
             )
             (trial / "metrics.json").write_text(json.dumps({"cv_score": 0.71, "objective": "maximize"}), encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_auto_research_loop(
                     "demo",
                     start_trial_id="trial_001",
@@ -130,7 +130,7 @@ class OrchestratorDiagnosisTest(unittest.TestCase):
             (trial / "config.yaml").write_text(json.dumps({"model": {"type": "lightgbm"}, "features": {}, "cv": {}}), encoding="utf-8")
             (trial / "metrics.json").write_text(json.dumps({"cv_score": 0.7, "objective": "maximize"}), encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_auto_research_loop(
                     "demo",
                     start_trial_id="trial_001",
@@ -196,7 +196,7 @@ class OrchestratorDiagnosisTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_cycle("demo", "trial_001", create_job_request=False)
 
             self.assertIn("diagnosed", result["steps"])
@@ -268,7 +268,7 @@ class OrchestratorDiagnosisTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_cycle(
                     "demo",
                     "trial_001",
@@ -364,7 +364,7 @@ class OrchestratorDiagnosisTest(unittest.TestCase):
             next_trial = root / "experiments" / "demo" / "trial_002"
             command = f"{sys.executable} {script} --config {next_trial / 'config.yaml'} --output {next_trial}"
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_cycle(
                     "demo",
                     "trial_001",
@@ -431,7 +431,7 @@ class OrchestratorDiagnosisTest(unittest.TestCase):
             response_path = root / "mock_response.json"
             self._write_mock_code_response(response_path)
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = run_cycle(
                     "demo",
                     "trial_002",

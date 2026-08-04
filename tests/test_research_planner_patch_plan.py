@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.agents.pipeline_patch_planner import prepare_patch_plan
+from research_agent.agents.pipeline_patch_planner import prepare_patch_plan
 
 
 class PipelinePatchPlannerTest(unittest.TestCase):
@@ -38,7 +38,7 @@ class PipelinePatchPlannerTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 plan = prepare_patch_plan("demo", "trial_001", "trial_002")
 
             self.assertEqual(plan["strategy"], "controlled_refinement")
@@ -106,7 +106,7 @@ class PipelinePatchPlannerTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 plan = prepare_patch_plan("demo", "trial_004", "trial_005")
 
             self.assertEqual(plan["strategy"], "sota_architecture_attempt")
@@ -140,14 +140,14 @@ class PipelinePatchPlannerTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 plan = prepare_patch_plan("demo", "trial_001", "trial_002")
 
             self.assertEqual(plan["pipeline_axis"], "sampling")
             self.assertEqual(plan["config"]["training"]["sampler"], "balanced")
             self.assertIn("training.sampler", plan["config_changes"])
             self.assertIn("dataset", " ".join(plan["target_files"]))
-            self.assertIn("kaggle_research_agent/pipeline/dataset.py", plan["create_files"])
+            self.assertIn("research_agent/pipeline/dataset.py", plan["create_files"])
             self.assertIn("protected_axes", plan)
 
     def test_prepare_patch_plan_translates_loss_metric_alignment_axis(self):
@@ -170,7 +170,7 @@ class PipelinePatchPlannerTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 plan = prepare_patch_plan("demo", "trial_001", "trial_002")
 
             self.assertEqual(plan["pipeline_axis"], "loss_metric_alignment")
@@ -205,7 +205,7 @@ class PipelinePatchPlannerTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 plan = prepare_patch_plan("demo", "trial_001", "trial_002")
 
             self.assertEqual(plan["pipeline_axis"], "pretraining_strategy")

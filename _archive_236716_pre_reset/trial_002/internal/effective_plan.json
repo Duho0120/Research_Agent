@@ -1,0 +1,237 @@
+{
+  "schema_version": "1.0",
+  "competition": "236716",
+  "trial_id": "trial_002",
+  "baseline_trial_id": "trial_001",
+  "baseline_plan": {
+    "plan_type": "initial_pipeline_plan",
+    "plan_title": "Baseline: Constant-Velocity (+80ms) using last two timesteps per id",
+    "objective": "Maximize R-Hit@1cm via a reproducible rule-based baseline; verify submission format (id,x,y,z) matches sample_submission.csv.",
+    "rationale": "- Data profile only confirms sample_submission schema: id,x,y,z; target schema otherwise unknown.\n- Baseline guardrails prioritize simple, stable first trial; avoid complex models and high-cardinality features.\n- Prior trial memory for this workspace indicates a constant-velocity +80ms heuristic (t0 and t-40ms).",
+    "pipeline_blueprint": [
+      "Inputs: data/train.* (if available): per-id time-ordered positions",
+      "Inputs: data/test.*: per-id recent history to t0 and t-40ms",
+      "Inputs: sample_submission.csv: canonical id list and output columns [id,x,y,z]",
+      "Output Schema: id",
+      "Output Schema: x",
+      "Output Schema: y",
+      "Output Schema: z",
+      "Method: random_holdout_by_id",
+      "Validation Size: 0.1",
+      "Random Seed: 42",
+      "전처리: Group by id; sort by time column (prefer one of: ['t','time','timestamp_ms']).",
+      "전처리: Extract last two observations per id: P(t0) and P(t-40ms) for x,y,z.",
+      "전처리: If dt != 40ms, compute exact dt_ms between the last two rows; compute v = (P(t0)-P(prev)) / (dt_ms/1000).",
+      "전처리: Fallback: if only one observation available, predict P(t0) unchanged.",
+      "Type: RuleBasedConstantVelocity",
+      "Fit Required: False",
+      "Inference: P_pred = P(t0) + v * 0.08 (seconds)",
+      "Name: R-Hit@1cm",
+      "Definition: mean( ||pred - true||_2 <= 0.01 ) over validation targets",
+      "Prediction Procedure: Load sample_submission.csv to get id order.",
+      "Prediction Procedure: For each id, derive P(t0), P(prev), dt_ms from test context; compute v and P_pred.",
+      "Prediction Procedure: Assemble outputs with columns [id,x,y,z] in sample_submission order.",
+      "Train: {python} train_step.py",
+      "Test: {python} test_step.py",
+      "Predict: {python} predict_step.py"
+    ],
+    "code_change_targets": [
+      "File: predict_step.py",
+      "Changes: Read sample_submission.csv for id list and column order.",
+      "Changes: Load test context (auto-detect columns: ['id', 'x','y','z'] and time as one of ['t','time','timestamp_ms']).",
+      "Changes: Per id: sort by time; take last two rows; compute v and P_pred for x,y,z; fallback to last observed if <2 rows.",
+      "Changes: Write outputs/submission.csv with columns [id,x,y,z]; validate no NaNs/inf and row count matches sample_submission.",
+      "File: test_step.py",
+      "Changes: Load train data if present; split by id with validation_size=0.1, seed=42.",
+      "Changes: From validation histories, construct targets at t0+80ms and contexts up to t0.",
+      "Changes: Apply same constant-velocity predictor; compute R-Hit@1cm and basic counts.",
+      "Changes: Save outputs/metrics.json with {'R-Hit@1cm': float, 'n_ids': int}.",
+      "File: train_step.py",
+      "Changes: No model training; generate outputs/pipeline_summary.json with data columns detected, split params, and heuristic details.",
+      "Changes: Do not persist any model artifact (artifact_policy)."
+    ],
+    "success_criteria": [
+      "outputs/submission.csv exactly matches sample_submission columns and id order; no NaN/inf; row count equals sample_submission.",
+      "outputs/metrics.json exists and includes R-Hit@1cm (if train data available).",
+      "outputs/pipeline_summary.json exists and records split params and heuristic.",
+      "Reproducible run with seed=42; no dependency on external services."
+    ],
+    "implementation_notes": [
+      "Time detection: prefer 'timestamp_ms'; else 'time' (assumed ms); else 't'. Ensure numeric dtype.",
+      "Unit safety: dt_s = max((t0 - t_prev)/1000.0, 1e-6) to avoid divide-by-zero; clip absurd velocities if needed (optional cap at |v|<=100 m/s).",
+      "Vector ops with numpy/pandas; avoid saving any trained model artifact.",
+      "If test file already has explicit columns for last two snapshots (e.g., x0,y0,z0 and xm40,ym40,zm40), bypass grouping and compute directly.",
+      "Always drive prediction row order from sample_submission.csv."
+    ],
+    "expected_outputs": [
+      "outputs/metrics.json",
+      "outputs/submission.csv",
+      "outputs/pipeline_summary.json",
+      "outputs/code_snapshot.txt"
+    ],
+    "schema_version": "1.0",
+    "source_trial_id": null,
+    "primary_change_axis": "",
+    "keep_unchanged": [],
+    "change_details": [],
+    "failure_decision": [],
+    "candidate": {
+      "name": "",
+      "description": "",
+      "implementation_hint": ""
+    },
+    "do_not_repeat": [],
+    "affected_stages": [],
+    "required_code_symbols": [],
+    "expected_metadata_changes": [],
+    "issues": [],
+    "competition": "236716",
+    "trial_id": "trial_001",
+    "status": "ready",
+    "token_decision": {
+      "decision": "call_llm",
+      "reason": "experiment_planning",
+      "within_budget": true,
+      "trial_llm_calls": 8,
+      "strategy_calls_today": 3,
+      "counts_source": "decision_log",
+      "summarize_logs_before_llm": true,
+      "avoid_raw_training_logs_in_prompt": true,
+      "log": {
+        "time": "2026-07-31T00:44:25.823165+00:00",
+        "competition": "236716",
+        "trial_id": "trial_001",
+        "decision_type": "llm_call",
+        "decision": "call_llm",
+        "reason": "Token policy evaluated LLM reason: experiment_planning.",
+        "evidence": {
+          "llm_reason": "experiment_planning",
+          "trial_llm_calls": 8,
+          "strategy_calls_today": 3,
+          "counts_source": "decision_log",
+          "within_budget": true,
+          "summarize_logs_before_llm": true,
+          "avoid_raw_training_logs_in_prompt": true,
+          "prompt_summary_path": "experiments/236716/trial_001/demo_context.md"
+        },
+        "user_input_used": false,
+        "next_action": "call-llm"
+      }
+    },
+    "token_usage": {
+      "time": "2026-07-31T00:45:21.926522+00:00",
+      "competition": "236716",
+      "trial_id": "trial_001",
+      "provider": "openai_responses",
+      "model": "gpt-5",
+      "call_type": "experiment_planning",
+      "request_id": "resp_06dafd43b0540023006a6befea4fa88199a7fc6f7a79973142",
+      "input_tokens": 2218,
+      "output_tokens": 4105,
+      "total_tokens": 6323,
+      "raw_usage": {
+        "input_tokens": 2218,
+        "input_tokens_details": {
+          "cache_write_tokens": 0,
+          "cached_tokens": 2176
+        },
+        "output_tokens": 4105,
+        "output_tokens_details": {
+          "reasoning_tokens": 2880
+        },
+        "total_tokens": 6323
+      }
+    },
+    "model_config": {
+      "tier": "high_cost",
+      "provider": "openai",
+      "api": "responses",
+      "model": "gpt-5",
+      "call_type": "experiment_planning",
+      "override": true
+    },
+    "next_action": "prepare-workspace-handoff"
+  },
+  "current_delta": {
+    "plan_type": "continuation_delta_plan",
+    "source_trial_id": "trial_001",
+    "primary_change_axis": "controlled_refinement",
+    "candidate": null,
+    "change_details": [
+      "Make one controlled improvement based on the latest diagnosis.",
+      "Keep model family and validation fixed for attribution."
+    ],
+    "keep_unchanged": null,
+    "code_change_targets": null,
+    "affected_stages": [
+      "model_definition",
+      "training",
+      "evaluation",
+      "test_inference_output",
+      "data_split_cv"
+    ],
+    "required_code_symbols": [
+      "build_pipeline",
+      "train_validate",
+      "make_submission",
+      "run_experiment"
+    ],
+    "expected_metadata_changes": [
+      "trial_id",
+      "source_trial_id",
+      "model",
+      "features",
+      "split"
+    ],
+    "success_criteria": null,
+    "failure_decision": null,
+    "schema_version": "1.0"
+  },
+  "change_history": [
+    {
+      "trial_id": "trial_001",
+      "source_trial_id": "trial_001",
+      "primary_change_axis": null,
+      "candidate": null,
+      "change_details": []
+    },
+    {
+      "trial_id": "trial_001",
+      "source_trial_id": "trial_001",
+      "primary_change_axis": null,
+      "candidate": null,
+      "change_details": []
+    },
+    {
+      "trial_id": "trial_001",
+      "source_trial_id": "trial_001",
+      "primary_change_axis": null,
+      "candidate": null,
+      "change_details": []
+    },
+    {
+      "trial_id": "trial_001",
+      "source_trial_id": "trial_001",
+      "primary_change_axis": null,
+      "candidate": null,
+      "change_details": []
+    },
+    {
+      "trial_id": "trial_001",
+      "source_trial_id": "trial_001",
+      "primary_change_axis": null,
+      "candidate": null,
+      "change_details": []
+    },
+    {
+      "trial_id": "trial_002",
+      "source_trial_id": "trial_001",
+      "primary_change_axis": "controlled_refinement",
+      "candidate": null,
+      "change_details": [
+        "Make one controlled improvement based on the latest diagnosis.",
+        "Keep model family and validation fixed for attribution."
+      ]
+    }
+  ]
+}

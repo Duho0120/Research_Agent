@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from kaggle_research_agent.agents.policy_gate import (
+from research_agent.agents.policy_gate import (
     classify_local_failure,
     count_llm_calls_from_decision_log,
     decide_execution,
@@ -12,8 +12,8 @@ from kaggle_research_agent.agents.policy_gate import (
     log_llm_decision,
     should_call_llm,
 )
-from kaggle_research_agent.agents.memory import log_decision
-from kaggle_research_agent.policies import load_policy, resolve_model_for_call, select_model_for_call
+from research_agent.agents.memory import log_decision
+from research_agent.policies import load_policy, resolve_model_for_call, select_model_for_call
 
 
 class PolicyGateTest(unittest.TestCase):
@@ -61,7 +61,7 @@ class PolicyGateTest(unittest.TestCase):
             trial.mkdir(parents=True)
             (trial / "config.yaml").write_text("model:\n  type: lightgbm\n", encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = decide_execution(
                     "demo",
                     "trial_001",
@@ -81,7 +81,7 @@ class PolicyGateTest(unittest.TestCase):
             (trial / "config.yaml").write_text("model:\n  type: lightgbm\n", encoding="utf-8")
             (trial / "local_run.log").write_text("STDERR:\nCUDA out of memory\n", encoding="utf-8")
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = decide_execution("demo", "trial_001", run_now=True, command="python train.py")
 
             self.assertEqual(result["decision"], "ask_user")
@@ -106,7 +106,7 @@ class PolicyGateTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = decide_execution("demo", "trial_001", run_now=True, command="python train.py")
 
             self.assertEqual(result["decision"], "ask_user")
@@ -141,7 +141,7 @@ class PolicyGateTest(unittest.TestCase):
     def test_decide_human_review_requests_review_pack_from_diagnosis(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = decide_human_review(
                     "demo",
                     "trial_001",
@@ -158,7 +158,7 @@ class PolicyGateTest(unittest.TestCase):
     def test_nonurgent_human_review_is_deferred_before_pipeline_maturity(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = decide_human_review(
                     "demo",
                     "trial_001",
@@ -176,7 +176,7 @@ class PolicyGateTest(unittest.TestCase):
     def test_nonurgent_human_review_is_released_after_two_completed_trials(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = decide_human_review(
                     "demo",
                     "trial_002",
@@ -196,7 +196,7 @@ class PolicyGateTest(unittest.TestCase):
             root = Path(tmp)
             readiness = self._readiness(completed_trial_count=3)
             readiness["pending_user_review"] = True
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = decide_human_review(
                     "demo",
                     "trial_003",
@@ -214,7 +214,7 @@ class PolicyGateTest(unittest.TestCase):
     def test_leakage_review_bypasses_pipeline_maturity(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = decide_human_review(
                     "demo",
                     "trial_001",
@@ -233,7 +233,7 @@ class PolicyGateTest(unittest.TestCase):
     def test_label_boundary_ambiguity_bypasses_pipeline_maturity(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = decide_human_review(
                     "demo",
                     "trial_001",
@@ -251,7 +251,7 @@ class PolicyGateTest(unittest.TestCase):
     def test_safety_false_negative_bypasses_pipeline_maturity(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = decide_human_review(
                     "demo",
                     "trial_001",
@@ -269,7 +269,7 @@ class PolicyGateTest(unittest.TestCase):
     def test_missing_metric_definition_bypasses_pipeline_maturity(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = decide_human_review(
                     "demo",
                     "trial_001",
@@ -301,7 +301,7 @@ class PolicyGateTest(unittest.TestCase):
             "max_strategy_calls_per_day": None,
             "call_llm_when": ["human_review_needed"],
         }
-        with patch("kaggle_research_agent.agents.policy_gate.load_policy", return_value=policy):
+        with patch("research_agent.agents.policy_gate.load_policy", return_value=policy):
             far_over_old_cap = should_call_llm(
                 "human_review_needed", trial_llm_calls=0, strategy_calls_today=10_000
             )
@@ -315,7 +315,7 @@ class PolicyGateTest(unittest.TestCase):
     def test_should_call_llm_counts_existing_decision_log_when_counts_omitted(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 for _ in range(10):
                     log_decision(
                         "demo",
@@ -334,7 +334,7 @@ class PolicyGateTest(unittest.TestCase):
     def test_should_call_llm_manual_counts_override_decision_log_counts(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 for _ in range(4):
                     log_decision(
                         "demo",
@@ -359,7 +359,7 @@ class PolicyGateTest(unittest.TestCase):
     def test_count_llm_calls_includes_code_writer_token_decisions(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 log_decision(
                     "demo",
                     "trial_001",
@@ -385,7 +385,7 @@ class PolicyGateTest(unittest.TestCase):
     def test_count_llm_calls_deduplicates_preflight_and_repeated_result_logs(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 log_decision(
                     "demo",
                     "trial_001",
@@ -419,7 +419,7 @@ class PolicyGateTest(unittest.TestCase):
     def test_log_llm_decision_records_token_policy_result(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch("research_agent.paths.project_root", return_value=root):
                 result = log_llm_decision(
                     "demo",
                     "trial_001",
