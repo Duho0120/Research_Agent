@@ -40,7 +40,9 @@ from kaggle_research_agent.trial_artifacts import (  # noqa: E402
 from kaggle_research_agent.workspace_after_coding import run_workspace_after_coding  # noqa: E402
 from kaggle_research_agent.workspace_code_writer import run_workspace_code_writer  # noqa: E402
 from kaggle_research_agent.workspace_coding_handoff import (  # noqa: E402
+    DATA_LOADER_INIT_TRIAL_ID,
     HARNESS_INIT_TRIAL_ID,
+    generate_data_loader,
     generate_scoring_harness,
     prepare_workspace_coding_handoff,
 )
@@ -757,6 +759,18 @@ def run_code_writer_trial(
                         next_action="force_replan_next_cycle",
                     )
             return last_blocked
+        if allow_api and trial_id not in {HARNESS_INIT_TRIAL_ID, DATA_LOADER_INIT_TRIAL_ID}:
+            # The loader comes first: the harness calls into it, so a harness
+            # generated against a broken loader can only be wrong.
+            loader_status = generate_data_loader(
+                competition, model=model, provider=provider, allow_api=allow_api
+            )
+            if loader_status.get("status") == "blocked":
+                print(
+                    "One-time data loader generation was blocked; continuing this trial without "
+                    "the score stage for now (see loader_status for details).",
+                    flush=True,
+                )
         if allow_api and trial_id != HARNESS_INIT_TRIAL_ID:
             # Only attempted once the code writer's own result was accepted
             # -- that means predict_step.py just passed the scoring interface

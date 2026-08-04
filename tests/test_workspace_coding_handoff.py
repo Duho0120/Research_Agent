@@ -1307,3 +1307,97 @@ def _indent(text: str) -> str:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DataLoaderGenerationTest(unittest.TestCase):
+    """The loader is a competition-level asset: generated once, locked from
+    trials, and accepted only if RUNNING it produces usable samples. Static
+    checks were bypassed repeatedly, including by a loader that walked the
+    sample directory and still returned rows carrying nothing but ids."""
+
+    def _setup(self, root):
+        project = root / "external_project"
+        (project / "src").mkdir(parents=True)
+        (project / "outputs").mkdir()
+        (project / "predict.py").write_text("def predict(s):\n    return s\n", encoding="utf-8")
+        (root / "python.exe").write_text("py", encoding="utf-8")
+        comp = root / "competitions" / "demo"
+        comp.mkdir(parents=True)
+        simple_yaml.dump(
+            {
+                "schema_version": "1.0",
+                "competition": "demo",
+                "platform": "dacon",
+                "project_root": str(project),
+                "python": str(root / "python.exe"),
+                "commands": {"test": ["{python} t.py"], "train": ["{python} tr.py"], "predict": ["{python} predict.py"]},
+                "artifacts": {"metrics": ["outputs/metrics.json"], "submission": ["outputs/submission.csv"]},
+                "write_scope": {"allowed": ["src/", "predict.py"], "forbidden": ["data/"]},
+                "submission_mode": "manual_external",
+            },
+            comp / "execution_profile.yaml",
+        )
+        (comp / "competition_data_card.json").write_text(json.dumps({"task_type": "unknown"}), encoding="utf-8")
+        return project
+
+    def test_generated_loader_is_kept_only_when_it_runs_and_returns_features(self):
+        from kaggle_research_agent.workspace_coding_handoff import generate_data_loader
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._setup(root)
+
+            def accept(*args, **kwargs):
+                (project / "data_loader.py").write_text("# generated\n", encoding="utf-8")
+                return {"status": "accepted", "changed_files": ["data_loader.py"]}
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.workspace_coding_handoff.run_workspace_code_writer", side_effect=accept):
+                    with patch(
+                        "kaggle_research_agent.workspace_coding_handoff.run_sample_loading_probe",
+                        return_value={"train": {"count": 5, "head_ids": ["A"], "feature_keys": ["x"]},
+                                      "test": {"count": 2, "head_ids": ["B"], "feature_keys": ["x"]},
+                                      "deterministic": True},
+                    ):
+                        result = generate_data_loader("demo", model="gpt-5", provider="openai", allow_api=True)
+
+            self.assertEqual("completed", result["status"])
+            self.assertTrue((project / "data_loader.py").exists())
+
+    def test_loader_that_returns_ids_without_features_is_rejected_and_removed(self):
+        from kaggle_research_agent.workspace_coding_handoff import generate_data_loader
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._setup(root)
+
+            def accept(*args, **kwargs):
+                (project / "data_loader.py").write_text("# id-only loader\n", encoding="utf-8")
+                return {"status": "accepted", "changed_files": ["data_loader.py"]}
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.workspace_coding_handoff.run_workspace_code_writer", side_effect=accept):
+                    with patch(
+                        "kaggle_research_agent.workspace_coding_handoff.run_sample_loading_probe",
+                        return_value={"train": {"count": 10000, "head_ids": ["A"], "feature_keys": []},
+                                      "test": {"count": 10000, "head_ids": ["B"], "feature_keys": []},
+                                      "deterministic": True},
+                    ):
+                        result = generate_data_loader("demo", model="gpt-5", provider="openai", allow_api=True)
+
+            self.assertEqual("blocked", result["status"])
+            # Must not linger: its existence is the "already generated" signal.
+            self.assertFalse((project / "data_loader.py").exists())
+
+    def test_existing_loader_is_not_regenerated(self):
+        from kaggle_research_agent.workspace_coding_handoff import generate_data_loader
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._setup(root)
+            (project / "data_loader.py").write_text("# already there\n", encoding="utf-8")
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.workspace_coding_handoff.run_workspace_code_writer") as writer:
+                    result = generate_data_loader("demo", model="gpt-5", provider="openai", allow_api=True)
+            self.assertEqual("already_exists", result["status"])
+            writer.assert_not_called()

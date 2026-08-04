@@ -29,6 +29,12 @@ from .workspace_metrics_collector import _metric_name_variants
 # generation call and a reverse import would be circular.
 SCORING_HARNESS_FILENAME = "scoring_harness.py"
 
+# Data loading is a property of the COMPETITION, not of a trial: the layout
+# never changes between trials, yet regenerating predict_step.py every trial
+# gave every trial a fresh chance to break it -- which is exactly what
+# happened on 236716. Generated once, then locked like the harness.
+DATA_LOADER_FILENAME = "data_loader.py"
+
 
 def run_workspace_code_writer(
     competition: str,

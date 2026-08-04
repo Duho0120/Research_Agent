@@ -15,8 +15,10 @@ from .policies import load_policy
 from .rag_policy import evaluate_rag_policy
 from .retrieval.context_pack import build_context_pack
 from .store import load_state, read_text, write_text
-from .trial_decision import SCORING_LOGIC_AXIS, _normalize_axis
+from .trial_decision import DATA_LOADING_AXIS, SCORING_LOGIC_AXIS, _normalize_axis
+from .runtime_contract import evaluate_loader_contract, run_sample_loading_probe
 from .workspace_code_writer import (
+    DATA_LOADER_FILENAME,
     SCORING_HARNESS_FILENAME,
     run_workspace_code_writer,
     validate_workspace_coding_result,
@@ -29,6 +31,7 @@ from .workspace_code_writer import (
 # as a real trial, and its own LLM call budget is tracked separately from
 # any real trial's per-trial call cap.
 HARNESS_INIT_TRIAL_ID = "_harness_init"
+DATA_LOADER_INIT_TRIAL_ID = "_data_loader_init"
 
 
 def prepare_workspace_coding_handoff(
@@ -108,6 +111,192 @@ def prepare_workspace_coding_handoff(
         next_action=handoff["next_action"],
     )
     return handoff
+
+
+def generate_data_loader(
+    competition: str,
+    *,
+    model: str,
+    provider: str,
+    allow_api: bool,
+) -> dict[str, Any]:
+    """One-time, competition-level generation of the locked data loader.
+
+    Deliberately prescribes no loading strategy. DACON competitions differ in
+    file layout from one competition to the next, so the agent decides how to
+    read the data; we only state the contract and then VERIFY BY EXECUTION
+    (runtime_contract.py) rather than by reading the code. Static checks on
+    generated code were bypassed repeatedly -- including one loader that
+    dutifully walked the sample directory and still returned rows carrying
+    nothing but ids.
+    """
+    validation = validate_execution_profile(competition)
+    if validation["status"] != "ready":
+        return {"competition": competition, "status": "blocked", "reason": "execution_profile_not_ready"}
+    profile = load_execution_profile(competition)
+    project_root = Path(str(profile.get("project_root", "")))
+    if (project_root / DATA_LOADER_FILENAME).exists():
+        return {"competition": competition, "status": "already_exists"}
+
+    out_dir = trial_dir(competition, DATA_LOADER_INIT_TRIAL_ID)
+    instructions = _data_loader_instructions(competition)
+    instructions_file = f"experiments/{competition}/{DATA_LOADER_INIT_TRIAL_ID}/loader_instructions.md"
+    write_text(out_dir / "loader_instructions.md", instructions)
+    label_ids, submission_ids = _anchor_ids(competition, project_root)
+
+    coding_feedback: dict[str, Any] | None = None
+    result: dict[str, Any] = {}
+    for attempt in range(1, 3):
+        handoff = _build_asset_handoff(
+            competition,
+            profile,
+            trial_id=DATA_LOADER_INIT_TRIAL_ID,
+            asset_filename=DATA_LOADER_FILENAME,
+            objective="Write the one-time data loader for this competition.",
+            context_files=[instructions_file],
+            coding_feedback=coding_feedback,
+        )
+        write_text(
+            out_dir / "workspace_coding_handoff.json", json.dumps(handoff, ensure_ascii=False, indent=2) + "\n"
+        )
+        write_text(
+            out_dir / "workspace_coding_agent_request.md",
+            render_workspace_coding_request(handoff, instructions),
+        )
+        result = run_workspace_code_writer(
+            competition, DATA_LOADER_INIT_TRIAL_ID, model=model, provider=provider, allow_api=allow_api
+        )
+        runtime_issues: list[str] = []
+        if result.get("status") == "accepted":
+            facts = run_sample_loading_probe(
+                project_root, str(profile.get("python") or "python"), Path(DATA_LOADER_FILENAME).stem
+            )
+            runtime_issues = evaluate_loader_contract(
+                facts, label_ids=label_ids, submission_ids=submission_ids
+            )
+            write_text(
+                out_dir / "loader_runtime_check.json",
+                json.dumps({"facts": facts, "issues": runtime_issues}, ensure_ascii=False, indent=2) + "\n",
+            )
+            log_decision(
+                competition,
+                DATA_LOADER_INIT_TRIAL_ID,
+                decision_type="data_loader_runtime_check",
+                decision="passed" if not runtime_issues else "blocked",
+                reason="Generated data loader was executed and its output checked against the anchors.",
+                evidence={"issues": runtime_issues},
+                next_action="use-data-loader" if not runtime_issues else "regenerate-data-loader",
+            )
+            if not runtime_issues:
+                return {"competition": competition, "status": "completed", "code_writer": result}
+        # Same reasoning as the harness: the writer applies files before
+        # validation, so a rejected loader is already on disk and its mere
+        # existence would be read as "already generated" forever.
+        loader_path = project_root / DATA_LOADER_FILENAME
+        if loader_path.exists():
+            loader_path.unlink()
+        if attempt == 1:
+            rejected = _unique([*(result.get("issues") or []), *runtime_issues])
+            if not rejected:
+                break
+            coding_feedback = {"changed_files": [DATA_LOADER_FILENAME], "rejected_issues": rejected}
+            continue
+        break
+    return {"competition": competition, "status": "blocked", "code_writer": result}
+
+
+def _anchor_ids(competition: str, project_root: Path) -> tuple[set[str] | None, list[str] | None]:
+    """Read the two structure-independent anchors: the submission template
+    and the label source. Returns (None, None) parts when a card does not
+    declare them -- the contract check then simply skips those assertions."""
+    card = _load_json_object(competition_dir(competition) / "competition_data_card.json") or {}
+    submission_name = str(card.get("sample_submission_file") or "").strip()
+    label_name = ""
+    for group in card.get("directory_datasets") or []:
+        for ref in group.get("id_matched_files") or []:
+            candidate = str(ref).split(":")[0].strip()
+            if candidate and candidate != submission_name:
+                label_name = candidate
+                break
+    if not label_name:
+        for item in card.get("files") or []:
+            name = str(item.get("name") or "")
+            if "label" in name.lower() or str(item.get("role")) == "train":
+                label_name = name
+                break
+    return (
+        _read_id_column(project_root, label_name) or None,
+        _read_id_list(project_root, submission_name) or None,
+    )
+
+
+def _find_data_file(project_root: Path, name: str) -> Path | None:
+    if not name:
+        return None
+    for candidate in (project_root / name, project_root / "data" / name):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _read_id_list(project_root: Path, name: str) -> list[str]:
+    path = _find_data_file(project_root, name)
+    if path is None:
+        return []
+    import csv
+
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        field = (reader.fieldnames or [None])[0]
+        return [str(row.get(field)) for row in reader] if field else []
+
+
+def _read_id_column(project_root: Path, name: str) -> set[str]:
+    return set(_read_id_list(project_root, name))
+
+
+def _data_loader_instructions(competition: str) -> str:
+    overview = read_text(competition_dir(competition) / "overview.md", default="").strip()
+    data_notes = read_text(competition_dir(competition) / "data_notes.md", default="").strip()
+    card = read_text(competition_dir(competition) / "competition_data_card.md", default="").strip()
+    lines = [
+        "# One-Time Data Loader Generation",
+        "",
+        "This is not a modeling trial. Write data_loader.py: the single file that knows how this "
+        "competition stores its data. Every future trial reuses it unchanged, so the modeling code never "
+        "has to know the layout.",
+        "",
+        "## Required interface",
+        "",
+        "- `load_samples(data_dir: Path, split: str) -> list[Sample]` where split is 'train' or 'test'.",
+        "- Each returned sample must carry its `id` AND its ACTUAL FEATURE VALUES. Returning ids alone is "
+        "the single most common failure here: it looks like a working loader, but a sample with no "
+        "features cannot be learned from or scored against.",
+        "- Also declare, as module-level constants, where you found things: `LABEL_SOURCE`, "
+        "`SUBMISSION_TEMPLATE`, and `SAMPLE_ID_SOURCE`. These are checked against reality.",
+        "",
+        "## How this is verified",
+        "",
+        "- After you respond, this loader is EXECUTED and its output inspected. Passing depends on what "
+        "it actually returns, not on how the code reads, so there is nothing to be gained from code that "
+        "merely looks compliant.",
+        "- Checks: samples carry features beyond ids; train ids intersect the label source; the train "
+        "count is comparable to the label count; test ids match the submission template in set and order; "
+        "repeated calls agree.",
+        "",
+        "## Rules",
+        "",
+        "- Read the REAL layout described below. Do not assume a flat train.csv/test.csv exists.",
+        "- Never fabricate or synthesize data.",
+        "- If the expected files are missing, RAISE. Never silently fall back to another source (e.g. "
+        "reading ids out of the submission template): a quiet fallback produces a loader that runs "
+        "cleanly and returns nothing usable, which is far worse than a loud failure.",
+        "",
+    ]
+    for title, body in (("Data Card", card), ("Data Notes", data_notes), ("Competition Overview", overview)):
+        if body:
+            lines.extend([f"## {title}", "", body, ""])
+    return "\n".join(lines)
 
 
 def generate_scoring_harness(
@@ -243,6 +432,111 @@ def generate_scoring_harness(
             continue
         break
     return {"competition": competition, "status": "blocked", "code_writer": result}
+
+
+def _build_asset_handoff(
+    competition: str,
+    profile: dict[str, Any],
+    *,
+    trial_id: str,
+    asset_filename: str,
+    objective: str,
+    context_files: list[str],
+    coding_feedback: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Handoff for a one-time, competition-level asset (loader / harness).
+
+    Scoped to exactly one writable file, with everything the trials own --
+    and the other locked asset -- listed as forbidden.
+    """
+    artifacts = profile.get("artifacts", {}) if profile else {}
+    commands = profile.get("commands", {}) if profile else {}
+    predict_commands = list(commands.get("predict", [])) if isinstance(commands, dict) else []
+    validation_commands = list(commands.get("test", [])) if isinstance(commands, dict) else []
+    scope = profile.get("write_scope", {}) if profile else {}
+    metrics_paths = artifacts.get("metrics", []) if isinstance(artifacts, dict) else []
+    other_assets = [DATA_LOADER_FILENAME, SCORING_HARNESS_FILENAME]
+    forbidden = _unique(
+        [
+            *artifacts.get("metrics", []),
+            *artifacts.get("submission", []),
+            "data/",
+            *(list(scope.get("allowed", [])) if isinstance(scope, dict) else []),
+            *[name for name in other_assets if name != asset_filename],
+        ]
+    )
+    return {
+        "schema_version": "1.0",
+        "request_id": f"{competition}:{trial_id}:workspace-coding",
+        "competition": competition,
+        "trial_id": trial_id,
+        "handoff_type": "workspace_coding_agent_request",
+        "status": "ready",
+        "objective": objective,
+        "project_root": profile.get("project_root"),
+        "platform": profile.get("platform"),
+        "continuation_mode": None,
+        "source_trial_id": None,
+        "code_base_trial_id": None,
+        "recommended_base_trial": None,
+        "pending_human_review": False,
+        "review_source_trial": None,
+        "context_files": list(context_files),
+        "snapshot_mode": "standard",
+        "retry_reason": "asset_generation_review_feedback" if coding_feedback else None,
+        "runtime_failure_context": {},
+        "coding_feedback": coding_feedback or {},
+        "retrieval_context": {
+            "task": "competition_asset_generation",
+            "document_count": 0,
+            "documents": [],
+            "skipped": True,
+            "skip_reason": "one_time_asset_generation_no_rag",
+        },
+        "data_card_summary": _load_data_card_summary(competition),
+        "edit_policy": {
+            "mode": "full_file_allowed",
+            "prefer_patch_updates": False,
+            "allow_full_file_updates": True,
+            "restore_base_before_patch": False,
+            "base_code_source": None,
+            "patch_budget": 0,
+            "patch_schema": {
+                "path": "project-root-relative file path",
+                "find": "exact existing text to replace",
+                "replace": "replacement text",
+                "reason": "short reason for the localized change",
+            },
+        },
+        "allowed_write_paths": [asset_filename],
+        "forbidden_paths": forbidden,
+        "validation_commands": validation_commands,
+        "predict_commands": predict_commands,
+        "execution_constraints": {
+            "do_not_run_training": True,
+            "do_not_submit": True,
+            "do_not_edit_data_or_outputs": True,
+            "do_not_write_outside_allowed_paths": True,
+            "use_project_root_as_cwd": True,
+            "base_trial_code_is_authoritative": False,
+        },
+        "metrics_output_contract": _metrics_output_contract(
+            metrics_paths[0] if metrics_paths else "outputs/metrics.json"
+        ),
+        "scoring_interface_contract": None,
+        "artifact_policy": load_policy("artifact_policy"),
+        "required_output": {
+            "json_file": f"experiments/{competition}/{trial_id}/workspace_coding_result.json",
+            "markdown_file": f"experiments/{competition}/{trial_id}/workspace_coding_result.md",
+            "required_fields": ["status", "summary", "changed_files", "validation_results", "blocking_issues"],
+            "status_values": ["completed", "blocked", "failed"],
+            "next_action": "validate-workspace-code-change",
+        },
+        "profile_validation_status": "ready",
+        "profile_validation_issues": [],
+        "blocking_issues": [],
+        "next_action": "send-to-workspace-coding-agent",
+    }
 
 
 def _build_harness_generation_handoff(
@@ -484,12 +778,13 @@ def _build_handoff(
     restore_base_before_patch = bool(code_base_trial_id and base_code_files and not is_runtime_repair)
     delta_plan = _load_json_object(out_dir / "delta_plan.json") or {}
     primary_axis = _normalize_axis(delta_plan.get("primary_change_axis")) if isinstance(delta_plan, dict) else ""
-    if primary_axis == SCORING_LOGIC_AXIS:
-        forbidden = [p for p in forbidden if p != SCORING_HARNESS_FILENAME]
-        if SCORING_HARNESS_FILENAME not in allowed:
-            allowed = [*allowed, SCORING_HARNESS_FILENAME]
-    elif SCORING_HARNESS_FILENAME not in forbidden:
-        forbidden = [*forbidden, SCORING_HARNESS_FILENAME]
+    for axis_name, asset in ((SCORING_LOGIC_AXIS, SCORING_HARNESS_FILENAME), (DATA_LOADING_AXIS, DATA_LOADER_FILENAME)):
+        if primary_axis == axis_name:
+            forbidden = [p for p in forbidden if p != asset]
+            if asset not in allowed:
+                allowed = [*allowed, asset]
+        elif asset not in forbidden:
+            forbidden = [*forbidden, asset]
     if status == "ready" and not is_runtime_repair:
         # Check the plan's own Find: hints against the base trial's actual
         # code before any code-writing LLM call is spent generating a patch

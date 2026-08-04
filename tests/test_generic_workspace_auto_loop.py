@@ -18,11 +18,10 @@ class GenericWorkspaceAutoLoopTest(unittest.TestCase):
         # exist -- default it to "already there" for every test so existing
         # trial-level behavior tests aren't coupled to harness generation.
         # Tests that specifically exercise harness generation override this.
-        patcher = patch.object(
-            generic_workspace_auto_loop, "generate_scoring_harness", return_value={"status": "already_exists"}
-        )
-        self.addCleanup(patcher.stop)
-        patcher.start()
+        for name in ("generate_scoring_harness", "generate_data_loader"):
+            patcher = patch.object(generic_workspace_auto_loop, name, return_value={"status": "already_exists"})
+            self.addCleanup(patcher.stop)
+            patcher.start()
 
     def test_only_an_interrupted_langgraph_process_is_resumable(self):
         state = {

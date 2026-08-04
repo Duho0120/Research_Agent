@@ -666,9 +666,16 @@ _AXIS_PREFIX_SYNONYMS = {
     "scoring": "scoring_logic",
     "scoring_method": "scoring_logic",
     "scoring_harness": "scoring_logic",
+    # Improving how the competition's data is read is its own axis, so the
+    # locked loader can be unlocked deliberately instead of by accident.
+    "data_loader": "data_loading",
+    "data_load": "data_loading",
+    "loader": "data_loading",
+    "feature_extraction_from_raw_files": "data_loading",
 }
 
 SCORING_LOGIC_AXIS = "scoring_logic"
+DATA_LOADING_AXIS = "data_loading"
 
 
 def _normalize_axis(axis: Any) -> str:
