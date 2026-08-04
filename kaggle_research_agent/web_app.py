@@ -21,10 +21,12 @@ from .cli_app import (
     _format_insight_plan_message,
     _keep_latest_user_insight,
     _latest_user_insight,
+    _load_profile_safely,
     _normalize_competition_id,
     _normalize_workspace_source_path,
     _propose_new_experiment_settings,
     _sqlite_trial_rows,
+    check_dacon_submission_limit,
     delete_experiment,
     experiment_snapshot,
     list_pending_requests,
@@ -34,7 +36,13 @@ from .cli_app import (
     request_experiment_stop,
     select_competition,
     selected_competition,
+    set_dacon_submission_limit_override,
+    dacon_auto_submit_allowed,
+    refresh_dacon_competition_docs,
+    set_dacon_auto_submit,
+    set_dacon_team_name,
     start_experiment,
+    submit_trial_manually,
 )
 from .chat_history import (
     answer_chat_question,
@@ -86,6 +94,27 @@ def app_state(*, sync: bool = False) -> dict[str, Any]:
     }
 
 
+def dacon_submission_limit_snapshot(competition: str) -> dict[str, Any]:
+    profile = _load_profile_safely(competition)
+    platform = str(profile.get("platform") or "").casefold()
+    if platform != "dacon":
+        return {"ok": True, "applicable": False}
+    try:
+        result = check_dacon_submission_limit(competition)
+    except Exception as exc:  # noqa: BLE001 - a live network/scrape call, must not break the dashboard
+        return {
+            "ok": True,
+            "applicable": True,
+            "status": "unknown",
+            "daily_submission_limit": None,
+            "remaining": None,
+            "next_reset_estimate": None,
+            "message": f"제출 한도 조회 중 오류가 발생했습니다: {exc}",
+            "auto_submit": dacon_auto_submit_allowed(competition),
+        }
+    return {"ok": True, "applicable": True, "auto_submit": dacon_auto_submit_allowed(competition), **result}
+
+
 def render_status_text(snapshot: dict[str, Any]) -> str:
     return render_snapshot(snapshot)
 
@@ -100,6 +129,11 @@ class ResearchAgentHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/status":
             self._send_json(app_state())
+            return
+        if parsed.path == "/api/dacon-submission-limit":
+            query = parse_qs(parsed.query)
+            competition = clean((query.get("competition") or [""])[0]) or selected_competition()
+            self._send_json(dacon_submission_limit_snapshot(competition))
             return
         if parsed.path == "/api/chat/history":
             query = parse_qs(parsed.query)
@@ -156,6 +190,47 @@ class ResearchAgentHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/action":
             self._handle_action()
+            return
+        if parsed.path == "/api/dacon-submission-limit":
+            data = self._form_data()
+            competition = clean((data.get("competition") or [""])[0]) or selected_competition()
+            raw_value = clean((data.get("value") or [""])[0])
+            try:
+                value = int(raw_value)
+                if value <= 0:
+                    raise ValueError
+            except ValueError:
+                self._send_json(
+                    {"ok": False, "message": "1 이상의 정수를 입력해주세요."},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+                return
+            set_dacon_submission_limit_override(competition, value)
+            self._send_json(dacon_submission_limit_snapshot(competition))
+            return
+        if parsed.path == "/api/submit-trial":
+            data = self._form_data()
+            competition = clean((data.get("competition") or [""])[0]) or selected_competition()
+            trial_id = clean((data.get("trial_id") or [""])[0])
+            if not trial_id:
+                self._send_json({"ok": False, "message": "trial_id가 필요합니다."}, status=HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                result = submit_trial_manually(competition, trial_id)
+            except Exception as error:
+                self._send_json(
+                    {"ok": False, "message": f"제출 중 오류가 발생했습니다: {error}"},
+                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
+                return
+            self._send_json(result, status=HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
+            return
+        if parsed.path == "/api/dacon-auto-submit":
+            data = self._form_data()
+            competition = clean((data.get("competition") or [""])[0]) or selected_competition()
+            enabled = (data.get("enabled") or [""])[0] in {"1", "true", "on"}
+            set_dacon_auto_submit(competition, enabled)
+            self._send_json(dacon_submission_limit_snapshot(competition))
             return
         if parsed.path == "/api/insight":
             data = self._form_data()
@@ -409,6 +484,14 @@ def create_experiment_from_form(data: dict[str, list[str]]) -> tuple[str, str | 
         id_column=str(settings.get("id_column") or "") or None,
         required_data_files=list(settings.get("required_data_files") or []),
     )
+    dacon_team_name = clean((data.get("dacon_team_name") or [""])[0])
+    if dacon_team_name:
+        set_dacon_team_name(competition, dacon_team_name)
+    if str(settings.get("platform") or "").casefold() == "dacon":
+        try:
+            refresh_dacon_competition_docs(competition)
+        except Exception:  # noqa: BLE001 - best-effort; must never block registration
+            pass
     select_competition(competition)
     return f"{competition} 실험을 등록하고 선택했습니다. 상태: {result.get('status')}", competition
 
@@ -638,6 +721,12 @@ def render_home(
         {metric_card("최근 완료", latest_metric(snapshot))}
         {metric_card("베스트", best_metric(snapshot))}
         {metric_card("피드백 요청", len(pending))}
+        {metric_card(
+            "제출 한도",
+            '<span id="dacon-submission-limit-value">-</span> '
+            '<button type="button" class="secondary" data-open-modal="dacon-limit-modal" id="dacon-submission-limit-edit-toggle" hidden>설정</button>'
+            '<div id="dacon-submission-limit-reset-hint" class="hint"></div>',
+        )}
       </section>
 
       {progress_panel(snapshot)}
@@ -678,6 +767,9 @@ def render_home(
             </div>
             <label class="check"><input type="checkbox" name="continuous" value="1" data-continuous-toggle> 중단 요청 전까지 계속 진행</label>
           </form>
+          <label class="check" id="dacon-auto-submit-row" hidden>
+            <input type="checkbox" id="dacon-auto-submit-checkbox"> 자동 제출 허용 (제출 한도가 있는 대회)
+          </label>
           <div class="control-actions divided">
             <form method="post" action="/action">
               {hidden("action", "stop")}
@@ -830,6 +922,12 @@ def new_experiment_panel(settings: dict[str, Any] | None = None) -> str:
               </div>
               <div class="two">
                 <div class="field">
+                  <label for="new-experiment-dacon-team">데콘 팀명 (선택)</label>
+                  <input id="new-experiment-dacon-team" name="dacon_team_name" value="{escape(settings.get("dacon_team_name") or "")}" placeholder="비워두면 로컬로만 진행 (제출 없음)">
+                </div>
+              </div>
+              <div class="two">
+                <div class="field">
                   <label for="new-experiment-metric">평가지표</label>
                   <input id="new-experiment-metric" name="metric" value="{escape(settings.get("metric") or "")}" placeholder="평가지표">
                 </div>
@@ -903,6 +1001,26 @@ def delete_experiment_modal(snapshot: dict[str, Any]) -> str:
                 <button type="submit" class="danger" id="delete-confirm-submit" disabled data-expected="{escape(expected_text)}">지우기</button>
               </div>
             </form>
+          </div>
+        </section>
+      </div>
+
+      <div class="modal-backdrop" id="dacon-limit-modal" hidden>
+        <section class="modal" role="dialog" aria-modal="true" aria-labelledby="dacon-limit-modal-title">
+          <div class="modal-head">
+            <div>
+              <p class="eyebrow">DACON</p>
+              <h2 id="dacon-limit-modal-title">제출 한도 설정</h2>
+            </div>
+            <button type="button" class="icon-button" data-close-modal aria-label="닫기">×</button>
+          </div>
+          <p class="hint">하루 제출 가능 횟수를 직접 입력합니다. 자동으로 확인된 값보다 우선 적용됩니다.</p>
+          <div class="stack">
+            <input type="number" min="1" id="dacon-submission-limit-input" placeholder="예: 5">
+            <div class="button-row two">
+              <button type="button" class="secondary" data-close-modal>취소</button>
+              <button type="button" id="dacon-submission-limit-save">저장</button>
+            </div>
           </div>
         </section>
       </div>
@@ -1051,22 +1169,31 @@ def trial_table(competition: str, *, snapshot: dict[str, Any] | None = None) -> 
         if is_planned:
             axis = "-"
         plan = str(row.get("improvement_plan") or "-")
+        source_trial_id = str(row.get("source_trial_id") or "-")
+        submit_cell = (
+            f'<button type="button" class="secondary" data-submit-trial'
+            f' data-competition="{escape(competition)}" data-trial-id="{escape(trial_id)}">제출</button>'
+            if not is_planned and row.get("lb_score") is None
+            else "-"
+        )
         body.append(
             '<tr data-trial-row>'
             f"<td>{escape(trial_id)}</td>"
             f"<td>{trial_status_badge(display_status)}</td>"
+            f"<td>{escape(source_trial_id)}</td>"
             f"<td>{escape(_compact_score(row.get('local_score')))}</td>"
             f"<td>{escape(_compact_score(row.get('lb_score')))}</td>"
             f"<td>{_tooltip_cell(axis, 28)}</td>"
             f"<td>{_tooltip_cell(plan, 34)}</td>"
             f"<td>{best_badge(_best_label(row))}</td>"
+            f"<td>{submit_cell}</td>"
             f"<td>{trial_artifact_links(competition, trial_id, planned=is_planned)}</td>"
             f"<td><details><summary>보기</summary><pre>{escape(detail)}</pre></details></td>"
             "</tr>"
         )
     return (
         '<div class="table-wrap"><table class="trial-table" data-page-size="5">'
-        "<thead><tr><th>trial</th><th>상태</th><th>local</th><th>submit</th><th>axis</th><th>plan</th><th>best</th><th>산출물</th><th>상세</th></tr></thead>"
+        "<thead><tr><th>trial</th><th>상태</th><th>기준</th><th>local</th><th>submit</th><th>axis</th><th>plan</th><th>best</th><th>제출</th><th>산출물</th><th>상세</th></tr></thead>"
         f'<tbody>{("").join(body)}</tbody></table></div>'
         '<nav class="pagination" aria-label="Trial 목록 페이지" data-trial-pagination></nav>'
     )
@@ -1513,6 +1640,117 @@ def page(*, title: str, body: str) -> str:
 <body>
   {body}
   <script>
+    (function setupDaconSubmissionLimit() {{
+      const valueEl = document.getElementById("dacon-submission-limit-value");
+      if (!valueEl) return;
+      const card = valueEl.closest(".metric");
+      const editToggle = document.getElementById("dacon-submission-limit-edit-toggle");
+      const resetHintEl = document.getElementById("dacon-submission-limit-reset-hint");
+      const editInput = document.getElementById("dacon-submission-limit-input");
+      const saveButton = document.getElementById("dacon-submission-limit-save");
+      const limitModal = document.getElementById("dacon-limit-modal");
+      const autoSubmitRow = document.getElementById("dacon-auto-submit-row");
+      const autoSubmitCheckbox = document.getElementById("dacon-auto-submit-checkbox");
+
+      function renderValue(data) {{
+        const isManual = data.status === "manual_override";
+        if (data.daily_submission_limit == null) {{
+          valueEl.textContent = "확인 안됨";
+        }} else if (data.remaining == null) {{
+          // Limit known, but the remaining count couldn't be computed (e.g.
+          // no/expired DACON session token) -- show the limit alone rather
+          // than a broken "?/5".
+          valueEl.innerHTML = `<strong>${{data.daily_submission_limit}}</strong>회${{isManual ? " (직접입력)" : ""}}`;
+        }} else {{
+          valueEl.innerHTML = `<strong>${{data.remaining}}</strong> / ${{data.daily_submission_limit}}${{isManual ? " (직접입력)" : ""}}`;
+        }}
+        valueEl.title = data.message || "";
+        if (resetHintEl) {{
+          resetHintEl.textContent = data.next_reset_estimate
+            ? `예상 다음 초기화: ${{data.next_reset_estimate}}`
+            : "";
+        }}
+        if (autoSubmitCheckbox) autoSubmitCheckbox.checked = !!data.auto_submit;
+      }}
+
+      function loadDaconSubmissionLimit() {{
+        fetch("/api/dacon-submission-limit")
+          .then((response) => response.json())
+          .then((data) => {{
+            if (!data.applicable) {{
+              if (card) card.hidden = true;
+              return;
+            }}
+            renderValue(data);
+            if (editToggle) editToggle.hidden = false;
+            if (autoSubmitRow) autoSubmitRow.hidden = false;
+          }})
+          .catch(() => {{
+            valueEl.textContent = "확인 안됨";
+          }});
+      }}
+
+      if (autoSubmitCheckbox) {{
+        autoSubmitCheckbox.addEventListener("change", () => {{
+          const body = new URLSearchParams({{ enabled: autoSubmitCheckbox.checked ? "1" : "0" }});
+          fetch("/api/dacon-auto-submit", {{ method: "POST", body }})
+            .then((response) => response.json())
+            .then((data) => {{
+              if (data.ok === false) {{
+                autoSubmitCheckbox.checked = !autoSubmitCheckbox.checked;
+                return;
+              }}
+              renderValue(data);
+            }});
+        }});
+      }}
+
+      if (saveButton && editInput) {{
+        saveButton.addEventListener("click", () => {{
+          const value = editInput.value;
+          if (!value || Number(value) <= 0) return;
+          const body = new URLSearchParams({{ value }});
+          fetch("/api/dacon-submission-limit", {{ method: "POST", body }})
+            .then((response) => response.json())
+            .then((data) => {{
+              if (data.ok === false) return;
+              renderValue(data);
+              if (limitModal) setModalOpen(limitModal, false);
+              editInput.value = "";
+            }});
+        }});
+      }}
+
+      loadDaconSubmissionLimit();
+    }})();
+
+    document.querySelectorAll("[data-submit-trial]").forEach((button) => {{
+      button.addEventListener("click", () => {{
+        const competition = button.dataset.competition;
+        const trialId = button.dataset.trialId;
+        const original = button.textContent;
+        button.disabled = true;
+        button.textContent = "제출 중...";
+        const body = new URLSearchParams({{ competition, trial_id: trialId }});
+        fetch("/api/submit-trial", {{ method: "POST", body }})
+          .then((response) => response.json())
+          .then((data) => {{
+            if (data.ok === false) {{
+              button.disabled = false;
+              button.textContent = original;
+              window.alert(data.message || "제출에 실패했습니다.");
+              return;
+            }}
+            window.location.reload();
+          }})
+          .catch(() => {{
+            button.disabled = false;
+            button.textContent = original;
+            window.alert("제출 요청 중 오류가 발생했습니다.");
+          }});
+      }});
+    }});
+
     const modalOpenButtons = document.querySelectorAll("[data-open-modal]");
     const modalCloseButtons = document.querySelectorAll("[data-close-modal]");
     document.querySelectorAll("[data-continuous-toggle]").forEach((toggle) => {{

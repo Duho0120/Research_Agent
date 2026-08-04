@@ -12,9 +12,15 @@ from .agents.policy_gate import classify_local_failure
 from .execution_profile import load_execution_profile, validate_execution_profile
 from .paths import trial_dir
 from .store import write_text
+from .workspace_code_writer import SCORING_HARNESS_FILENAME
 
 
-STAGE_ORDER = ("test", "train", "predict")
+# "score" always runs last and is unconditional once the harness exists --
+# see _render_commands, which only populates a "score" command when
+# scoring_harness.py is actually present on disk, so an incomplete/blocked
+# harness generation cannot break the test/train/predict stages that already
+# worked before this stage was added.
+STAGE_ORDER = ("test", "train", "predict", "score")
 
 
 def run_workspace_pipeline(
@@ -93,7 +99,11 @@ def run_workspace_pipeline(
 
 def _render_commands(profile: dict[str, Any]) -> dict[str, list[str]]:
     python_command = subprocess.list2cmdline([str(profile["python"])])
-    configured = profile.get("commands", {})
+    configured = dict(profile.get("commands", {}))
+    if "score" not in configured:
+        project_root = Path(str(profile.get("project_root", "")))
+        if (project_root / SCORING_HARNESS_FILENAME).is_file():
+            configured["score"] = [f"{{python}} {SCORING_HARNESS_FILENAME}"]
     return {
         stage: [command.replace("{python}", python_command) for command in configured.get(stage, [])]
         for stage in STAGE_ORDER
@@ -138,8 +148,13 @@ def _execute_commands(result: dict[str, Any], profile: dict[str, Any]) -> None:
             result["command_results"].append(command_result)
             if completed.returncode != 0:
                 result["status"] = "failed"
+                result["failed_stage"] = stage
                 result["failure"] = classify_local_failure(log_path, use_artifact=False)
-                result["next_action"] = "fix-workspace-command"
+                # A "score" failure is a scoring-harness bug, not a model
+                # problem -- surfacing a distinct next_action stops it from
+                # being reported the same way as an actual train/predict
+                # failure, which would send someone looking at the wrong code.
+                result["next_action"] = "fix-scoring-harness" if stage == "score" else "fix-workspace-command"
                 return
 
 

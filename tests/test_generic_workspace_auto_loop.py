@@ -12,6 +12,18 @@ from scripts import generic_workspace_auto_loop
 
 
 class GenericWorkspaceAutoLoopTest(unittest.TestCase):
+    def setUp(self):
+        # run_code_writer_trial() now generates the one-time scoring harness
+        # before a trial's own code-writer attempt when it does not already
+        # exist -- default it to "already there" for every test so existing
+        # trial-level behavior tests aren't coupled to harness generation.
+        # Tests that specifically exercise harness generation override this.
+        patcher = patch.object(
+            generic_workspace_auto_loop, "generate_scoring_harness", return_value={"status": "already_exists"}
+        )
+        self.addCleanup(patcher.stop)
+        patcher.start()
+
     def test_only_an_interrupted_langgraph_process_is_resumable(self):
         state = {
             "graph_runtime": "langgraph",
@@ -121,6 +133,132 @@ class GenericWorkspaceAutoLoopTest(unittest.TestCase):
 
         self.assertEqual("completed", result["status"])
         self.assertEqual(["execute", "collect", "consistency", "submit", "analyze", "artifacts"], events)
+
+    def test_skips_auto_submit_when_daily_limit_known_and_auto_submit_disabled(self):
+        # Real-world concern this addresses: without this skip, the loop
+        # kept auto-submitting every trial and silently stalled once DACON
+        # rejected a submission for exceeding the daily limit.
+        events: list[str] = []
+        profile = {
+            "project_root": "C:/workspace",
+            "objective": "maximize",
+            "artifacts": {"submission": ["outputs/submission.csv"]},
+        }
+
+        def event(name, result):
+            events.append(name)
+            return result
+
+        with patch.object(generic_workspace_auto_loop, "validate_execution_profile", return_value={"status": "ready"}):
+            with patch.object(generic_workspace_auto_loop, "load_execution_profile", return_value=profile):
+                with patch.object(
+                    generic_workspace_auto_loop, "run_workspace_pipeline",
+                    side_effect=lambda *a, **k: event("execute", {"status": "completed"}),
+                ):
+                    with patch.object(
+                        generic_workspace_auto_loop, "collect_workspace_metrics",
+                        side_effect=lambda *a, **k: event(
+                            "collect", {"status": "collected", "competition": "demo", "cv_score": 0.591}
+                        ),
+                    ):
+                        with patch.object(
+                            generic_workspace_auto_loop, "reconcile_trial_execution_metadata",
+                            side_effect=lambda *a, **k: event("consistency", {"status": "ready"}),
+                        ):
+                            with patch.object(
+                                generic_workspace_auto_loop, "process_workspace_result",
+                                side_effect=lambda *a, **k: event("analyze", {"status": "completed"}),
+                            ):
+                                with patch.object(
+                                    generic_workspace_auto_loop, "organize_trial_artifacts",
+                                    side_effect=lambda *a, **k: event("artifacts", {"status": "completed"}),
+                                ):
+                                    with patch.object(
+                                        generic_workspace_auto_loop, "submit_trial",
+                                        side_effect=AssertionError("must not call the real submit path when skipped"),
+                                    ):
+                                        with patch.object(
+                                            generic_workspace_auto_loop, "check_dacon_submission_limit",
+                                                return_value={"daily_submission_limit": 5}
+                                        ):
+                                            with patch.object(
+                                                generic_workspace_auto_loop, "dacon_auto_submit_allowed", return_value=False
+                                            ):
+                                                with patch.object(generic_workspace_auto_loop, "write_loop_trial_result"):
+                                                    with patch.object(generic_workspace_auto_loop, "save_loop_state"):
+                                                        result = generic_workspace_auto_loop.run_one_trial(
+                                                            "demo",
+                                                            "trial_004",
+                                                            submit=True,
+                                                            kaggle_slug=None,
+                                                            poll_attempts=1,
+                                                            poll_interval_seconds=0,
+                                                            dacon_competition_id="236716",
+                                                            dacon_team_name="뚜로",
+                                                        )
+
+        self.assertEqual("completed", result["status"])
+        self.assertEqual("skipped_daily_limit_known", result["submission_run"]["status"])
+        self.assertEqual(["execute", "collect", "consistency", "analyze", "artifacts"], events)
+
+    def test_auto_submits_when_limit_known_but_auto_submit_is_enabled(self):
+        profile = {
+            "project_root": "C:/workspace",
+            "objective": "maximize",
+            "artifacts": {"submission": ["outputs/submission.csv"]},
+        }
+        with patch.object(generic_workspace_auto_loop, "validate_execution_profile", return_value={"status": "ready"}):
+            with patch.object(generic_workspace_auto_loop, "load_execution_profile", return_value=profile):
+                with patch.object(
+                    generic_workspace_auto_loop, "run_workspace_pipeline", return_value={"status": "completed"}
+                ):
+                    with patch.object(
+                        generic_workspace_auto_loop, "collect_workspace_metrics",
+                        return_value={"status": "collected", "competition": "demo", "cv_score": 0.591},
+                    ):
+                        with patch.object(
+                            generic_workspace_auto_loop, "reconcile_trial_execution_metadata",
+                            return_value={"status": "ready"},
+                        ):
+                            with patch.object(
+                                generic_workspace_auto_loop, "process_workspace_result",
+                                return_value={"status": "completed"},
+                            ):
+                                with patch.object(
+                                    generic_workspace_auto_loop, "organize_trial_artifacts",
+                                    return_value={"status": "completed"},
+                                ):
+                                    with patch.object(
+                                        generic_workspace_auto_loop, "submit_trial",
+                                        return_value={"status": "submitted", "submitted_lb_score": None},
+                                    ) as submit_mock:
+                                        with patch.object(
+                                            generic_workspace_auto_loop, "submission_artifact_path",
+                                            return_value="C:/workspace/outputs/submission.csv",
+                                        ):
+                                            with patch.object(
+                                                generic_workspace_auto_loop, "check_dacon_submission_limit",
+                                                return_value={"daily_submission_limit": 5}
+                                            ):
+                                                with patch.object(
+                                                    generic_workspace_auto_loop, "dacon_auto_submit_allowed", return_value=True
+                                                ):
+                                                    with patch.object(generic_workspace_auto_loop, "write_loop_trial_result"):
+                                                        with patch.object(generic_workspace_auto_loop, "save_loop_state"):
+                                                            result = generic_workspace_auto_loop.run_one_trial(
+                                                                "demo",
+                                                                "trial_004",
+                                                                submit=True,
+                                                                kaggle_slug=None,
+                                                                poll_attempts=1,
+                                                                poll_interval_seconds=0,
+                                                                dacon_competition_id="236716",
+                                                                dacon_team_name="뚜로",
+                                                            )
+
+        submit_mock.assert_called_once()
+        self.assertEqual("completed", result["status"])
+        self.assertEqual("submitted", result["submission_run"]["status"])
 
     def test_recovers_completed_execution_without_calling_code_writer_again(self):
         recovered = {
@@ -334,6 +472,111 @@ class GenericWorkspaceAutoLoopTest(unittest.TestCase):
             self.assertEqual("accepted", result["code_writer"]["status"])
             self.assertEqual("execution_completed", result["after_coding"]["status"])
 
+    def test_run_code_writer_generates_scoring_harness_after_a_successful_code_writer_result(self):
+        with patch.object(
+            generic_workspace_auto_loop, "generate_scoring_harness", return_value={"status": "already_exists"}
+        ) as harness_gen:
+            with patch.object(
+                generic_workspace_auto_loop, "prepare_workspace_coding_handoff", return_value={"status": "ready"}
+            ):
+                with patch.object(
+                    generic_workspace_auto_loop,
+                    "run_workspace_code_writer",
+                    return_value={"status": "accepted", "changed_files": ["predict_step.py"]},
+                ):
+                    with patch.object(
+                        generic_workspace_auto_loop,
+                        "run_workspace_after_coding",
+                        return_value={
+                            "status": "execution_completed",
+                            "workspace_run": {"status": "completed"},
+                            "metrics_collection": {"status": "collected"},
+                        },
+                    ):
+                        generic_workspace_auto_loop.run_code_writer_trial(
+                            "demo",
+                            "trial_002",
+                            model="gpt-5",
+                            provider="openai",
+                            allow_api=True,
+                            trial_llm_calls=None,
+                            strategy_calls_today=None,
+                        )
+
+        self.assertEqual(1, harness_gen.call_count)
+        self.assertEqual("demo", harness_gen.call_args.args[0])
+
+    def test_run_code_writer_continues_when_harness_generation_is_blocked(self):
+        # Ordering fix: harness generation is best-effort and must never
+        # interrupt the trial's own progress -- a locked one-time asset
+        # failing to generate is not the trial's fault, and the pipeline
+        # already degrades gracefully (no "score" stage) when the harness
+        # doesn't exist yet.
+        with patch.object(
+            generic_workspace_auto_loop,
+            "generate_scoring_harness",
+            return_value={"status": "blocked", "reason": "predict_interface_not_ready"},
+        ):
+            with patch.object(
+                generic_workspace_auto_loop, "prepare_workspace_coding_handoff", return_value={"status": "ready"}
+            ):
+                with patch.object(
+                    generic_workspace_auto_loop,
+                    "run_workspace_code_writer",
+                    return_value={"status": "accepted", "changed_files": ["predict_step.py"]},
+                ):
+                    with patch.object(
+                        generic_workspace_auto_loop,
+                        "run_workspace_after_coding",
+                        return_value={
+                            "status": "execution_completed",
+                            "workspace_run": {"status": "completed"},
+                            "metrics_collection": {"status": "collected"},
+                        },
+                    ):
+                        result = generic_workspace_auto_loop.run_code_writer_trial(
+                            "demo",
+                            "trial_002",
+                            model="gpt-5",
+                            provider="openai",
+                            allow_api=True,
+                            trial_llm_calls=None,
+                            strategy_calls_today=None,
+                        )
+
+        self.assertEqual("completed", result["status"])
+
+    def test_run_code_writer_skips_harness_generation_without_api_access(self):
+        with patch.object(generic_workspace_auto_loop, "generate_scoring_harness") as harness_gen:
+            with patch.object(
+                generic_workspace_auto_loop, "prepare_workspace_coding_handoff", return_value={"status": "ready"}
+            ):
+                with patch.object(
+                    generic_workspace_auto_loop,
+                    "run_workspace_code_writer",
+                    return_value={"status": "accepted", "changed_files": ["predict_step.py"]},
+                ):
+                    with patch.object(
+                        generic_workspace_auto_loop,
+                        "run_workspace_after_coding",
+                        return_value={
+                            "status": "execution_completed",
+                            "workspace_run": {"status": "completed"},
+                            "metrics_collection": {"status": "collected"},
+                        },
+                    ):
+                        generic_workspace_auto_loop.run_code_writer_trial(
+                            "demo",
+                            "trial_002",
+                            model="gpt-5",
+                            provider="openai",
+                            allow_api=False,
+                            trial_llm_calls=None,
+                            strategy_calls_today=None,
+                        )
+
+        harness_gen.assert_not_called()
+
     def test_run_code_writer_retries_once_with_expanded_handoff_for_missing_snapshot(self):
         handoffs = [
             {"status": "ready", "snapshot_mode": "standard"},
@@ -375,6 +618,168 @@ class GenericWorkspaceAutoLoopTest(unittest.TestCase):
         self.assertEqual("code_writer_blocked_snapshot_context", handoff.call_args_list[1].kwargs["retry_reason"])
         self.assertEqual(2, writer.call_count)
         self.assertEqual(2, result["code_writer_attempt"])
+
+    def test_run_code_writer_retries_with_corrective_feedback_after_guardrail_block(self):
+        # Real incident: the code writer skipped local validation
+        # ("validation_method": "none"), got mechanically blocked, and on
+        # retry produced the *exact same* rejected code -- because nothing
+        # ever told it which check it had tripped. The retry must carry the
+        # specific rejected issues into the next handoff, not just more base
+        # code context (that's the missing-snapshot retry path, which is
+        # different and must not be conflated with this one).
+        handoffs = [
+            {"status": "ready", "snapshot_mode": "standard"},
+            {"status": "ready", "snapshot_mode": "standard"},
+        ]
+        code_writer_results = [
+            {
+                "status": "blocked",
+                "blocking_issues": [],
+                "issues": ["local_validation_not_computed:validation_method_none"],
+                "changed_files": ["predict_step.py"],
+            },
+            {"status": "accepted", "changed_files": ["predict_step.py", "test_step.py"]},
+        ]
+        after_coding = {
+            "status": "execution_completed",
+            "workspace_run": {"status": "completed"},
+            "metrics_collection": {"status": "collected"},
+        }
+
+        with patch.object(generic_workspace_auto_loop, "prepare_workspace_coding_handoff", side_effect=handoffs) as handoff:
+            with patch.object(generic_workspace_auto_loop, "run_workspace_code_writer", side_effect=code_writer_results) as writer:
+                with patch.object(generic_workspace_auto_loop, "run_workspace_after_coding", return_value=after_coding):
+                    result = generic_workspace_auto_loop.run_code_writer_trial(
+                        "demo",
+                        "trial_002",
+                        model="gpt-5",
+                        provider="openai",
+                        allow_api=True,
+                        trial_llm_calls=None,
+                        strategy_calls_today=None,
+                    )
+
+        self.assertEqual("completed", result["status"])
+        self.assertEqual(2, handoff.call_count)
+        self.assertEqual(2, writer.call_count)
+        second_call_kwargs = handoff.call_args_list[1].kwargs
+        self.assertEqual("code_writer_blocked_review_feedback", second_call_kwargs["retry_reason"])
+        self.assertEqual(
+            ["local_validation_not_computed:validation_method_none"],
+            second_call_kwargs["coding_feedback"]["rejected_issues"],
+        )
+        self.assertEqual(["predict_step.py"], second_call_kwargs["coding_feedback"]["changed_files"])
+
+    def test_run_code_writer_marks_feedback_ignored_when_retry_repeats_same_violation(self):
+        # A retry that gets told exactly what it did wrong but does the same
+        # thing again is a different situation than a first-time block: it
+        # should be tagged so a later cycle doesn't just retry the same way.
+        handoffs = [
+            {"status": "ready", "snapshot_mode": "standard"},
+            {"status": "ready", "snapshot_mode": "standard"},
+        ]
+        code_writer_results = [
+            {
+                "status": "blocked",
+                "blocking_issues": ["forbidden_path_touched:scoring_harness.py"],
+                "issues": [],
+                "changed_files": ["scoring_harness.py"],
+            },
+            {
+                "status": "blocked",
+                "blocking_issues": ["forbidden_path_touched:scoring_harness.py"],
+                "issues": [],
+                "changed_files": ["scoring_harness.py"],
+            },
+        ]
+
+        with patch.object(generic_workspace_auto_loop, "prepare_workspace_coding_handoff", side_effect=handoffs):
+            with patch.object(
+                generic_workspace_auto_loop, "run_workspace_code_writer", side_effect=code_writer_results
+            ):
+                with patch.object(
+                    generic_workspace_auto_loop, "_previous_cycle_ignored_feedback_source_trial", return_value=None
+                ):
+                    with patch.object(generic_workspace_auto_loop, "log_decision") as log_decision:
+                        result = generic_workspace_auto_loop.run_code_writer_trial(
+                            "demo",
+                            "trial_002",
+                            model="gpt-5",
+                            provider="openai",
+                            allow_api=True,
+                            trial_llm_calls=None,
+                            strategy_calls_today=None,
+                        )
+
+        self.assertTrue(result.get("feedback_ignored"))
+        self.assertEqual(1, log_decision.call_count)
+        self.assertEqual("code_writer_feedback_ignored", log_decision.call_args.kwargs["decision_type"])
+
+    def test_run_code_writer_forces_replan_when_previous_cycle_ignored_feedback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            trial = root / "experiments" / "demo" / "trial_002"
+            trial.mkdir(parents=True)
+            (trial / "workspace_coding_handoff.json").write_text(
+                json.dumps(
+                    {
+                        "source_trial_id": "trial_001",
+                        "coding_feedback": {
+                            "rejected_issues": ["forbidden_path_touched:scoring_harness.py"],
+                            "changed_files": ["scoring_harness.py"],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (trial / "workspace_coding_result.json").write_text(
+                json.dumps(
+                    {
+                        "status": "blocked",
+                        "blocking_issues": ["forbidden_path_touched:scoring_harness.py"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            handoff = {"status": "ready", "snapshot_mode": "standard"}
+            code_writer_result = {"status": "accepted", "changed_files": ["train_step.py"]}
+            after_coding = {
+                "status": "execution_completed",
+                "workspace_run": {"status": "completed"},
+                "metrics_collection": {"status": "collected"},
+            }
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch.object(
+                    generic_workspace_auto_loop, "prepare_workspace_coding_handoff", return_value=handoff
+                ):
+                    with patch.object(
+                        generic_workspace_auto_loop,
+                        "prepare_workspace_trial_plan",
+                        return_value={"status": "planned"},
+                    ) as replanner:
+                        with patch.object(
+                            generic_workspace_auto_loop,
+                            "run_workspace_code_writer",
+                            return_value=code_writer_result,
+                        ) as writer:
+                            with patch.object(
+                                generic_workspace_auto_loop, "run_workspace_after_coding", return_value=after_coding
+                            ):
+                                result = generic_workspace_auto_loop.run_code_writer_trial(
+                                    "demo",
+                                    "trial_002",
+                                    model="gpt-5",
+                                    provider="openai",
+                                    allow_api=True,
+                                    trial_llm_calls=None,
+                                    strategy_calls_today=None,
+                                )
+
+        self.assertEqual("completed", result["status"])
+        self.assertEqual(1, replanner.call_count)
+        self.assertEqual("trial_001", replanner.call_args.kwargs["source_trial_id"])
+        self.assertEqual(1, writer.call_count)
 
     def test_run_code_writer_replans_instead_of_retrying_when_handoff_finds_plan_code_mismatch(self):
         # Regression for trial_027: the plan assumed a model-family change

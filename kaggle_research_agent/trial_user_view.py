@@ -748,10 +748,12 @@ def render_user_code_pipeline(summary: dict[str, Any], copied_files: list[str]) 
             "",
             "## 읽는 순서",
             "",
-            "1. `train_step.py`: 학습과 검증",
+            "1. `train_step.py`: 학습 (필요 없는 모델이면 생략 가능)",
             "2. `predict_step.py`: 예측과 제출 파일 생성",
-            "3. `test_step.py`: 기본 실행 검증",
-            "4. `src/`: 재사용되는 전처리/모델 로직",
+            "3. `scoring_harness.py`: 로컬 검증(홀드아웃 분리 + 점수 계산) — 대회당 최초 1회만 생성되고 "
+            "이후에는 잠겨서, 이 trial이 직접 수정한 파일이 아닐 수 있습니다.",
+            "4. `test_step.py`: 실행 전/후 구조 점검 (필요 데이터 존재 확인, 제출 파일 형식 검증 — 모델 평가 아님)",
+            "5. `src/`: 재사용되는 전처리/모델 로직",
             "",
         ]
     )

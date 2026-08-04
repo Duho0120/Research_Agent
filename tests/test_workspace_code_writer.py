@@ -8,8 +8,11 @@ from unittest.mock import patch
 
 from kaggle_research_agent.cli import main
 from kaggle_research_agent.workspace_code_writer import (
+    _context_file_prompt_limit,
     _normalize_coding_result,
+    _read_context,
     _validate_predict_test_sync,
+    build_workspace_code_writer_payload,
     run_workspace_code_writer,
     validate_workspace_coding_result,
 )
@@ -369,6 +372,584 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
             self.assertEqual("blocked", result["status"])
             self.assertIn("possible_fabricated_data_fallback:generate_synthetic", result["issues"])
             self.assertIn("possible_fabricated_data_fallback:reserved filename", result["issues"])
+
+    def test_validate_workspace_coding_result_blocks_skipped_local_validation(self):
+        # Real incident (DACON competition 236716): for a rule-based model
+        # that needs no training, the code writer skipped local holdout
+        # validation entirely and self-admitted it in the written metrics
+        # dict ("validation_method": "none") -- reproduced twice in a row in
+        # isolated-environment testing even after an explicit prompt
+        # instruction said this was never acceptable, so this mechanical
+        # check is the actual backstop, not the prompt wording alone.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_handoff(root, project, allowed_write_paths=["src/", "tests/", "predict_step.py"])
+            trial = root / "experiments" / "demo" / "trial_002"
+            (trial / "workspace_coding_result.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "summary": "Added rule-based predictor.",
+                        "changed_files": ["predict_step.py"],
+                        "file_updates": [
+                            {
+                                "path": "predict_step.py",
+                                "content": (
+                                    "metrics = {\n"
+                                    "    \"metric\": \"R-Hit@1cm\",\n"
+                                    "    \"objective\": \"maximize\",\n"
+                                    "    \"validation_method\": \"none\",\n"
+                                    "    \"model_type\": \"rule_based_constant_velocity\",\n"
+                                    "}\n"
+                                ),
+                            }
+                        ],
+                        "validation_results": [],
+                        "blocking_issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = validate_workspace_coding_result("demo", "trial_002")
+
+            self.assertEqual("blocked", result["status"])
+            self.assertIn("local_validation_not_computed:validation_method_none", result["issues"])
+
+    def test_validate_workspace_coding_result_accepts_a_real_computed_score(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_handoff(root, project, allowed_write_paths=["src/", "tests/", "predict_step.py"])
+            trial = root / "experiments" / "demo" / "trial_002"
+            (trial / "workspace_coding_result.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "summary": "Added rule-based predictor with real holdout validation.",
+                        "changed_files": ["predict_step.py"],
+                        "file_updates": [
+                            {
+                                "path": "predict_step.py",
+                                "content": (
+                                    "metrics = {\n"
+                                    "    \"metric\": \"R-Hit@1cm\",\n"
+                                    "    \"objective\": \"maximize\",\n"
+                                    "    \"validation_method\": \"random_holdout_by_id\",\n"
+                                    "    \"cv_score\": 0.591,\n"
+                                    "}\n"
+                                ),
+                            }
+                        ],
+                        "validation_results": [],
+                        "blocking_issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = validate_workspace_coding_result("demo", "trial_002")
+
+            self.assertEqual("accepted", result["status"])
+
+    def test_validate_workspace_coding_result_blocks_missing_scoring_interface_functions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_handoff(
+                root,
+                project,
+                allowed_write_paths=["src/", "tests/", "predict_step.py"],
+                scoring_interface_contract={
+                    "target_file": "predict_step.py",
+                    "required_functions": [
+                        {"signature": "load_samples(data_dir: Path, split: str) -> list[Sample]"},
+                        {"signature": "predict(sample: Sample) -> Prediction"},
+                    ],
+                },
+            )
+            trial = root / "experiments" / "demo" / "trial_002"
+            (trial / "workspace_coding_result.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "summary": "Added zero-velocity predictor.",
+                        "changed_files": ["predict_step.py"],
+                        "file_updates": [
+                            {
+                                "path": "predict_step.py",
+                                "content": "def main():\n    print('predicting')\n",
+                            }
+                        ],
+                        "validation_results": [],
+                        "blocking_issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = validate_workspace_coding_result("demo", "trial_002")
+
+            self.assertEqual("blocked", result["status"])
+            self.assertIn("scoring_interface_missing_function:predict_step.py:load_samples", result["issues"])
+            self.assertIn("scoring_interface_missing_function:predict_step.py:predict", result["issues"])
+
+    def test_validate_workspace_coding_result_accepts_scoring_interface_functions_present(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_handoff(
+                root,
+                project,
+                allowed_write_paths=["src/", "tests/", "predict_step.py"],
+                scoring_interface_contract={
+                    "target_file": "predict_step.py",
+                    "required_functions": [
+                        {"signature": "load_samples(data_dir: Path, split: str) -> list[Sample]"},
+                        {"signature": "predict(sample: Sample) -> Prediction"},
+                    ],
+                },
+            )
+            trial = root / "experiments" / "demo" / "trial_002"
+            (trial / "workspace_coding_result.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "summary": "Added zero-velocity predictor with the required interface.",
+                        "changed_files": ["predict_step.py"],
+                        "file_updates": [
+                            {
+                                "path": "predict_step.py",
+                                "content": (
+                                    "def load_samples(data_dir, split):\n"
+                                    "    return []\n\n"
+                                    "def predict(sample):\n"
+                                    "    return sample\n"
+                                ),
+                            }
+                        ],
+                        "validation_results": [],
+                        "blocking_issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = validate_workspace_coding_result("demo", "trial_002")
+
+            self.assertEqual("accepted", result["status"])
+
+    def test_validate_workspace_coding_result_blocks_patch_that_leaves_predict_script_without_interface(self):
+        # Real incident: a predict_step.py written before this contract
+        # existed never defined load_samples()/predict(). It then only ever
+        # received small, unrelated patches (an encoding fix) -- since the
+        # original check only inspected file_updates (whole-file rewrites),
+        # a patch-only cycle never tripped it, so the file stayed
+        # non-compliant forever and the scoring harness could never generate.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            # The file on disk after the patch is applied -- no interface functions.
+            (project / "predict_step.py").write_text(
+                "def main():\n    print('predicting')\n", encoding="utf-8"
+            )
+            self._write_handoff(
+                root,
+                project,
+                allowed_write_paths=["src/", "tests/", "predict_step.py"],
+                edit_policy={"mode": "patch_only", "allow_full_file_updates": False},
+                scoring_interface_contract={
+                    "target_file": "predict_step.py",
+                    "required_functions": [
+                        {"signature": "load_samples(data_dir: Path, split: str) -> list[Sample]"},
+                        {"signature": "predict(sample: Sample) -> Prediction"},
+                    ],
+                },
+            )
+            trial = root / "experiments" / "demo" / "trial_002"
+            (trial / "workspace_coding_result.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "summary": "Small unrelated patch to predict_step.py.",
+                        "changed_files": ["predict_step.py"],
+                        "patch_updates": [
+                            {
+                                "path": "predict_step.py",
+                                "find": "print('predicting')",
+                                "replace": "print('predicting fixed')",
+                                "reason": "encoding fix",
+                            }
+                        ],
+                        "validation_results": [],
+                        "blocking_issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = validate_workspace_coding_result("demo", "trial_002")
+
+            self.assertEqual("blocked", result["status"])
+            self.assertIn("scoring_interface_missing_function:predict_step.py:load_samples", result["issues"])
+            self.assertIn("scoring_interface_missing_function:predict_step.py:predict", result["issues"])
+
+    def test_validate_workspace_coding_result_accepts_patch_when_disk_file_already_has_interface(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            (project / "predict_step.py").write_text(
+                "def load_samples(data_dir, split):\n    return []\n\n"
+                "def predict(sample):\n    return sample\n",
+                encoding="utf-8",
+            )
+            self._write_handoff(
+                root,
+                project,
+                allowed_write_paths=["src/", "tests/", "predict_step.py"],
+                edit_policy={"mode": "patch_only", "allow_full_file_updates": False},
+                scoring_interface_contract={
+                    "target_file": "predict_step.py",
+                    "required_functions": [
+                        {"signature": "load_samples(data_dir: Path, split: str) -> list[Sample]"},
+                        {"signature": "predict(sample: Sample) -> Prediction"},
+                    ],
+                },
+            )
+            trial = root / "experiments" / "demo" / "trial_002"
+            (trial / "workspace_coding_result.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "summary": "Small unrelated patch to an already-compliant predict_step.py.",
+                        "changed_files": ["predict_step.py"],
+                        "patch_updates": [
+                            {
+                                "path": "predict_step.py",
+                                "find": "return sample",
+                                "replace": "return dict(sample)",
+                                "reason": "type fix",
+                            }
+                        ],
+                        "validation_results": [],
+                        "blocking_issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = validate_workspace_coding_result("demo", "trial_002")
+
+            self.assertEqual("accepted", result["status"])
+
+    def test_validate_workspace_coding_result_blocks_harness_that_ignores_interface_and_score_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_handoff(
+                root,
+                project,
+                allowed_write_paths=["scoring_harness.py"],
+                scoring_interface_contract={"target_file": "predict_step.py"},
+                metrics_output_contract={"path": "outputs/metrics.json", "score_key": "cv_score"},
+            )
+            trial = root / "experiments" / "demo" / "trial_002"
+            (trial / "workspace_coding_result.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "summary": "Wrote a harness that reimplements prediction itself.",
+                        "changed_files": ["scoring_harness.py"],
+                        "file_updates": [
+                            {
+                                "path": "scoring_harness.py",
+                                "content": (
+                                    "def main():\n"
+                                    "    metrics = {'score': 0.5}\n"
+                                    "    print(metrics)\n"
+                                ),
+                            }
+                        ],
+                        "validation_results": [],
+                        "blocking_issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = validate_workspace_coding_result("demo", "trial_002")
+
+            self.assertEqual("blocked", result["status"])
+            self.assertIn("scoring_harness_missing_interface_call:scoring_harness.py:load_samples", result["issues"])
+            self.assertIn("scoring_harness_missing_interface_call:scoring_harness.py:predict", result["issues"])
+            self.assertIn("scoring_harness_missing_score_key:scoring_harness.py:cv_score", result["issues"])
+
+    def test_validate_workspace_coding_result_accepts_harness_that_uses_interface_and_score_key(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_handoff(
+                root,
+                project,
+                allowed_write_paths=["scoring_harness.py"],
+                scoring_interface_contract={"target_file": "predict_step.py"},
+                metrics_output_contract={"path": "outputs/metrics.json", "score_key": "cv_score"},
+            )
+            trial = root / "experiments" / "demo" / "trial_002"
+            (trial / "workspace_coding_result.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "summary": "Wrote a harness that reuses the prediction interface.",
+                        "changed_files": ["scoring_harness.py"],
+                        "file_updates": [
+                            {
+                                "path": "scoring_harness.py",
+                                "content": (
+                                    "from predict_step import load_samples, predict\n\n"
+                                    "def main():\n"
+                                    "    holdout = load_samples(DATA_DIR, 'train')[-20:]\n"
+                                    "    preds = [predict(sample) for sample in holdout]\n"
+                                    "    score = sum(preds) / len(preds)\n"
+                                    "    metrics = {'cv_score': score, 'metric': 'r_hit_at_1cm', 'objective': 'maximize'}\n"
+                                    "    Path('outputs/metrics.json').write_text(json.dumps(metrics))\n"
+                                ),
+                            }
+                        ],
+                        "validation_results": [],
+                        "blocking_issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = validate_workspace_coding_result("demo", "trial_002")
+
+            self.assertEqual("accepted", result["status"])
+
+    def test_validate_workspace_coding_result_accepts_harness_that_writes_metric_named_key_instead_of_cv_score(self):
+        # Real incident: across repeated real GPT-5 generations, the model
+        # consistently computed the correct score under a self-chosen key
+        # (e.g. "validation_score") or the competition's own metric name
+        # ("r_hit_at_1cm") instead of the literal "cv_score", even after
+        # explicit corrective feedback naming the exact key twice in a row.
+        # workspace_metrics_collector.py's _resolve_score() already trusts a
+        # key matching the competition's declared metric name at read time,
+        # so a harness using that spelling must not be blocked here either.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_handoff(
+                root,
+                project,
+                allowed_write_paths=["scoring_harness.py"],
+                scoring_interface_contract={"target_file": "predict_step.py"},
+                metrics_output_contract={"path": "outputs/metrics.json", "score_key": "cv_score"},
+                declared_metric_name="R-Hit@1cm",
+            )
+            trial = root / "experiments" / "demo" / "trial_002"
+            (trial / "workspace_coding_result.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "summary": "Wrote a harness that scores under the competition's metric name.",
+                        "changed_files": ["scoring_harness.py"],
+                        "file_updates": [
+                            {
+                                "path": "scoring_harness.py",
+                                "content": (
+                                    "from predict_step import load_samples, predict\n\n"
+                                    "def main():\n"
+                                    "    holdout = load_samples(DATA_DIR, 'train')[-20:]\n"
+                                    "    preds = [predict(sample) for sample in holdout]\n"
+                                    "    metrics = {'r_hit_at_1cm': 0.5, 'metric': 'R-Hit@1cm', 'objective': 'maximize'}\n"
+                                    "    Path('outputs/metrics.json').write_text(json.dumps(metrics))\n"
+                                ),
+                            }
+                        ],
+                        "validation_results": [],
+                        "blocking_issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = validate_workspace_coding_result("demo", "trial_002")
+
+            self.assertEqual("accepted", result["status"])
+
+    def test_validate_workspace_coding_result_blocks_harness_with_unrelated_key_and_no_declared_metric(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_handoff(
+                root,
+                project,
+                allowed_write_paths=["scoring_harness.py"],
+                scoring_interface_contract={"target_file": "predict_step.py"},
+                metrics_output_contract={"path": "outputs/metrics.json", "score_key": "cv_score"},
+                declared_metric_name=None,
+            )
+            trial = root / "experiments" / "demo" / "trial_002"
+            (trial / "workspace_coding_result.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "summary": "Wrote a harness that scores under an unrelated key name.",
+                        "changed_files": ["scoring_harness.py"],
+                        "file_updates": [
+                            {
+                                "path": "scoring_harness.py",
+                                "content": (
+                                    "from predict_step import load_samples, predict\n\n"
+                                    "def main():\n"
+                                    "    holdout = load_samples(DATA_DIR, 'train')[-20:]\n"
+                                    "    preds = [predict(sample) for sample in holdout]\n"
+                                    "    metrics = {'validation_score': 0.5, 'metric': 'euclidean_rmse', 'objective': 'minimize'}\n"
+                                ),
+                            }
+                        ],
+                        "validation_results": [],
+                        "blocking_issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = validate_workspace_coding_result("demo", "trial_002")
+
+            self.assertEqual("blocked", result["status"])
+            self.assertIn("scoring_harness_missing_score_key:scoring_harness.py:cv_score", result["issues"])
+
+    def test_validate_workspace_coding_result_blocks_harness_that_fabricates_the_score(self):
+        # Real incident: a generated harness satisfied every other check --
+        # it imported the interface, wrote metrics.json, and included the
+        # score key -- while loading only the UNLABELLED "test" split and
+        # hardcoding `"cv_score": 0.0,  # presence of key required by harness
+        # checks`. It compared nothing against ground truth, and the metrics
+        # collector accepted 0.0 as a genuine score because it is a valid
+        # finite number.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_handoff(
+                root,
+                project,
+                allowed_write_paths=["scoring_harness.py"],
+                scoring_interface_contract={"target_file": "predict_step.py"},
+                metrics_output_contract={"path": "outputs/metrics.json", "score_key": "cv_score"},
+            )
+            trial = root / "experiments" / "demo" / "trial_002"
+            (trial / "workspace_coding_result.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "summary": "Harness that only format-checks and hardcodes the score.",
+                        "changed_files": ["scoring_harness.py"],
+                        "file_updates": [
+                            {
+                                "path": "scoring_harness.py",
+                                "content": (
+                                    "import predict_step as ps\n\n"
+                                    "def run_local_validation():\n"
+                                    "    samples = ps.load_samples(ROOT, split='test')\n"
+                                    "    preds = [ps.predict(s) for s in samples]\n"
+                                    "    metrics = {\n"
+                                    "        'metric': 'R-Hit@1cm',\n"
+                                    "        'validation_method': 'format_checks',\n"
+                                    "        'cv_score': 0.0,\n"
+                                    "    }\n"
+                                    "    Path('outputs/metrics.json').write_text(json.dumps(metrics))\n"
+                                ),
+                            }
+                        ],
+                        "validation_results": [],
+                        "blocking_issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = validate_workspace_coding_result("demo", "trial_002")
+
+            self.assertEqual("blocked", result["status"])
+            self.assertIn("scoring_harness_score_is_hardcoded_literal:scoring_harness.py:cv_score", result["issues"])
+            self.assertIn("scoring_harness_does_not_load_labeled_split:scoring_harness.py", result["issues"])
+
+    def test_validate_harness_check_skipped_when_trial_not_allowed_to_touch_harness(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_handoff(
+                root,
+                project,
+                allowed_write_paths=["src/", "tests/", "predict_step.py"],
+                scoring_interface_contract={"target_file": "predict_step.py"},
+                metrics_output_contract={"path": "outputs/metrics.json", "score_key": "cv_score"},
+            )
+            trial = root / "experiments" / "demo" / "trial_002"
+            (trial / "workspace_coding_result.json").write_text(
+                json.dumps(
+                    {
+                        "status": "completed",
+                        "summary": "Ordinary trial, never touches the harness.",
+                        "changed_files": ["predict_step.py"],
+                        "file_updates": [
+                            {
+                                "path": "predict_step.py",
+                                "content": (
+                                    "def load_samples(data_dir, split):\n    return []\n\n"
+                                    "def predict(sample):\n    return sample\n"
+                                ),
+                            }
+                        ],
+                        "validation_results": [],
+                        "blocking_issues": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = validate_workspace_coding_result("demo", "trial_002")
+
+            self.assertEqual("accepted", result["status"])
+
+    def test_predict_script_context_gets_a_generous_prompt_limit(self):
+        # Real incident: the default 2500-char context-file limit truncated
+        # from the start of predict_step.py's embedded content, cutting off
+        # load_samples()/predict() when they were defined near the end of a
+        # ~4800-char file -- the harness-generation model never actually saw
+        # the functions it was told to call.
+        self.assertGreaterEqual(_context_file_prompt_limit("predict_script_context.md"), 12000)
+
+    def test_read_context_does_not_truncate_predict_script_context_before_the_interface_functions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            out_dir = root / "experiments" / "demo" / "_harness_init"
+            out_dir.mkdir(parents=True)
+            padding = "# padding line to push real content past 2500 chars\n" * 60
+            content = f"{padding}\ndef load_samples(data_dir, split):\n    return []\n\ndef predict(sample):\n    return sample\n"
+            self.assertGreater(len(content), 2500)
+            (out_dir / "predict_script_context.md").write_text(content, encoding="utf-8")
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                rendered = _read_context(["experiments/demo/_harness_init/predict_script_context.md"])
+
+            self.assertIn("def load_samples", rendered)
+            self.assertIn("def predict", rendered)
 
     def test_validate_predict_test_sync_blocks_predict_change_left_alone(self):
         # Real incident: predict_step.py's prediction algorithm changed but
@@ -1063,6 +1644,9 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
         allowed_write_paths: list[str] | None = None,
         predict_commands: list[str] | None = None,
         validation_commands: list[str] | None = None,
+        scoring_interface_contract: dict | None = None,
+        metrics_output_contract: dict | None = None,
+        declared_metric_name: str | None = None,
     ) -> None:
         trial = root / "experiments" / "demo" / "trial_002"
         trial.mkdir(parents=True)
@@ -1100,6 +1684,9 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
                     "forbidden_paths": ["data/", "outputs/metrics.json", "outputs/submission.csv"],
                     "validation_commands": validation_commands or ["{python} -m pytest tests -q"],
                     "predict_commands": predict_commands or [],
+                    "scoring_interface_contract": scoring_interface_contract,
+                    "metrics_output_contract": metrics_output_contract,
+                    "declared_metric_name": declared_metric_name,
                     "artifact_policy": {
                         "save_model": {
                             "default": False,
@@ -1123,6 +1710,128 @@ class WorkspaceCodeWriterTest(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def test_standard_prompt_includes_scoring_interface_contract_and_coding_feedback(self):
+        # Real incident: the scoring interface contract (load_samples()/
+        # predict() requirement) and the retry's coding_feedback were both
+        # rendered into workspace_coding_agent_request.md (the human-readable
+        # audit file) but never actually included in the real API payload
+        # built here -- the model was blocked over and over for missing
+        # functions it was never told to write, and retries never saw why
+        # the previous attempt was rejected. Both must appear in the actual
+        # prompt sent to the model, not just the audit markdown.
+        handoff = {
+            "trial_id": "trial_002",
+            "objective": "Implement the next workspace experiment.",
+            "context_files": [],
+            "allowed_write_paths": ["predict_step.py"],
+            "forbidden_paths": [],
+            "edit_policy": {"mode": "full_file_allowed"},
+            "validation_commands": [],
+            "artifact_policy": {},
+            "retrieval_context": {},
+            "data_card_summary": {},
+            "scoring_interface_contract": {
+                "target_file": "predict_step.py",
+                "required_functions": [
+                    {"signature": "load_samples(data_dir, split)", "purpose": "load data"},
+                    {"signature": "predict(sample)", "purpose": "predict one sample"},
+                ],
+                "notes": ["Define both at module level."],
+            },
+            "coding_feedback": {
+                "changed_files": ["predict_step.py"],
+                "rejected_issues": ["scoring_interface_missing_function:predict_step.py:load_samples"],
+            },
+        }
+        payload = build_workspace_code_writer_payload(handoff, model="gpt-5")
+        prompt = payload["input"][1]["content"]
+        self.assertIn("load_samples(data_dir, split)", prompt)
+        self.assertIn("predict(sample)", prompt)
+        self.assertIn("Previous attempt was rejected", prompt)
+        self.assertIn("scoring_interface_missing_function:predict_step.py:load_samples", prompt)
+
+    def test_delta_patch_prompt_includes_scoring_interface_contract_and_coding_feedback(self):
+        handoff = {
+            "trial_id": "trial_003",
+            "competition": "demo",
+            "context_files": ["experiments/demo/trial_003/delta_plan.json"],
+            "allowed_write_paths": ["predict_step.py"],
+            "forbidden_paths": [],
+            "edit_policy": {"mode": "patch_only"},
+            "scoring_interface_contract": {
+                "target_file": "predict_step.py",
+                "required_functions": [
+                    {"signature": "load_samples(data_dir, split)", "purpose": "load data"},
+                ],
+                "notes": [],
+            },
+            "coding_feedback": {
+                "changed_files": ["predict_step.py"],
+                "rejected_issues": ["scoring_interface_missing_function:predict_step.py:predict"],
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "experiments" / "demo" / "trial_003").mkdir(parents=True)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                payload = build_workspace_code_writer_payload(handoff, model="gpt-5")
+        prompt = payload["input"][1]["content"]
+        self.assertIn("load_samples(data_dir, split)", prompt)
+        self.assertIn("Previous attempt was rejected", prompt)
+        self.assertIn("scoring_interface_missing_function:predict_step.py:predict", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PerSampleLoaderCheckTest(unittest.TestCase):
+    """Real incident (DACON 236716): defining load_samples() satisfied the
+    existence check while its body looked for a flat `train.csv` (absent in a
+    one-file-per-sample competition) and silently fell back to
+    sample_submission ids -- returning samples with no features at all, so
+    nothing could be scored or learned from."""
+
+    CONTRACT = {"per_sample_dirs": {"train_dir": "train", "test_dir": "test"}}
+
+    def _check(self, content, contract=None):
+        from kaggle_research_agent.workspace_code_writer import _per_sample_load_issues
+
+        return _per_sample_load_issues(content, self.CONTRACT if contract is None else contract, "predict_step.py")
+
+    def test_loader_that_never_iterates_a_directory_is_blocked(self):
+        stub = (
+            "def load_samples(data_dir, split):\n"
+            "    if split not in {'train', 'test'}:\n"
+            "        raise ValueError(split)\n"
+            "    rows = _read_csv_rows(_find_sample_submission())\n"
+            "    return [{'id': r['id']} for r in rows]\n"
+        )
+        self.assertEqual(
+            ["predict_script_does_not_iterate_sample_files:predict_step.py:load_samples"], self._check(stub)
+        )
+
+    def test_loader_that_iterates_the_split_directory_is_accepted(self):
+        real = (
+            "def load_samples(data_dir, split):\n"
+            "    d = data_dir / split\n"
+            "    return [_read(f) for f in sorted(d.glob('*.csv'))]\n"
+        )
+        self.assertEqual([], self._check(real))
+
+    def test_unrelated_rglob_elsewhere_in_the_module_does_not_satisfy_the_check(self):
+        # The module already had a code-snapshot helper calling rglob, which
+        # a whole-file search wrongly accepted.
+        content = (
+            "def _snapshot(src_dir, zf):\n"
+            "    for p in src_dir.rglob('*'):\n"
+            "        zf.write(p)\n\n"
+            "def load_samples(data_dir, split):\n"
+            "    return [{'id': r['id']} for r in _read_csv_rows(_find_sample_submission())]\n"
+        )
+        self.assertEqual(
+            ["predict_script_does_not_iterate_sample_files:predict_step.py:load_samples"], self._check(content)
+        )
+
+    def test_flat_table_competitions_are_unaffected(self):
+        self.assertEqual([], self._check("def load_samples(d, s):\n    return []\n", contract={}))

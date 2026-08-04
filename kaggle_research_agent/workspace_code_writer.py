@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -18,6 +19,15 @@ from .paths import trial_dir
 from .store import read_text, write_text
 from .trial_artifacts import trial_artifact_path
 from .user_insight_policy import validate_user_insight_code_result
+from .workspace_metrics_collector import _metric_name_variants
+
+
+# The local validation/scoring harness (holdout split + score computation)
+# is generated once (see workspace_coding_handoff.generate_scoring_harness)
+# and then locked from routine trials -- defined here, not in
+# workspace_coding_handoff.py, because that module imports this one for the
+# generation call and a reverse import would be circular.
+SCORING_HARNESS_FILENAME = "scoring_harness.py"
 
 
 def run_workspace_code_writer(
@@ -114,7 +124,10 @@ def validate_workspace_coding_result(competition: str, trial_id: str) -> dict[st
     issues.extend(_validate_file_updates(coding_result, handoff))
     issues.extend(_validate_patch_updates(coding_result, handoff))
     issues.extend(_validate_no_fabricated_data_fallback(coding_result))
+    issues.extend(_validate_local_score_is_computed(coding_result))
     issues.extend(_validate_predict_test_sync(coding_result, handoff))
+    issues.extend(_validate_scoring_interface_functions(coding_result, handoff))
+    issues.extend(_validate_harness_uses_interface_and_writes_score(coding_result, handoff))
     issues.extend(validate_user_insight_code_result(competition, trial_id, coding_result))
     result = {
         "competition": competition,
@@ -201,6 +214,40 @@ def render_workspace_coding_result_validation(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _scoring_interface_contract_lines(handoff: dict[str, Any]) -> list[str]:
+    contract = handoff.get("scoring_interface_contract")
+    if not isinstance(contract, dict) or not contract:
+        return []
+    lines = [
+        "",
+        "Prediction function interface contract (REQUIRED, checked mechanically after you respond):",
+        f"- target_file: {contract.get('target_file')}",
+        "- You must define these functions at module level in target_file:",
+    ]
+    for item in contract.get("required_functions", []) or []:
+        if isinstance(item, dict):
+            lines.append(f"  - {item.get('signature')} -- {item.get('purpose')}")
+    for note in contract.get("notes", []) or []:
+        lines.append(f"- {note}")
+    return lines
+
+
+def _coding_feedback_lines(handoff: dict[str, Any]) -> list[str]:
+    coding_feedback = handoff.get("coding_feedback")
+    if not isinstance(coding_feedback, dict) or not coding_feedback:
+        return []
+    return [
+        "",
+        "Previous attempt was rejected:",
+        "- Your last attempt at this same trial was blocked by automated review for the reasons listed below. "
+        "Produce a new attempt that specifically fixes each one -- do not repeat the same code.",
+        "- Fix each issue by IMPLEMENTING what it asks for. Do NOT work around it by leaving the offending "
+        "file untouched, reverting to a previous version, or patching some other file instead: skipping "
+        "the required change is not a fix, and it abandons this trial's plan.",
+        json.dumps(coding_feedback, ensure_ascii=False, indent=2),
+    ]
+
+
 def _build_prompt(handoff: dict[str, Any]) -> str:
     if _is_delta_patch_handoff(handoff):
         return _build_delta_patch_prompt(handoff)
@@ -273,6 +320,8 @@ def _build_prompt(handoff: dict[str, Any]) -> str:
             "If continuation_context.decision_context lists rejected_axes or planner_constraints, do not preserve rejected changes from the latest trial; start from the recommended base evidence and apply only the new primary axis.",
             "When edit_policy.restore_base_before_patch is true, the local agent will restore the saved base trial code before applying your patch.",
             "Do not rewrite unrelated pipeline stages just to make a fresh baseline.",
+            *_scoring_interface_contract_lines(handoff),
+            *_coding_feedback_lines(handoff),
             "",
             f"Objective: {handoff.get('objective')}",
             f"Project root: {handoff.get('project_root')}",
@@ -346,6 +395,8 @@ def _build_delta_patch_prompt(handoff: dict[str, Any]) -> str:
             "Edit policy:",
             json.dumps(handoff.get("edit_policy", {}), ensure_ascii=False, indent=2),
             *repair_lines,
+            *_scoring_interface_contract_lines(handoff),
+            *_coding_feedback_lines(handoff),
             "",
             "Context files:",
             _read_context(handoff.get("context_files", []), handoff=handoff),
@@ -393,6 +444,18 @@ def _context_file_prompt_limit(path: str, *, handoff: dict[str, Any] | None = No
         return 5200
     if name.startswith("continuation_context"):
         return 1200
+    if name == "harness_instructions.md":
+        # Carries the competition overview + data notes alongside the rules;
+        # truncating it drops the metric definition the harness must compute.
+        return 16000
+    if name == "predict_script_context.md":
+        # Real incident: the default 2500-char limit truncated from the
+        # start of the file, cutting off load_samples()/predict() entirely
+        # when they were defined near the end of predict_step.py -- the
+        # harness-generation model never actually saw the functions it was
+        # told to call, so it wrote its own pipeline instead. Prediction
+        # scripts can be long; give this file real headroom.
+        return 12000
     return 2500
 
 
@@ -869,6 +932,40 @@ def _validate_no_fabricated_data_fallback(coding_result: dict[str, Any]) -> list
     return _unique(issues)
 
 
+_NO_LOCAL_VALIDATION_PATTERN = re.compile(
+    r"""['"]validation[_ ]?method['"]\s*:\s*['"](none|n/a|na|null|skip|skipped|not[_ ]?applicable)['"]""",
+    re.IGNORECASE,
+)
+
+
+def _validate_local_score_is_computed(coding_result: dict[str, Any]) -> list[str]:
+    """Reject code that admits, in its own written output, that it never ran
+    a real local validation (e.g. a metrics dict literally declaring
+    "validation_method": "none") -- a rule-based/no-training model still
+    must hold out real labeled data and compute an actual numeric score.
+
+    Real incident: with no training needed for a rule-based baseline, the
+    code writer skipped local validation entirely and wrote this exact
+    self-admission twice in a row across independent isolated-environment
+    attempts, even after an explicit prompt instruction said this was never
+    acceptable -- the prompt alone did not reliably prevent it (verified via
+    the same isolated-environment A/B methodology as the predict/test sync
+    guardrail), so this is the mechanical backstop.
+    """
+    texts: list[str] = []
+    for update in coding_result.get("file_updates", []) or []:
+        if isinstance(update, dict) and isinstance(update.get("content"), str):
+            texts.append(update["content"])
+    for update in coding_result.get("patch_updates", []) or []:
+        if isinstance(update, dict) and isinstance(update.get("replace"), str):
+            texts.append(update["replace"])
+    issues: list[str] = []
+    for text in texts:
+        if _NO_LOCAL_VALIDATION_PATTERN.search(text):
+            issues.append("local_validation_not_computed:validation_method_none")
+    return _unique(issues)
+
+
 def _validate_predict_test_sync(coding_result: dict[str, Any], handoff: dict[str, Any]) -> list[str]:
     """Reject a change to the predict-stage script that leaves the
     test-stage (local validation) script untouched, with no shared module
@@ -888,6 +985,15 @@ def _validate_predict_test_sync(coding_result: dict[str, Any], handoff: dict[str
     exemption below is a heuristic, not a semantic diff) -- it only catches
     the one-file-changed-in-isolation shape that caused the real incident.
     """
+    if isinstance(handoff.get("scoring_interface_contract"), dict) and handoff["scoring_interface_contract"]:
+        # On a scoring-harness competition the harness -- not test_step.py --
+        # re-runs the prediction logic, and it does so by calling
+        # predict_step's own load_samples()/predict() rather than keeping a
+        # private copy. That is the same "one shared implementation" shape
+        # this check already exempts for src/, so demanding a test_step.py
+        # edit alongside every predict_step.py change is the wrong
+        # requirement here (test_step.py only does format checks).
+        return []
     predict_script = _first_script_name(handoff.get("predict_commands"))
     test_script = _first_script_name(handoff.get("validation_commands"))
     if not predict_script or not test_script or predict_script == test_script:
@@ -903,6 +1009,194 @@ def _validate_predict_test_sync(coding_result: dict[str, Any], handoff: dict[str
         # only flag when the predict script changed in isolation.
         return []
     return [f"predict_script_changed_without_test_script_sync:{predict_script}"]
+
+
+def _validate_scoring_interface_functions(coding_result: dict[str, Any], handoff: dict[str, Any]) -> list[str]:
+    """Reject a change to the prediction script that leaves it without the
+    load_samples()/predict() functions the scoring interface contract
+    requires. These two functions are how local validation scoring reuses
+    the trial's own prediction logic instead of relying on the model to
+    remember to compute a score itself -- if they are missing, nothing
+    downstream can call into this trial's predictions at all.
+
+    Checked whenever the target file changed this cycle, whether via a
+    whole-file rewrite (file_updates) or a localized patch (patch_updates).
+
+    Real incident: a trial that predates this contract (its predict_step.py
+    never defined these functions) kept getting small, unrelated patches
+    (an encoding fix) that left it unchanged in this respect -- since the
+    original check only inspected file_updates, patch-only cycles never
+    tripped it, and the scoring harness could never generate because the
+    functions it needed to call never actually existed. Patched content is
+    read back from disk because by the time this validation runs (always
+    after _apply_code_updates within run_workspace_code_writer) the patch has
+    already been applied there.
+    """
+    contract = handoff.get("scoring_interface_contract")
+    if not isinstance(contract, dict) or not contract:
+        return []
+    target_file = contract.get("target_file")
+    if not target_file:
+        return []
+    # Deliberately NOT gated on "did this file change this cycle". Real
+    # incident: told that predict_step.py was missing these functions, the
+    # code writer's next attempt simply stopped touching predict_step.py
+    # ("avoids prior rejection by not modifying predict_step") and patched
+    # unrelated files instead -- so the check never fired and the plan was
+    # never implemented. On a harness-path competition every trial's scoring
+    # depends on this interface existing, so it is required whether or not
+    # this particular cycle edited the file.
+    content = _target_file_content_after_update(coding_result, handoff, target_file)
+    if content is None:
+        return []
+    issues: list[str] = []
+    if not re.search(r"^\s*def\s+load_samples\s*\(", content, re.MULTILINE):
+        issues.append(f"scoring_interface_missing_function:{target_file}:load_samples")
+    if not re.search(r"^\s*def\s+predict\s*\(", content, re.MULTILINE):
+        issues.append(f"scoring_interface_missing_function:{target_file}:predict")
+    issues.extend(_per_sample_load_issues(content, contract, target_file))
+    return _unique(issues)
+
+
+def _per_sample_load_issues(content: str, contract: dict[str, Any], target_file: str) -> list[str]:
+    """On a one-file-per-sample competition, require load_samples to actually
+    read the split directories.
+
+    Real incident: defining load_samples() satisfied the existence check
+    while the body looked for a flat `train.csv` (which does not exist here)
+    and silently fell back to sample_submission ids -- returning samples with
+    no features at all. Nothing could then be scored or learned from, and the
+    scoring harness had no way to match predictions to labels. Same shape as
+    the hardcoded cv_score: signature satisfied, substance skipped.
+    """
+    dirs = contract.get("per_sample_dirs") if isinstance(contract.get("per_sample_dirs"), dict) else {}
+    if not dirs:
+        return []
+    # Scope the check to load_samples' own body. Searching the whole file
+    # gave false passes: the split names "train"/"test" appear in any
+    # argument check, and an unrelated helper elsewhere in the module (a
+    # code-snapshot zipper) already called rglob.
+    body = _function_source(content, "load_samples")
+    if body is None:
+        return []
+    if not re.search(r"\.(glob|rglob|iterdir)\s*\(|listdir\s*\(|scandir\s*\(", body):
+        return [f"predict_script_does_not_iterate_sample_files:{target_file}:load_samples"]
+    return []
+
+
+def _function_source(content: str, name: str) -> str | None:
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return None
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            return ast.get_source_segment(content, node) or ""
+    return None
+
+
+def _target_file_content_after_update(
+    coding_result: dict[str, Any], handoff: dict[str, Any], target_file: str
+) -> str | None:
+    for update in coding_result.get("file_updates", []) or []:
+        if not isinstance(update, dict):
+            continue
+        path = str(update.get("path") or "")
+        if Path(path.replace("\\", "/")).name != target_file:
+            continue
+        content = update.get("content")
+        if isinstance(content, str):
+            return content
+    project_root = handoff.get("project_root")
+    if not project_root:
+        return None
+    path = Path(str(project_root)) / target_file
+    if not path.is_file():
+        return None
+    return read_text(path, default="")
+
+
+def _validate_harness_uses_interface_and_writes_score(
+    coding_result: dict[str, Any], handoff: dict[str, Any]
+) -> list[str]:
+    """Reject a whole-file rewrite of the scoring harness that does not
+    actually call the prediction interface functions or does not write the
+    declared score key (or an equivalent field name for this competition's
+    real metric).
+
+    Fully competition-agnostic: the two required call names come from the
+    scoring interface contract (fixed by workspace_coding_handoff.py, not
+    this competition's data) and the required score key comes from this same
+    handoff's own metrics_output_contract -- neither is hardcoded here.
+
+    Real incident: across repeated real generations, the model consistently
+    computed the correct score under a self-chosen key (e.g. "validation_score",
+    or the competition's own metric name like "r_hit_at_1cm") instead of the
+    literal score_key, even with explicit corrective feedback naming the exact
+    key twice in a row. Rather than keep demanding a literal spelling the model
+    won't reliably produce, this also accepts a key that names the
+    competition's actual declared metric -- the same punctuation/case-insensitive
+    matching workspace_metrics_collector.py already trusts at read time
+    (_resolve_score), so a harness that writes "r_hit_at_1cm" here is read
+    correctly downstream even without a "cv_score" key ever existing.
+    """
+    if SCORING_HARNESS_FILENAME not in handoff.get("allowed_write_paths", []):
+        return []
+    contract = handoff.get("scoring_interface_contract")
+    metrics_contract = handoff.get("metrics_output_contract")
+    if not isinstance(contract, dict) or not isinstance(metrics_contract, dict):
+        return []
+    score_key = metrics_contract.get("score_key")
+    declared_metric = handoff.get("declared_metric_name")
+    metric_variants = _metric_name_variants(str(declared_metric)) if declared_metric else set()
+    issues: list[str] = []
+    for update in coding_result.get("file_updates", []) or []:
+        if not isinstance(update, dict):
+            continue
+        path = str(update.get("path") or "")
+        if Path(path.replace("\\", "/")).name != SCORING_HARNESS_FILENAME:
+            continue
+        content = update.get("content")
+        if not isinstance(content, str):
+            continue
+        for name in ("load_samples", "predict"):
+            # A real harness imports these from the prediction script, very
+            # often under an alias ("from predict_step import predict as
+            # _predict"). Matching only a bare `predict(` call missed that
+            # entirely and rejected correct harnesses, so accept either a
+            # direct call or an import of the name.
+            called = re.search(rf"(?<![A-Za-z0-9_]){name}\s*\(", content)
+            imported = re.search(rf"(?<![A-Za-z0-9_]){name}(\s+as\s+[A-Za-z0-9_]+)?\s*[,\)\n]", content)
+            if not called and not imported:
+                issues.append(f"scoring_harness_missing_interface_call:{SCORING_HARNESS_FILENAME}:{name}")
+        metrics_path = metrics_contract.get("path")
+        metrics_name = Path(str(metrics_path).replace("\\", "/")).name if metrics_path else None
+        if metrics_name and metrics_name not in content:
+            # Returning or printing the score is not enough -- nothing
+            # downstream reads stdout. The score only becomes real when it
+            # lands in the declared metrics artifact.
+            issues.append(f"scoring_harness_does_not_write_metrics_artifact:{SCORING_HARNESS_FILENAME}:{metrics_name}")
+        # A harness only means something if it scores predictions against
+        # real labels. Real incident: a harness satisfied every earlier check
+        # (imported the interface, wrote metrics.json, included the score key)
+        # while loading only the UNLABELLED split and hardcoding
+        # `"cv_score": 0.0,  # presence of key required by harness checks`.
+        # It computed nothing, and the metrics collector accepted 0.0 as a
+        # genuine score because it is a valid finite number.
+        if score_key:
+            literal = re.search(rf"['\"]{re.escape(str(score_key))}['\"]\s*:\s*[-+]?[0-9.]+\s*[,}}]", content)
+            if literal:
+                issues.append(f"scoring_harness_score_is_hardcoded_literal:{SCORING_HARNESS_FILENAME}:{score_key}")
+        if not re.search(r"""load_samples\s*\([^)]*['"]train['"]""", content):
+            issues.append(f"scoring_harness_does_not_load_labeled_split:{SCORING_HARNESS_FILENAME}")
+        has_score_key = bool(score_key) and re.search(rf"['\"]{re.escape(str(score_key))}['\"]", content)
+        has_metric_key = bool(metric_variants) and any(
+            metric_variants & _metric_name_variants(candidate)
+            for candidate in re.findall(r"""['"]([A-Za-z0-9_@.\-]+)['"]\s*:""", content)
+        )
+        if not has_score_key and not has_metric_key:
+            issues.append(f"scoring_harness_missing_score_key:{SCORING_HARNESS_FILENAME}:{score_key}")
+    return _unique(issues)
 
 
 def _first_script_name(commands: Any) -> str | None:

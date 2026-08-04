@@ -281,6 +281,46 @@ class WebAppTest(unittest.TestCase):
 
         self.assertIn("로컬 완료 · 후처리 대기", html)
 
+    def test_trial_table_shows_source_trial_column(self):
+        rows = [
+            {
+                "trial_id": "trial_004",
+                "status": "completed",
+                "source_trial_id": "trial_003",
+                "local_score": 0.591,
+                "lb_score": None,
+                "change_axis": "model_family_switch",
+                "improvement_plan": "try ExtraTrees",
+                "is_best_local": True,
+                "is_best_lb": False,
+            }
+        ]
+        with patch("kaggle_research_agent.web_app._sqlite_trial_rows", return_value=rows):
+            with patch("kaggle_research_agent.web_app.render_sqlite_trial_detail", return_value="detail"):
+                with patch("kaggle_research_agent.web_app.user_insight_target_trial_ids", return_value=set()):
+                    with patch("kaggle_research_agent.web_app.trial_artifact_links", return_value="-"):
+                        html = web_app.trial_table("demo", snapshot={})
+
+        self.assertIn("<th>기준</th>", html)
+        self.assertIn("<td>trial_003</td>", html)
+
+    def test_trial_table_shows_submit_button_only_when_not_yet_submitted(self):
+        rows = [
+            {"trial_id": "trial_004", "status": "completed", "local_score": 0.591, "lb_score": None},
+            {"trial_id": "trial_003", "status": "completed", "local_score": 0.591, "lb_score": 0.6006},
+            {"trial_id": "trial_005", "status": "planned", "local_score": None, "lb_score": None},
+        ]
+        with patch("kaggle_research_agent.web_app._sqlite_trial_rows", return_value=rows):
+            with patch("kaggle_research_agent.web_app.render_sqlite_trial_detail", return_value="detail"):
+                with patch("kaggle_research_agent.web_app.user_insight_target_trial_ids", return_value=set()):
+                    with patch("kaggle_research_agent.web_app.trial_artifact_links", return_value="-"):
+                        html = web_app.trial_table("demo", snapshot={})
+
+        self.assertIn("<th>제출</th>", html)
+        self.assertIn('data-trial-id="trial_004"', html)
+        self.assertNotIn('data-trial-id="trial_003"', html)  # already submitted
+        self.assertNotIn('data-trial-id="trial_005"', html)  # only planned, not run yet
+
     def test_resolve_project_file_accepts_absolute_path_inside_project(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir).resolve()
@@ -441,7 +481,60 @@ class WebAppTest(unittest.TestCase):
     def test_create_experiment_from_form_returns_none_competition_on_error(self):
         message, competition = web_app.create_experiment_from_form({})
         self.assertIsNone(competition)
-        self.assertTrue(message)
+
+    def test_create_experiment_from_form_sets_dacon_team_name_when_provided(self):
+        with patch("kaggle_research_agent.web_app.prepare_workspace", return_value={"status": "needs_data"}):
+            with patch("kaggle_research_agent.web_app.select_competition"):
+                with patch("kaggle_research_agent.web_app.set_dacon_team_name") as set_team:
+                    with patch("kaggle_research_agent.web_app.refresh_dacon_competition_docs") as refresh_docs:
+                        web_app.create_experiment_from_form(
+                            {
+                                "description": ["https://dacon.io/competitions/official/236716"],
+                                "competition": ["236716"],
+                                "topic": ["Mosquito"],
+                                "platform": ["dacon"],
+                                "metric": ["r_hit"],
+                                "objective": ["maximize"],
+                                "create_workspace": ["1"],
+                                "dacon_team_name": ["뚜로"],
+                            }
+                        )
+        set_team.assert_called_once_with("236716", "뚜로")
+        refresh_docs.assert_called_once_with("236716")
+
+    def test_create_experiment_from_form_skips_doc_refresh_for_non_dacon_platform(self):
+        with patch("kaggle_research_agent.web_app.prepare_workspace", return_value={"status": "needs_data"}):
+            with patch("kaggle_research_agent.web_app.select_competition"):
+                with patch("kaggle_research_agent.web_app.refresh_dacon_competition_docs") as refresh_docs:
+                    web_app.create_experiment_from_form(
+                        {
+                            "description": ["https://www.kaggle.com/competitions/titanic"],
+                            "competition": ["titanic"],
+                            "topic": ["Titanic"],
+                            "platform": ["kaggle"],
+                            "metric": ["accuracy"],
+                            "objective": ["maximize"],
+                            "create_workspace": ["1"],
+                        }
+                    )
+        refresh_docs.assert_not_called()
+
+    def test_create_experiment_from_form_skips_team_name_when_blank(self):
+        with patch("kaggle_research_agent.web_app.prepare_workspace", return_value={"status": "needs_data"}):
+            with patch("kaggle_research_agent.web_app.select_competition"):
+                with patch("kaggle_research_agent.web_app.set_dacon_team_name") as set_team:
+                    web_app.create_experiment_from_form(
+                        {
+                            "description": ["https://www.kaggle.com/competitions/titanic"],
+                            "competition": ["titanic"],
+                            "topic": ["Titanic"],
+                            "platform": ["kaggle"],
+                            "metric": ["accuracy"],
+                            "objective": ["maximize"],
+                            "create_workspace": ["1"],
+                        }
+                    )
+        set_team.assert_not_called()
 
     def test_delete_experiment_from_form_blocks_on_mismatched_confirmation_text(self):
         with patch("kaggle_research_agent.web_app._filesystem_topic", return_value="모기 비행 궤적 예측"):
@@ -685,6 +778,77 @@ class WebAppTest(unittest.TestCase):
         }
         html = web_app.render_home(payload, message="인사이트:\n앙상블하자")
         self.assertEqual(1, html.count('class="notice-title"'))
+
+    def test_render_home_includes_dacon_submission_limit_card(self):
+        html = web_app.render_home(
+            {
+                "ok": True,
+                "snapshot": {"competition": "demo", "state": "대기 중", "latest": {}, "best": {}},
+                "experiments": [],
+                "pending_requests": [],
+            }
+        )
+        self.assertIn('id="dacon-submission-limit-value"', html)
+        self.assertIn("/api/dacon-submission-limit", html)
+        # "remaining / limit" formatting, e.g. "3 / 5"
+        self.assertIn("data.remaining", html)
+        self.assertIn("data.daily_submission_limit", html)
+        self.assertIn("data.next_reset_estimate", html)
+        self.assertIn('id="dacon-submission-limit-edit-toggle"', html)
+        # Editing opens the shared modal (no backdrop-click-to-close, same as
+        # every other modal in this app) instead of an inline form the user
+        # is forced to save or abandon awkwardly.
+        self.assertIn('data-open-modal="dacon-limit-modal"', html)
+        self.assertIn('id="dacon-limit-modal"', html)
+        self.assertIn('id="dacon-submission-limit-input"', html)
+        self.assertIn('id="dacon-submission-limit-save"', html)
+        self.assertIn('id="dacon-auto-submit-checkbox"', html)
+        self.assertIn("/api/dacon-auto-submit", html)
+
+
+class DaconSubmissionLimitSnapshotTest(unittest.TestCase):
+    def test_not_applicable_for_non_dacon_platform(self):
+        with patch("kaggle_research_agent.web_app._load_profile_safely", return_value={"platform": "kaggle"}):
+            result = web_app.dacon_submission_limit_snapshot("demo")
+        self.assertEqual({"ok": True, "applicable": False}, result)
+
+    def test_includes_auto_submit_flag_when_applicable(self):
+        with patch("kaggle_research_agent.web_app._load_profile_safely", return_value={"platform": "dacon"}):
+            with patch(
+                "kaggle_research_agent.web_app.check_dacon_submission_limit",
+                return_value={"status": "auto_detected", "daily_submission_limit": 5, "remaining": 3, "message": "..."},
+            ):
+                with patch("kaggle_research_agent.web_app.dacon_auto_submit_allowed", return_value=True):
+                    result = web_app.dacon_submission_limit_snapshot("demo")
+        self.assertTrue(result["auto_submit"])
+
+    def test_applicable_for_dacon_platform_returns_check_result(self):
+        with patch("kaggle_research_agent.web_app._load_profile_safely", return_value={"platform": "dacon"}):
+            with patch(
+                "kaggle_research_agent.web_app.check_dacon_submission_limit",
+                return_value={
+                    "competition": "demo",
+                    "status": "auto_detected",
+                    "daily_submission_limit": 5,
+                    "message": "규칙 페이지에서 자동으로 확인한 일일 제출 한도: 5회",
+                },
+            ):
+                result = web_app.dacon_submission_limit_snapshot("demo")
+        self.assertTrue(result["applicable"])
+        self.assertEqual("auto_detected", result["status"])
+        self.assertEqual(5, result["daily_submission_limit"])
+
+    def test_network_error_does_not_crash_the_dashboard(self):
+        with patch("kaggle_research_agent.web_app._load_profile_safely", return_value={"platform": "dacon"}):
+            with patch(
+                "kaggle_research_agent.web_app.check_dacon_submission_limit",
+                side_effect=RuntimeError("network unreachable"),
+            ):
+                result = web_app.dacon_submission_limit_snapshot("demo")
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["applicable"])
+        self.assertEqual("unknown", result["status"])
+        self.assertIsNone(result["daily_submission_limit"])
 
 
 class UploadDataTest(unittest.TestCase):

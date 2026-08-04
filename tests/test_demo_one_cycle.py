@@ -1573,3 +1573,47 @@ class DemoOneCycleTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PerSampleDatasetPlanningInstructionsTest(unittest.TestCase):
+    """Real incident (DACON 236716): per-sample feature files lived in train/
+    and test/, but the id lists were also available in sample_submission.csv
+    and the labels file. Planning off those id lists is much easier, so the
+    lineage got stuck predicting a constant (zeros, then the label centroid)
+    without ever opening a feature file -- a pipeline with no inputs, which
+    cannot be locally validated at all."""
+
+    def _profile(self):
+        return {
+            "dataset_layout": "per_sample_files",
+            "train_dir": "train/",
+            "directory_datasets": [
+                {"role": "train", "per_file_columns": ["timestep_ms", "x", "y", "z"]},
+                {"role": "test", "per_file_columns": ["timestep_ms", "x", "y", "z"]},
+            ],
+        }
+
+    def test_per_sample_layout_demands_reading_the_real_feature_files(self):
+        from kaggle_research_agent.demo_one_cycle import _per_sample_dataset_instructions
+
+        lines = _per_sample_dataset_instructions(self._profile())
+        joined = "\n".join(lines)
+        self.assertIn("ONE FILE PER SAMPLE", joined)
+        self.assertIn("train/", joined)
+        self.assertIn("timestep_ms", joined)
+        self.assertIn("constant", joined)
+
+    def test_flat_table_competitions_get_no_extra_instructions(self):
+        from kaggle_research_agent.demo_one_cycle import _per_sample_dataset_instructions
+
+        self.assertEqual([], _per_sample_dataset_instructions({"dataset_layout": "flat_tables"}))
+        self.assertEqual([], _per_sample_dataset_instructions({}))
+
+    def test_instructions_reach_both_first_trial_and_continuation_prompts(self):
+        from kaggle_research_agent.demo_one_cycle import build_demo_plan_payload, build_delta_plan_payload
+
+        context = {"data_profile": self._profile(), "planning_context_pack": {"skipped": True}}
+        first = build_demo_plan_payload(context, model="gpt-5")["input"][1]["content"]
+        self.assertIn("ONE FILE PER SAMPLE", first)
+        delta = build_delta_plan_payload(context, model="gpt-5")["input"][1]["content"]
+        self.assertIn("ONE FILE PER SAMPLE", delta)

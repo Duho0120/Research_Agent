@@ -8,10 +8,12 @@ import re
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 from . import simple_yaml
+from .agents.submission import submit_trial as _submit_trial
 from .integrations import dacon_api
 from .chat_history import answer_chat_question, chat_history_snapshot
 from .interface_contract import (
@@ -128,10 +130,16 @@ def delete_experiment(competition: str) -> dict[str, Any]:
     everything that cascades from it -- trials, scores, decisions,
     artifacts, submissions, chat history), and its on-disk folders.
 
-    The workspace/source folder is only removed if this codebase created it
-    (create_workspace was chosen at registration) -- a path the user pointed
-    at an existing external project ("기존 경로 사용") is never deleted, only
-    forgotten.
+    The workspace/source folder is only removed via the created_workspace
+    record if this codebase created it -- a path the user pointed at an
+    existing external project ("기존 경로 사용") is never deleted, only
+    forgotten. demo_workspaces/<competition>/ is removed unconditionally in
+    addition to that, by naming convention rather than trusting the stored
+    record: it's always the scaffold's default location, and leaving it
+    behind meant a re-registered experiment under the same id could inherit
+    stale code and stale outputs/metrics.json from the deleted run (a real
+    incident: a fabricated-data bug survived a "delete and re-register"
+    because only the state DB and experiments/ history were cleared).
     """
     source_record = load_json(competition_dir(competition) / "workspace_source.json")
     created_workspace = bool(source_record.get("created_workspace"))
@@ -146,6 +154,7 @@ def delete_experiment(competition: str) -> dict[str, Any]:
 
     if created_workspace and source_path:
         _remove(Path(source_path))
+    _remove(project_root() / "demo_workspaces" / competition)
     _remove(competition_dir(competition))
     _remove(experiment_dir(competition))
     _remove(competition_memory_dir(competition))
@@ -207,7 +216,14 @@ def experiment_snapshot(competition: str, *, sync: bool) -> dict[str, Any]:
         )
     else:
         latest = _latest_trial(trials, manual)
-    best = _best_trial(trials, manual, objective=str(experiment.get("objective") or "maximize"))
+    objective = str(experiment.get("objective") or "maximize")
+    best = _best_trial(trials, manual, objective=objective)
+    if best is None and _dacon_daily_limit_is_known(competition):
+        # No trial has been submitted yet for this daily-limited competition
+        # -- fall back to local score so BEST isn't blank during the
+        # bootstrap phase. Once any trial is submitted, _best_trial above
+        # takes over exclusively.
+        best = _best_trial_by_local_score(trials, manual, objective=objective)
     filesystem_topic = _filesystem_topic(competition)
     database_topic = str(experiment.get("topic") or "").strip()
     topic = (
@@ -1476,6 +1492,7 @@ def _sqlite_trial_rows(competition: str) -> list[dict[str, Any]]:
                 SELECT
                     t.trial_id,
                     t.status,
+                    t.source_trial_id,
                     s.local_score,
                     s.lb_score,
                     COALESCE(NULLIF(d.active_axis, ''), NULLIF(d.change_axis, ''), NULLIF(t.primary_change_axis, ''), '') AS change_axis,
@@ -2455,8 +2472,78 @@ def _best_trial(
     return None
 
 
+def _best_trial_by_local_score(
+    db_trials: list[dict[str, Any]],
+    manual: list[dict[str, Any]],
+    *,
+    objective: str = "maximize",
+) -> dict[str, Any] | None:
+    """BEST fallback for daily-submission-limited competitions before any
+    trial has been submitted yet. Once a submitted trial exists, _best_trial
+    takes over exclusively -- local score is not a reliable enough proxy to
+    keep influencing BEST once real evidence is available (a real incident
+    in this project: two trials shared an identical local score while their
+    real submitted scores differed by nearly half)."""
+    rows = [*db_trials, *manual]
+    scored = [row for row in rows if row.get("local_score") is not None]
+    if not scored:
+        return None
+    selector = min if objective.strip().casefold() == "minimize" else max
+    return selector(scored, key=lambda row: float(row["local_score"]))
+
+
+def _dacon_daily_limit_is_known(competition: str) -> bool:
+    """Cheap (no network) check for whether this competition's daily DACON
+    submission limit is already known -- either a manual override or a
+    previously cached auto-detection. Deliberately does not attempt a live
+    fetch: this is called on every dashboard render via experiment_snapshot,
+    so it must never add a network round trip to that hot path.
+    """
+    profile = _load_profile_safely(competition)
+    if str(profile.get("platform") or "").casefold() != "dacon":
+        return False
+    override = profile.get("dacon_daily_submission_limit")
+    if isinstance(override, (int, float)) and not isinstance(override, bool) and override > 0:
+        return True
+    cached = profile.get("dacon_daily_submission_limit_detected")
+    return isinstance(cached, (int, float)) and not isinstance(cached, bool) and cached > 0
+
+
+def dacon_auto_submit_allowed(competition: str) -> bool:
+    """Whether the auto loop should submit a DACON trial the moment it
+    completes, for a competition whose daily limit is known.
+
+    Defaults to False (off) when unset: a daily-limited competition starts
+    out safe -- the researcher must explicitly opt in to auto-submit, rather
+    than the loop silently burning through a scarce daily quota by default.
+    Read fresh from execution_profile.yaml on every call (no caching) so a
+    change made mid-run takes effect starting with the very next trial.
+    """
+    profile = _load_profile_safely(competition)
+    return bool(profile.get("dacon_auto_submit"))
+
+
+def set_dacon_auto_submit(competition: str, allowed: bool) -> dict[str, Any]:
+    path = competition_dir(competition) / "execution_profile.yaml"
+    profile = simple_yaml.load(path, default={})
+    if not isinstance(profile, dict):
+        profile = {}
+    profile["dacon_auto_submit"] = bool(allowed)
+    simple_yaml.dump(profile, path)
+    return {"competition": competition, "dacon_auto_submit": bool(allowed)}
+
+
 def _infer_next_trial(manual: list[dict[str, Any]]) -> str | None:
-    completed = {str(row.get("trial_id")) for row in manual if row.get("lb_score") is not None}
+    # A trial's local run completing is what makes it "done" for numbering
+    # purposes -- not whether it happened to be submitted. Submission is
+    # increasingly optional (e.g. daily-limited competitions skip it), so
+    # requiring lb_score here would treat a fully-run, unsubmitted trial as
+    # not-yet-started and risk reusing its trial number.
+    completed = {
+        str(row.get("trial_id"))
+        for row in manual
+        if row.get("local_score") is not None or row.get("lb_score") is not None
+    }
     numbers = [
         int(match.group(1))
         for trial_id in completed
@@ -2537,45 +2624,216 @@ def _load_profile_safely(competition: str) -> dict[str, Any]:
 
 
 def check_dacon_submission_limit(competition: str) -> dict[str, Any]:
-    """Resolve the effective daily DACON submission limit for a competition.
+    """Resolve the effective daily DACON submission limit, plus a best-effort
+    remaining count, for a competition.
 
-    A manual override in execution_profile.yaml (dacon_daily_submission_limit)
-    always wins, since the rules-page scrape can miss it or the user may
-    simply know a more current number. Otherwise this fetches the rules page
-    fresh on every call -- deliberately not cached, since the limit almost
-    never changes mid-competition and a stale cached "no limit" reading would
-    be worse than one extra network call per check.
+    The limit number is looked up at most once per competition: a manual
+    override always wins, otherwise the first successful rules-page scrape is
+    cached into execution_profile.yaml (dacon_daily_submission_limit_detected)
+    so every later call reads that instead of re-fetching the page. Only when
+    neither is present does this hit the network.
     """
     profile = _load_profile_safely(competition)
     dacon_competition_id = str(profile.get("dacon_competition_id") or competition).strip()
     override = profile.get("dacon_daily_submission_limit")
     if isinstance(override, (int, float)) and not isinstance(override, bool) and override > 0:
+        limit = int(override)
+        status = "manual_override"
+    else:
+        cached = profile.get("dacon_daily_submission_limit_detected")
+        if isinstance(cached, (int, float)) and not isinstance(cached, bool) and cached > 0:
+            limit = int(cached)
+            status = "auto_detected"
+        else:
+            fetched = dacon_api.fetch_daily_submission_limit(dacon_competition_id)
+            if fetched.get("ok"):
+                limit = int(fetched["daily_submission_limit"])
+                status = "auto_detected"
+                _cache_dacon_detected_limit(competition, limit)
+            else:
+                limit = None
+                status = "unknown"
+
+    if limit is None:
         return {
             "competition": competition,
             "dacon_competition_id": dacon_competition_id,
-            "status": "manual_override",
-            "daily_submission_limit": int(override),
-            "message": f"사용자가 직접 입력한 일일 제출 한도: {int(override)}회",
+            "status": "unknown",
+            "daily_submission_limit": None,
+            "remaining": None,
+            "message": (
+                "일일 제출 한도를 규칙 페이지에서 자동으로 찾지 못했습니다. "
+                "필요하면 직접 입력해주세요."
+            ),
         }
-    fetched = dacon_api.fetch_daily_submission_limit(dacon_competition_id)
-    if fetched.get("ok"):
-        return {
-            "competition": competition,
-            "dacon_competition_id": dacon_competition_id,
-            "status": "auto_detected",
-            "daily_submission_limit": fetched["daily_submission_limit"],
-            "message": f"규칙 페이지에서 자동으로 확인한 일일 제출 한도: {fetched['daily_submission_limit']}회",
-        }
+
+    window = _dacon_submission_window_stats(dacon_competition_id, limit)
+    remaining = window["remaining"]
+    next_reset_estimate = window["next_reset_estimate"]
+    if remaining is None:
+        message = (
+            f"일일 제출 한도: {limit}회 (남은 횟수는 확인할 수 없습니다 -- "
+            "DACON 세션 토큰이 없거나 만료되었을 수 있습니다)"
+        )
+    else:
+        message = f"일일 제출 한도 {limit}회 중 {remaining}회 남음 (자정(KST) 기준 추정치)"
+        if next_reset_estimate is not None:
+            message += f" / 예상 다음 초기화: {next_reset_estimate.strftime('%Y-%m-%d %H:%M')} KST"
     return {
         "competition": competition,
         "dacon_competition_id": dacon_competition_id,
-        "status": "unknown",
-        "daily_submission_limit": None,
-        "message": (
-            "일일 제출 한도를 규칙 페이지에서 자동으로 찾지 못했습니다. "
-            "필요하면 직접 입력해주세요."
+        "status": status,
+        "daily_submission_limit": limit,
+        "remaining": remaining,
+        "next_reset_estimate": (
+            next_reset_estimate.strftime("%Y-%m-%d %H:%M KST") if next_reset_estimate is not None else None
         ),
+        "message": message,
     }
+
+
+def _cache_dacon_detected_limit(competition: str, value: int) -> None:
+    path = competition_dir(competition) / "execution_profile.yaml"
+    profile = simple_yaml.load(path, default={})
+    if not isinstance(profile, dict):
+        profile = {}
+    profile["dacon_daily_submission_limit_detected"] = int(value)
+    simple_yaml.dump(profile, path)
+
+
+_KST = timezone(timedelta(hours=9))
+
+
+def _dacon_submission_window_stats(dacon_competition_id: str, limit: int) -> dict[str, Any]:
+    """Best-effort remaining-submissions count and estimated next reset time
+    for DACON, using a daily boundary at local midnight KST (UTC+9).
+
+    DACON's own daily submission limit is understood to reset around local
+    midnight KST -- unlike Kaggle, which resets 24h after a team's first
+    submission of the day (see _rolling_24h_submission_window_stats below,
+    kept for that future use rather than DACON's). This assumes the
+    submission history's c_time values are already in KST, since DACON is a
+    Korean-hosted platform -- unverified, but the best available assumption.
+    Display-only -- never used to block an actual submission attempt -- so
+    an incorrect assumption here does not cause a missed submission
+    opportunity, only an imprecise display.
+    """
+    empty = {"remaining": None, "next_reset_estimate": None}
+    try:
+        result = dacon_api.fetch_my_submissions(dacon_competition_id, env=dict(os.environ))
+    except Exception:  # noqa: BLE001 - must never break the caller over this
+        return empty
+    if not result.get("ok"):
+        return empty
+    now_kst = datetime.now(timezone.utc).astimezone(_KST).replace(tzinfo=None)
+    midnight_kst = now_kst.replace(hour=0, minute=0, second=0, microsecond=0)
+    count = 0
+    for row in result.get("submissions") or []:
+        timestamp = _parse_dacon_timestamp(str(row.get("c_time") or "")) if isinstance(row, dict) else None
+        if timestamp is not None and timestamp >= midnight_kst:
+            count += 1
+    remaining = max(0, limit - count)
+    next_reset_estimate = midnight_kst + timedelta(days=1) if count > 0 else None
+    return {"remaining": remaining, "next_reset_estimate": next_reset_estimate}
+
+
+def _rolling_24h_submission_window_stats(dacon_competition_id: str, limit: int) -> dict[str, Any]:
+    """Reserved for a platform whose daily limit resets 24h after a team's
+    first submission of the day (Kaggle works this way), rather than at a
+    fixed local-midnight boundary (DACON, see _dacon_submission_window_stats
+    above). Not currently wired into any live code path.
+
+    Computes a rolling 24h window over submission history: the reset
+    estimate is the oldest in-window submission's timestamp plus 24h -- the
+    moment that submission would fall out of the window and the remaining
+    count would tick back up by one. Display-only, same caveats as above.
+    """
+    empty = {"remaining": None, "next_reset_estimate": None}
+    try:
+        result = dacon_api.fetch_my_submissions(dacon_competition_id, env=dict(os.environ))
+    except Exception:  # noqa: BLE001 - must never break the caller over this
+        return empty
+    if not result.get("ok"):
+        return empty
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=24)
+    in_window: list[datetime] = []
+    for row in result.get("submissions") or []:
+        timestamp = _parse_dacon_timestamp(str(row.get("c_time") or "")) if isinstance(row, dict) else None
+        if timestamp is not None and timestamp >= cutoff:
+            in_window.append(timestamp)
+    remaining = max(0, limit - len(in_window))
+    next_reset_estimate = min(in_window) + timedelta(hours=24) if in_window and remaining < limit else None
+    return {"remaining": remaining, "next_reset_estimate": next_reset_estimate}
+
+
+def _parse_dacon_timestamp(value: str) -> datetime | None:
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def submit_trial_manually(competition: str, trial_id: str) -> dict[str, Any]:
+    """Submit one specific trial to DACON on demand.
+
+    This is the counterpart to the auto-loop skipping automatic submission
+    for daily-limited competitions -- once auto-submit is skipped, this is
+    how a trial actually gets submitted, on the user's own schedule instead
+    of immediately on completion.
+    """
+    profile = _load_profile_safely(competition)
+    if str(profile.get("platform") or "").casefold() != "dacon":
+        return {"ok": False, "status": "not_dacon", "message": "데콘 대회가 아닙니다."}
+    dacon_competition_id = str(profile.get("dacon_competition_id") or competition).strip()
+    dacon_team_name = str(profile.get("dacon_team_name") or "").strip()
+    if not dacon_team_name:
+        return {
+            "ok": False,
+            "status": "missing_team_name",
+            "message": "데콘 팀명이 설정되어 있지 않습니다 (execution_profile.yaml의 dacon_team_name).",
+        }
+    try:
+        exec_profile = load_execution_profile(competition)
+    except (FileNotFoundError, ValueError) as error:
+        return {"ok": False, "status": "missing_execution_profile", "message": str(error)}
+    submission_paths = exec_profile.get("artifacts", {}).get("submission") or []
+    if not submission_paths:
+        return {
+            "ok": False,
+            "status": "missing_submission_artifact",
+            "message": "execution_profile.yaml에 제출 산출물 경로가 선언되어 있지 않습니다.",
+        }
+    project_root_path = exec_profile.get("project_root")
+    if not project_root_path:
+        return {"ok": False, "status": "missing_project_root", "message": "execution_profile.yaml에 project_root가 없습니다."}
+    submission_file = str((Path(project_root_path) / str(submission_paths[0])).resolve())
+    if not Path(submission_file).is_file():
+        return {
+            "ok": False,
+            "status": "submission_file_missing",
+            "message": f"제출 파일을 찾을 수 없습니다: {submission_file}",
+        }
+
+    metrics = load_json(trial_dir(competition, trial_id) / "metrics.json")
+    local_score = metrics.get("cv_score")
+    objective = str(exec_profile.get("objective") or metrics.get("objective") or "maximize")
+    score_text = f"{local_score:.6f}" if isinstance(local_score, (int, float)) else "n/a"
+    message = f"{competition} {trial_id} local CV {score_text} (manual submit)"
+
+    result = _submit_trial(
+        competition=competition,
+        trial_id=trial_id,
+        version_name=f"{trial_id}_manual",
+        submission_file=submission_file,
+        objective=objective,
+        dacon_competition_id=dacon_competition_id,
+        dacon_team_name=dacon_team_name,
+        dacon_message=message,
+        notes="Submitted manually via web dashboard.",
+    )
+    return {"ok": str(result.get("status") or "") in {"submitted", "recorded"}, **result}
 
 
 def set_dacon_submission_limit_override(competition: str, value: int | None) -> dict[str, Any]:
@@ -2590,6 +2848,62 @@ def set_dacon_submission_limit_override(competition: str, value: int | None) -> 
         profile["dacon_daily_submission_limit"] = int(value)
     simple_yaml.dump(profile, path)
     return {"competition": competition, "dacon_daily_submission_limit": value}
+
+
+def set_dacon_team_name(competition: str, team_name: str | None) -> dict[str, Any]:
+    """Set (team_name given) or clear (team_name empty/None) the DACON team
+    name a trial submits under. An empty team name is what already makes
+    start_experiment() run locally without auto-submitting, so clearing it
+    here is a real, supported state -- not just "unset".
+    """
+    path = competition_dir(competition) / "execution_profile.yaml"
+    profile = simple_yaml.load(path, default={})
+    if not isinstance(profile, dict):
+        profile = {}
+    cleaned = (team_name or "").strip()
+    if cleaned:
+        profile["dacon_team_name"] = cleaned
+    else:
+        profile.pop("dacon_team_name", None)
+    simple_yaml.dump(profile, path)
+    return {"competition": competition, "dacon_team_name": cleaned or None}
+
+
+def refresh_dacon_competition_docs(competition: str, *, dacon_competition_id: str | None = None) -> dict[str, Any]:
+    """Scrape the DACON competition's own overview and data-description
+    pages and write them into overview.md / data_notes.md.
+
+    Kaggle registrations get this via the Kaggle CLI (competition_onboarding
+    .start_competition -> inspect_competition), which the web registration
+    flow doesn't even call. DACON had no equivalent at all, so every DACON
+    registration left these as generic placeholder text -- real domain
+    knowledge (what R-Hit@1cm means, what each column represents) that no
+    amount of profiling the uploaded data files can recover on its own.
+    Best-effort: a fetch failure here must never block registration.
+    """
+    resolved_id = str(dacon_competition_id or competition).strip()
+    written: list[str] = []
+    overview = dacon_api.fetch_competition_overview(resolved_id)
+    if overview.get("ok"):
+        (competition_dir(competition) / "overview.md").write_text(
+            f"# {competition}\n\n{overview['text']}\n\n(출처: {dacon_api.overview_description_url(resolved_id)})\n",
+            encoding="utf-8",
+        )
+        written.append("overview.md")
+    data_description = dacon_api.fetch_competition_data_description(resolved_id)
+    if data_description.get("ok"):
+        (competition_dir(competition) / "data_notes.md").write_text(
+            f"# Data Notes / {competition}\n\n{data_description['text']}\n\n"
+            f"(출처: {dacon_api.data_page_url(resolved_id)})\n",
+            encoding="utf-8",
+        )
+        written.append("data_notes.md")
+    return {
+        "competition": competition,
+        "written": written,
+        "overview_status": overview.get("status"),
+        "data_notes_status": data_description.get("status"),
+    }
 
 
 def _filesystem_experiments() -> list[dict[str, Any]]:

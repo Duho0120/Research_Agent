@@ -1307,6 +1307,39 @@ def create_demo_experiment_plan(
     return _write_plan_result(competition, trial_id, plan)
 
 
+def _per_sample_dataset_instructions(data_profile: dict[str, Any]) -> list[str]:
+    """Planning directives for competitions whose samples are one-file-each.
+
+    Real incident (DACON 236716): the per-sample feature files live in
+    train/ and test/ directories, but the id lists also exist in
+    sample_submission.csv / train_labels.csv. Planning a baseline off those
+    id lists alone is far easier, so the lineage got stuck predicting a
+    constant (zero, then the label centroid) without ever opening a single
+    feature file. That plan cannot produce a real validation score -- there
+    is nothing to score against -- and every downstream attempt to compute
+    one had to either fabricate a number or bypass the data loader.
+    """
+    if not isinstance(data_profile, dict):
+        return []
+    groups = data_profile.get("directory_datasets") or []
+    if data_profile.get("dataset_layout") != "per_sample_files" or not groups:
+        return []
+    train_group = next((g for g in groups if g.get("role") == "train"), {})
+    columns = ", ".join(train_group.get("per_file_columns", []) or []) or "the per-file columns"
+    train_dir = data_profile.get("train_dir") or "the train directory"
+    return [
+        f"DATA LAYOUT: this competition stores ONE FILE PER SAMPLE under {train_dir} (and the test "
+        f"directory), each holding columns [{columns}]. The real predictive signal lives ONLY in those "
+        "per-sample files.",
+        f"The plan MUST read the actual per-sample files from {train_dir} and derive features from them. "
+        "Reading only the id lists (sample_submission.csv / the labels file) is NOT a valid pipeline: it "
+        "yields a constant predictor with no inputs, which cannot be locally validated or improved.",
+        "Do not plan a constant/global-statistic predictor (zeros, the label mean/centroid, etc.) as the "
+        "modeling approach. If a previous trial did that, treat escaping it -- actually loading the "
+        "per-sample features -- as this trial's primary change.",
+    ]
+
+
 def build_demo_plan_payload(context: dict[str, Any], *, model: str) -> dict[str, Any]:
     if _is_delta_patch_context(context):
         return build_delta_plan_payload(context, model=model)
@@ -1327,6 +1360,7 @@ def build_demo_plan_payload(context: dict[str, Any], *, model: str) -> dict[str,
             "Use the RAG context pack as evidence. Prefer concrete details from retrieved documents over generic ML advice.",
         ]
     )
+    per_sample_instruction = _per_sample_dataset_instructions(context.get("data_profile", {}))
     cycle_instruction = (
         "Create exactly one continuation delta plan for this ML workspace."
         if source_trial_id
@@ -1378,6 +1412,7 @@ def build_demo_plan_payload(context: dict[str, Any], *, model: str) -> dict[str,
                 "content": "\n".join(
                     [
                         cycle_instruction,
+                        *per_sample_instruction,
                         "Do not include leaderboard submission, human review, ensembling, or multi-trial axis switching.",
                         "Model/checkpoint artifacts are optional. Follow artifact_policy: do not persist a trained model by default.",
                         "If a model artifact is needed, justify it using an allowed_when reason such as required_for_separate_predict_command.",
@@ -1427,6 +1462,7 @@ def build_delta_plan_payload(context: dict[str, Any], *, model: str) -> dict[str
                 "content": "\n".join(
                     [
                         "Create exactly one delta_patch plan for the next trial.",
+                        *_per_sample_dataset_instructions(context.get("data_profile", {})),
                         "RAG is intentionally skipped for this active-axis refinement.",
                         "This is not a new experiment design. Do not rewrite the baseline, full pipeline, or long rationale.",
                         "Use the source/base trial as the code base.",

@@ -132,6 +132,22 @@ def _clear_competition_synced_rows(competition: str, db_path: Path) -> int:
     return total
 
 
+def _first_present(*values: Any) -> Any:
+    """First value that is not None.
+
+    A plain `a or b or c` chain silently discards a legitimate score of 0.0
+    (and 0, and 0.0-valued accuracy) because those are falsy. Real incident:
+    the pipeline finally computed a genuine R-Hit@1cm of 0.0 -- a correct
+    result for a constant predictor missing by ~2.9m on average -- and the
+    dashboard still showed no local score at all, because the sync dropped it
+    here and stored NULL.
+    """
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
 def _sync_trial(
     competition: str,
     trial_id: str,
@@ -196,13 +212,17 @@ def _sync_trial(
                 "trial_id": trial_id,
                 "metric": score_metrics.get("metric") or competition_record.get("metric"),
                 "objective": score_metrics.get("objective") or competition_record.get("objective"),
-                "local_score": score_metrics.get("cv_score")
-                or score_metrics.get("validation_accuracy")
-                or score_metrics.get("local_score"),
-                "lb_score": decision.get("lb_score")
-                or _submission_score(submission)
-                or score_metrics.get("kaggle_lb_score")
-                or score_metrics.get("lb_score"),
+                "local_score": _first_present(
+                    score_metrics.get("cv_score"),
+                    score_metrics.get("validation_accuracy"),
+                    score_metrics.get("local_score"),
+                ),
+                "lb_score": _first_present(
+                    decision.get("lb_score"),
+                    _submission_score(submission),
+                    score_metrics.get("kaggle_lb_score"),
+                    score_metrics.get("lb_score"),
+                ),
                 "local_status": decision.get("local_status"),
                 "lb_status": decision.get("lb_status"),
                 "is_best_local": trial_id == recommended_base

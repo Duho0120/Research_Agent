@@ -259,6 +259,105 @@ class WorkspaceRunnerTest(unittest.TestCase):
 
             self.assertEqual("completed", result["status"])
 
+    def test_score_stage_runs_after_predict_when_harness_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            project = Path(tmp) / "project"
+            root.mkdir()
+            project.mkdir()
+            (project / "train_step.py").write_text(
+                "from pathlib import Path\n"
+                "Path('outputs').mkdir(exist_ok=True)\n"
+                "Path('outputs/metrics.json').write_text('{}\\n')\n",
+                encoding="utf-8",
+            )
+            (project / "predict_step.py").write_text(
+                "from pathlib import Path\nPath('outputs/submission.csv').write_text('id,target\\n')\n",
+                encoding="utf-8",
+            )
+            (project / "scoring_harness.py").write_text(
+                "from pathlib import Path\n"
+                "path = Path('order.txt')\n"
+                "path.write_text((path.read_text() if path.exists() else '') + 'score\\n')\n",
+                encoding="utf-8",
+            )
+            self._write_profile(
+                root,
+                project,
+                train_commands=["{python} train_step.py"],
+                predict_commands=["{python} predict_step.py"],
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = run_workspace_pipeline("demo", "trial_010", run_now=True)
+
+            self.assertEqual("completed", result["status"])
+            self.assertEqual(
+                ["test", "train", "predict", "score"], [item["stage"] for item in result["command_results"]]
+            )
+            self.assertEqual("score\n", (project / "order.txt").read_text())
+
+    def test_score_stage_is_absent_when_harness_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            project = Path(tmp) / "project"
+            root.mkdir()
+            project.mkdir()
+            (project / "train_step.py").write_text(
+                "from pathlib import Path\n"
+                "Path('outputs').mkdir(exist_ok=True)\n"
+                "Path('outputs/metrics.json').write_text('{}\\n')\n",
+                encoding="utf-8",
+            )
+            (project / "predict_step.py").write_text(
+                "from pathlib import Path\nPath('outputs/submission.csv').write_text('id,target\\n')\n",
+                encoding="utf-8",
+            )
+            self._write_profile(
+                root,
+                project,
+                train_commands=["{python} train_step.py"],
+                predict_commands=["{python} predict_step.py"],
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = run_workspace_pipeline("demo", "trial_011", run_now=True)
+
+            self.assertEqual("completed", result["status"])
+            self.assertEqual(["test", "train", "predict"], [item["stage"] for item in result["command_results"]])
+            self.assertNotIn("score", result["commands"])
+
+    def test_score_stage_failure_is_tagged_distinctly_from_model_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "agent"
+            project = Path(tmp) / "project"
+            root.mkdir()
+            project.mkdir()
+            (project / "train_step.py").write_text(
+                "from pathlib import Path\n"
+                "Path('outputs').mkdir(exist_ok=True)\n"
+                "Path('outputs/metrics.json').write_text('{}\\n')\n",
+                encoding="utf-8",
+            )
+            (project / "predict_step.py").write_text(
+                "from pathlib import Path\nPath('outputs/submission.csv').write_text('id,target\\n')\n",
+                encoding="utf-8",
+            )
+            (project / "scoring_harness.py").write_text("raise SystemExit(1)\n", encoding="utf-8")
+            self._write_profile(
+                root,
+                project,
+                train_commands=["{python} train_step.py"],
+                predict_commands=["{python} predict_step.py"],
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = run_workspace_pipeline("demo", "trial_012", run_now=True)
+
+            self.assertEqual("failed", result["status"])
+            self.assertEqual("score", result["failed_stage"])
+            self.assertEqual("fix-scoring-harness", result["next_action"])
+
     def test_cli_runs_workspace_pipeline_with_explicit_approval(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "agent"

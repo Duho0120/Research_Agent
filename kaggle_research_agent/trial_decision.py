@@ -655,7 +655,20 @@ _AXIS_PREFIX_SYNONYMS = {
     "model_hyperparameter": "model_hyperparameters",
     "hyperparameter": "model_hyperparameters",
     "hyperparameters": "model_hyperparameters",
+    # All spellings of "touch the local validation/scoring harness" collapse
+    # to one canonical axis -- workspace_coding_handoff.py gates write access
+    # to scoring_harness.py on this exact normalized name, so a re-spelled
+    # axis must not silently regain (or lose) that access.
+    "validation_structure": "scoring_logic",
+    "validation_method": "scoring_logic",
+    "validation_method_change": "scoring_logic",
+    "holdout_strategy": "scoring_logic",
+    "scoring": "scoring_logic",
+    "scoring_method": "scoring_logic",
+    "scoring_harness": "scoring_logic",
 }
+
+SCORING_LOGIC_AXIS = "scoring_logic"
 
 
 def _normalize_axis(axis: Any) -> str:

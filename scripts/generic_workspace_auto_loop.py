@@ -13,7 +13,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from kaggle_research_agent.agents.memory import log_decision  # noqa: E402
 from kaggle_research_agent.agents.submission import submit_trial  # noqa: E402
+from kaggle_research_agent.cli_app import (  # noqa: E402
+    check_dacon_submission_limit,
+    dacon_auto_submit_allowed,
+)
 from kaggle_research_agent.demo_one_cycle import prepare_workspace_trial_plan  # noqa: E402
 from kaggle_research_agent.execution_profile import load_execution_profile, validate_execution_profile  # noqa: E402
 from kaggle_research_agent.graph.workspace_loop_graph import (  # noqa: E402
@@ -34,7 +39,11 @@ from kaggle_research_agent.trial_artifacts import (  # noqa: E402
 )
 from kaggle_research_agent.workspace_after_coding import run_workspace_after_coding  # noqa: E402
 from kaggle_research_agent.workspace_code_writer import run_workspace_code_writer  # noqa: E402
-from kaggle_research_agent.workspace_coding_handoff import prepare_workspace_coding_handoff  # noqa: E402
+from kaggle_research_agent.workspace_coding_handoff import (  # noqa: E402
+    HARNESS_INIT_TRIAL_ID,
+    generate_scoring_harness,
+    prepare_workspace_coding_handoff,
+)
 from kaggle_research_agent.workspace_metrics_collector import collect_workspace_metrics  # noqa: E402
 from kaggle_research_agent.workspace_next_gate import plan_next_workspace_trial  # noqa: E402
 from kaggle_research_agent.workspace_result_cycle import process_workspace_result  # noqa: E402
@@ -302,7 +311,29 @@ def run_one_trial(
             "execution_consistency": consistency,
         }
     submission_run = None
-    if submit:
+    # Resolve the daily limit here (not just from cache) so a competition
+    # whose dashboard was never opened still gets checked before the loop
+    # ever attempts a submission -- otherwise an unresolved "unknown" limit
+    # was silently treated the same as "no limit" and auto-submitted anyway,
+    # defeating the safe-by-default off setting.
+    dacon_limit_known = (
+        bool(submit and dacon_competition_id)
+        and check_dacon_submission_limit(competition).get("daily_submission_limit") is not None
+    )
+    if submit and dacon_competition_id and dacon_limit_known and not dacon_auto_submit_allowed(competition):
+        # A known daily submission limit exists and the researcher has not
+        # opted in to auto-submit -- skip the actual DACON API call entirely
+        # rather than risk burning the scarce daily quota automatically.
+        # Local results and next-trial planning proceed as normal; the
+        # trial can be submitted on demand later from the dashboard.
+        submission_run = {
+            "status": "skipped_daily_limit_known",
+            "reason": (
+                "Daily DACON submission limit is known and auto-submit is not enabled -- "
+                "skipped automatic submission. Submit this trial manually when ready."
+            ),
+        }
+    elif submit:
         save_loop_state(phase="submitting")
         submission_file = submission_artifact_path(profile)
         if not submission_file:
@@ -556,6 +587,39 @@ def revise_planned_trial_for_pending_insight(
     )
 
 
+def _previous_cycle_ignored_feedback_source_trial(competition: str, trial_id: str) -> str | None:
+    """If the last persisted attempt for this trial was itself a corrective
+    retry (coding_feedback was non-empty) and it still hit the exact same
+    guardrail issue it was warned about, a fresh cycle retrying the same way
+    again is pointless -- return the source trial to re-plan from instead.
+
+    Returns None when there is nothing to act on (no previous attempt, the
+    previous attempt succeeded, or it failed on a different/new issue).
+    """
+    out_dir = trial_dir(competition, trial_id)
+    handoff_path = out_dir / "workspace_coding_handoff.json"
+    result_path = out_dir / "workspace_coding_result.json"
+    if not handoff_path.exists() or not result_path.exists():
+        return None
+    try:
+        handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if result.get("status") == "completed":
+        return None
+    feedback = handoff.get("coding_feedback")
+    if not isinstance(feedback, dict) or not feedback:
+        return None
+    rejected = {str(item) for item in feedback.get("rejected_issues", []) or []}
+    if not rejected:
+        return None
+    issues = {str(item) for item in result.get("blocking_issues", []) or []}
+    if not (issues & rejected):
+        return None
+    return str(handoff.get("source_trial_id") or "") or None
+
+
 def run_code_writer_trial(
     competition: str,
     trial_id: str,
@@ -566,12 +630,32 @@ def run_code_writer_trial(
     trial_llm_calls: int | None,
     strategy_calls_today: int | None,
 ) -> dict[str, Any]:
+    ignored_feedback_source = _previous_cycle_ignored_feedback_source_trial(competition, trial_id)
+    if ignored_feedback_source is not None:
+        print(
+            "Previous cycle's corrective retry repeated the exact same violation it was warned about; "
+            "forcing a re-plan instead of retrying the same way again...",
+            flush=True,
+        )
+        _force_replan_same_trial(
+            competition,
+            trial_id,
+            source_trial_id=ignored_feedback_source,
+            model=model,
+            provider=provider,
+            allow_api=allow_api,
+            trial_llm_calls=trial_llm_calls,
+            strategy_calls_today=strategy_calls_today,
+        )
     last_blocked: dict[str, Any] | None = None
     runtime_failure_context: dict[str, Any] | None = None
+    coding_feedback: dict[str, Any] | None = None
     for attempt in range(1, 3):
         expanded_retry = attempt > 1
         if runtime_failure_context:
             print("Workspace execution failed; asking the code writer to repair the same trial once...", flush=True)
+        elif coding_feedback:
+            print("Code writer's previous attempt was blocked by automated review; retrying with that feedback...", flush=True)
         elif expanded_retry:
             print("Code writer blocked by missing code snapshot context; regenerating expanded handoff and retrying...", flush=True)
         handoff = prepare_workspace_coding_handoff(
@@ -581,9 +665,12 @@ def run_code_writer_trial(
             retry_reason=(
                 "workspace_runtime_failure"
                 if runtime_failure_context
+                else "code_writer_blocked_review_feedback"
+                if coding_feedback
                 else ("code_writer_blocked_snapshot_context" if expanded_retry else None)
             ),
             runtime_failure_context=runtime_failure_context,
+            coding_feedback=coding_feedback,
         )
         if handoff.get("status") != "ready":
             if attempt == 1 and _should_replan_for_plan_consistency(handoff.get("blocking_issues")):
@@ -646,8 +733,45 @@ def run_code_writer_trial(
                 )
                 continue
             if attempt == 1 and _should_retry_code_writer_block(last_blocked):
+                coding_feedback = _coding_feedback_from_blocked_result(last_blocked)
                 continue
+            if coding_feedback:
+                rejected = {str(item) for item in coding_feedback.get("rejected_issues", []) or []}
+                new_issues = {
+                    str(item)
+                    for item in [
+                        *list(code_writer_result.get("blocking_issues") or []),
+                        *list(code_writer_result.get("issues") or []),
+                    ]
+                }
+                repeated = sorted(rejected & new_issues)
+                if repeated:
+                    last_blocked["feedback_ignored"] = True
+                    log_decision(
+                        competition,
+                        trial_id,
+                        decision_type="code_writer_feedback_ignored",
+                        decision="blocked",
+                        reason="Corrective retry repeated the exact same guardrail violation it was warned about.",
+                        evidence={"rejected_issues": repeated},
+                        next_action="force_replan_next_cycle",
+                    )
             return last_blocked
+        if allow_api and trial_id != HARNESS_INIT_TRIAL_ID:
+            # Only attempted once the code writer's own result was accepted
+            # -- that means predict_step.py just passed the scoring interface
+            # check (load_samples()/predict() defined), so the harness has a
+            # real, verified interface to call into. Attempting this before
+            # any trial has ever written a compliant predict_step.py (e.g.
+            # before trial_001) would always fail: the scaffold's default
+            # predict_step.py doesn't define these functions either.
+            harness_status = generate_scoring_harness(competition, model=model, provider=provider, allow_api=allow_api)
+            if harness_status.get("status") == "blocked":
+                print(
+                    "One-time scoring harness generation was blocked; continuing this trial without "
+                    "the score stage for now (see harness_status for details).",
+                    flush=True,
+                )
         after_coding = run_workspace_after_coding(
             competition,
             trial_id,
@@ -768,6 +892,48 @@ def _force_replan_same_trial(
     )
 
 
+_GUARDRAIL_BLOCK_MARKERS = (
+    "local_validation_not_computed",
+    "predict_script_changed_without_test_script_sync",
+    "possible_fabricated_data_fallback",
+    "scoring_interface_missing_function",
+    "predict_script_does_not_iterate_sample_files",
+    "changed_file_not_allowed",
+    "forbidden_path_touched",
+)
+
+
+def _guardrail_block_issues(result: dict[str, Any]) -> list[str]:
+    """The subset of a blocked result's issues that came from
+    workspace_code_writer.py's own mechanical guardrails, as opposed to a
+    missing-context reason (handled separately via expanded_snapshot)."""
+    code_writer = result.get("code_writer") if isinstance(result.get("code_writer"), dict) else {}
+    issues = [
+        str(item)
+        for item in [*list(code_writer.get("blocking_issues") or []), *list(code_writer.get("issues") or [])]
+    ]
+    return [issue for issue in issues if any(marker in issue.lower() for marker in _GUARDRAIL_BLOCK_MARKERS)]
+
+
+def _coding_feedback_from_blocked_result(result: dict[str, Any]) -> dict[str, Any] | None:
+    """Build the corrective-feedback payload rendered into the retry prompt
+    (see workspace_coding_handoff.py's "## Previous Attempt Was Rejected"),
+    when the block came from one of our own mechanical guardrails.
+
+    Without this, a retry only got more base-code context (expanded_snapshot)
+    -- it never actually told the model which of its own checks it had
+    tripped, so a retry just reproduced the exact same mistake.
+    """
+    rejected_issues = _guardrail_block_issues(result)
+    if not rejected_issues:
+        return None
+    code_writer = result.get("code_writer") if isinstance(result.get("code_writer"), dict) else {}
+    return {
+        "changed_files": list(code_writer.get("changed_files") or []),
+        "rejected_issues": rejected_issues,
+    }
+
+
 def _should_retry_code_writer_block(result: dict[str, Any]) -> bool:
     if result.get("status") != "code_writer_blocked":
         return False
@@ -795,6 +961,19 @@ def _should_retry_code_writer_block(result: dict[str, Any]) -> bool:
         "exact find/replace anchors",
         "missing authoritative source for",
         "is required for patch-only mode",
+        # Mechanical guardrail blocks (workspace_code_writer.py's own
+        # validators) -- these are real problems in what the code writer
+        # produced, not a missing-context issue, but a retry that explains
+        # exactly what was flagged (see coding_feedback below) has a real
+        # chance of producing compliant code, unlike blindly retrying with
+        # more base-code context.
+        "local_validation_not_computed",
+        "predict_script_changed_without_test_script_sync",
+        "possible_fabricated_data_fallback",
+        "scoring_interface_missing_function",
+        "predict_script_does_not_iterate_sample_files",
+        "changed_file_not_allowed",
+        "forbidden_path_touched",
     ]
     return any(marker in issue_text for marker in retriable_markers) and not any(
         marker in issue_text for marker in _NON_RECOVERABLE_MARKERS

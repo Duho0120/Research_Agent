@@ -216,6 +216,57 @@ _REAL_LEADERBOARD_HTML_FRAGMENT = """
 """
 
 
+class DaconCompetitionDocsTest(unittest.TestCase):
+    # Real fragment shapes confirmed by inspection: DACON renders each
+    # free-text section (overview, per-file data description) inside its own
+    # rich-text editor container (class="ql-editor"), and duplicates it later
+    # in the page via the client-hydration payload.
+    _OVERVIEW_HTML_FRAGMENT = (
+        '<script>var junk = "[배경] unrelated script text";</script>'
+        '<div class="ql-editor"></div>'
+        '<div class="ql-editor">[배경] 모기 비행 궤적 예측 대회 설명입니다. 80ms 뒤 위치를 예측합니다.</div>'
+        '<div class="ql-editor">[배경] 모기 비행 궤적 예측 대회 설명입니다. 80ms 뒤 위치를 예측합니다.</div>'
+    )
+    _DATA_HTML_FRAGMENT = (
+        '<div class="ql-editor"></div>'
+        '<div class="ql-editor">train/ : timestep_ms, x, y, z 컬럼을 가진 CSV 파일들입니다.</div>'
+    )
+
+    def test_fetch_competition_overview_extracts_first_non_empty_editor_block(self):
+        result = dacon_api.fetch_competition_overview(
+            "236716",
+            fetch_html_fn=lambda cid: {"ok": True, "html": self._OVERVIEW_HTML_FRAGMENT},
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual("found", result["status"])
+        self.assertIn("모기 비행 궤적", result["text"])
+        self.assertNotIn("unrelated script text", result["text"])
+
+    def test_fetch_competition_overview_reports_not_found_without_raising(self):
+        result = dacon_api.fetch_competition_overview(
+            "236716",
+            fetch_html_fn=lambda cid: {"ok": True, "html": "<div class='ql-editor'></div>"},
+        )
+        self.assertFalse(result["ok"])
+        self.assertEqual("not_found", result["status"])
+
+    def test_fetch_competition_overview_reports_fetch_failure(self):
+        result = dacon_api.fetch_competition_overview(
+            "236716",
+            fetch_html_fn=lambda cid: {"ok": False, "status": "fetch_error", "error": "timeout"},
+        )
+        self.assertFalse(result["ok"])
+        self.assertEqual("fetch_error", result["status"])
+
+    def test_fetch_competition_data_description_extracts_first_non_empty_editor_block(self):
+        result = dacon_api.fetch_competition_data_description(
+            "236716",
+            fetch_html_fn=lambda cid: {"ok": True, "html": self._DATA_HTML_FRAGMENT},
+        )
+        self.assertTrue(result["ok"])
+        self.assertIn("timestep_ms", result["text"])
+
+
 class DaconLeaderboardTest(unittest.TestCase):
     def test_competition_id_from_link_extracts_numeric_id(self):
         self.assertEqual(

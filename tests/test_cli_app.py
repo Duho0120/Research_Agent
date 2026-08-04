@@ -1570,6 +1570,33 @@ class DeleteExperimentTest(unittest.TestCase):
                         self.assertNotIn("demo-delete", remaining_ids)
                         self.assertNotEqual("demo-delete", cli_app.selected_competition())
 
+    def test_delete_experiment_removes_demo_workspace_even_with_stale_or_missing_source_record(self):
+        # Real incident: a demo_workspaces/<competition>/ folder (with old
+        # code and stale outputs/metrics.json from a previous, buggy run)
+        # survived a delete because workspace_source.json's created_workspace
+        # bookkeeping didn't reflect reality. Removal by convention -- not
+        # by trusting that record -- is what actually fixes this.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+                    with patch.dict("os.environ", {"RESEARCH_AGENT_RUNTIME_DIR": str(root / "_runtime")}):
+                        db_path = initialize_state_db()
+                        upsert_competition({"competition_id": "demo-stale", "platform": "dacon"}, db_path)
+                        workspace = root / "demo_workspaces" / "demo-stale"
+                        (workspace / "outputs").mkdir(parents=True)
+                        (workspace / "predict_step.py").write_text("stale code", encoding="utf-8")
+                        (workspace / "outputs" / "metrics.json").write_text("{}", encoding="utf-8")
+                        (root / "competitions" / "demo-stale").mkdir(parents=True)
+                        # No workspace_source.json at all -- simulates the
+                        # record being missing/stale, not just False.
+                        cli_app.select_competition("demo-stale")
+
+                        result = cli_app.delete_experiment("demo-stale")
+
+                        self.assertTrue(result["ok"])
+                        self.assertFalse(workspace.exists())
+
     def test_delete_experiment_keeps_external_source_path(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1658,7 +1685,161 @@ class DeleteExperimentTest(unittest.TestCase):
                         )
 
 
+class SubmitTrialManuallyTest(unittest.TestCase):
+    def _write_profile(self, root: Path, project: Path, *, team_name: str = "뚜로") -> None:
+        from kaggle_research_agent import simple_yaml
+
+        comp_dir = root / "competitions" / "demo"
+        comp_dir.mkdir(parents=True)
+        simple_yaml.dump(
+            {
+                "platform": "dacon",
+                "dacon_competition_id": "236716",
+                "dacon_team_name": team_name,
+                "project_root": str(project),
+                "objective": "maximize",
+                "artifacts": {"submission": ["outputs/submission.csv"]},
+            },
+            comp_dir / "execution_profile.yaml",
+        )
+
+    def test_submits_using_execution_profile_and_trial_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "workspace"
+            (project / "outputs").mkdir(parents=True)
+            (project / "outputs" / "submission.csv").write_text("id,x,y,z\n1,0,0,0\n", encoding="utf-8")
+            self._write_profile(root, project)
+            trial = root / "experiments" / "demo" / "trial_004"
+            trial.mkdir(parents=True)
+            (trial / "metrics.json").write_text(json.dumps({"cv_score": 0.591}), encoding="utf-8")
+
+            captured = {}
+
+            def fake_submit_trial(**kwargs):
+                captured.update(kwargs)
+                return {"status": "submitted", "trial_id": kwargs["trial_id"]}
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+                    with patch("kaggle_research_agent.cli_app._submit_trial", side_effect=fake_submit_trial):
+                        result = cli_app.submit_trial_manually("demo", "trial_004")
+
+            self.assertTrue(result["ok"])
+            self.assertEqual("236716", captured["dacon_competition_id"])
+            self.assertEqual("뚜로", captured["dacon_team_name"])
+            self.assertEqual("trial_004_manual", captured["version_name"])
+            self.assertIn("0.591000", captured["dacon_message"])
+            self.assertTrue(captured["submission_file"].endswith("submission.csv"))
+
+    def test_rejects_non_dacon_competition(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            from kaggle_research_agent import simple_yaml
+
+            comp_dir = root / "competitions" / "demo"
+            comp_dir.mkdir(parents=True)
+            simple_yaml.dump({"platform": "kaggle"}, comp_dir / "execution_profile.yaml")
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+                    result = cli_app.submit_trial_manually("demo", "trial_004")
+
+            self.assertFalse(result["ok"])
+            self.assertEqual("not_dacon", result["status"])
+
+    def test_rejects_when_team_name_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "workspace"
+            project.mkdir()
+            self._write_profile(root, project, team_name="")
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+                    result = cli_app.submit_trial_manually("demo", "trial_004")
+
+            self.assertFalse(result["ok"])
+            self.assertEqual("missing_team_name", result["status"])
+
+    def test_rejects_when_submission_file_missing_on_disk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "workspace"
+            project.mkdir()
+            self._write_profile(root, project)
+            trial = root / "experiments" / "demo" / "trial_004"
+            trial.mkdir(parents=True)
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+                    result = cli_app.submit_trial_manually("demo", "trial_004")
+
+            self.assertFalse(result["ok"])
+            self.assertEqual("submission_file_missing", result["status"])
+
+
+class RefreshDaconCompetitionDocsTest(unittest.TestCase):
+    def test_writes_overview_and_data_notes_from_scraped_text(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+                    comp_dir = root / "competitions" / "demo"
+                    comp_dir.mkdir(parents=True)
+                    (comp_dir / "overview.md").write_text(
+                        "# demo\n\nDescribe the competition, data, and important constraints here.\n",
+                        encoding="utf-8",
+                    )
+
+                    with patch(
+                        "kaggle_research_agent.cli_app.dacon_api.fetch_competition_overview",
+                        return_value={"ok": True, "status": "found", "text": "실제 대회 설명입니다."},
+                    ):
+                        with patch(
+                            "kaggle_research_agent.cli_app.dacon_api.fetch_competition_data_description",
+                            return_value={"ok": True, "status": "found", "text": "실제 데이터 설명입니다."},
+                        ):
+                            result = cli_app.refresh_dacon_competition_docs("demo", dacon_competition_id="236716")
+
+                    overview_text = (comp_dir / "overview.md").read_text(encoding="utf-8")
+                    data_notes_text = (comp_dir / "data_notes.md").read_text(encoding="utf-8")
+
+            self.assertEqual(["overview.md", "data_notes.md"], result["written"])
+            self.assertIn("실제 대회 설명입니다.", overview_text)
+            self.assertNotIn("Describe the competition", overview_text)
+            self.assertIn("실제 데이터 설명입니다.", data_notes_text)
+
+    def test_a_scrape_failure_does_not_raise_or_overwrite_the_other_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+                    comp_dir = root / "competitions" / "demo"
+                    comp_dir.mkdir(parents=True)
+
+                    with patch(
+                        "kaggle_research_agent.cli_app.dacon_api.fetch_competition_overview",
+                        return_value={"ok": False, "status": "fetch_error", "error": "timeout"},
+                    ):
+                        with patch(
+                            "kaggle_research_agent.cli_app.dacon_api.fetch_competition_data_description",
+                            return_value={"ok": True, "status": "found", "text": "실제 데이터 설명입니다."},
+                        ):
+                            result = cli_app.refresh_dacon_competition_docs("demo", dacon_competition_id="236716")
+
+            self.assertEqual(["data_notes.md"], result["written"])
+            self.assertFalse((comp_dir / "overview.md").exists())
+            self.assertTrue((comp_dir / "data_notes.md").exists())
+
+
 class DaconSubmissionLimitTest(unittest.TestCase):
+    # fetch_my_submissions is patched in every test below (even ones only
+    # about the limit number) so no test can ever make a real network call
+    # to DACON -- a real DACON_SESSION_COOKIE happening to be set in the dev
+    # environment must not turn a unit test into a live API call.
+    _NO_SUBMISSION_HISTORY = {"ok": False, "status": "session_token_missing", "error": "no token"}
+
     def test_check_uses_manual_override_without_hitting_the_network(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1677,12 +1858,18 @@ class DaconSubmissionLimitTest(unittest.TestCase):
                         "kaggle_research_agent.cli_app.dacon_api.fetch_daily_submission_limit",
                         side_effect=AssertionError("should not fetch when a manual override is set"),
                     ):
-                        result = cli_app.check_dacon_submission_limit("demo")
+                        with patch(
+                            "kaggle_research_agent.cli_app.dacon_api.fetch_my_submissions",
+                            return_value=self._NO_SUBMISSION_HISTORY,
+                        ):
+                            result = cli_app.check_dacon_submission_limit("demo")
 
             self.assertEqual("manual_override", result["status"])
             self.assertEqual(3, result["daily_submission_limit"])
 
-    def test_check_falls_back_to_live_fetch_without_an_override(self):
+    def test_check_fetches_once_then_caches_into_execution_profile(self):
+        # "처음에만 조회하면 돼" -- the rules page must only be scraped the
+        # first time; every later call must read the cached value instead.
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with patch("kaggle_research_agent.paths.project_root", return_value=root):
@@ -1696,11 +1883,26 @@ class DaconSubmissionLimitTest(unittest.TestCase):
                     with patch(
                         "kaggle_research_agent.cli_app.dacon_api.fetch_daily_submission_limit",
                         return_value={"ok": True, "status": "found", "daily_submission_limit": 5},
-                    ):
-                        result = cli_app.check_dacon_submission_limit("demo")
+                    ) as fetch_limit:
+                        with patch(
+                            "kaggle_research_agent.cli_app.dacon_api.fetch_my_submissions",
+                            return_value=self._NO_SUBMISSION_HISTORY,
+                        ):
+                            first = cli_app.check_dacon_submission_limit("demo")
 
-            self.assertEqual("auto_detected", result["status"])
-            self.assertEqual(5, result["daily_submission_limit"])
+                            with patch(
+                                "kaggle_research_agent.cli_app.dacon_api.fetch_daily_submission_limit",
+                                side_effect=AssertionError("should not re-fetch once cached"),
+                            ):
+                                second = cli_app.check_dacon_submission_limit("demo")
+
+            self.assertEqual(1, fetch_limit.call_count)
+            self.assertEqual("auto_detected", first["status"])
+            self.assertEqual(5, first["daily_submission_limit"])
+            self.assertEqual("auto_detected", second["status"])
+            self.assertEqual(5, second["daily_submission_limit"])
+            cached = simple_yaml.load(profile_path, default={})
+            self.assertEqual(5, cached["dacon_daily_submission_limit_detected"])
 
     def test_check_reports_unknown_when_rules_page_has_no_stated_limit(self):
         # A miss must surface as "unknown", not silently be treated as "no
@@ -1720,10 +1922,109 @@ class DaconSubmissionLimitTest(unittest.TestCase):
                         "kaggle_research_agent.cli_app.dacon_api.fetch_daily_submission_limit",
                         return_value={"ok": False, "status": "not_found", "error": "..."},
                     ):
-                        result = cli_app.check_dacon_submission_limit("demo")
+                        with patch(
+                            "kaggle_research_agent.cli_app.dacon_api.fetch_my_submissions",
+                            side_effect=AssertionError("must not fetch submission history when limit is unknown"),
+                        ):
+                            result = cli_app.check_dacon_submission_limit("demo")
 
             self.assertEqual("unknown", result["status"])
             self.assertIsNone(result["daily_submission_limit"])
+            self.assertIsNone(result["remaining"])
+
+    def test_check_computes_remaining_using_kst_midnight_boundary(self):
+        # DACON's daily limit is understood to reset around local midnight
+        # KST -- unlike Kaggle's 24h-after-first-submission model (see
+        # RollingWindowSubmissionStatsTest below, kept for that future use).
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+                    from datetime import datetime, timedelta, timezone
+
+                    from kaggle_research_agent import simple_yaml
+
+                    profile_path = root / "competitions" / "demo" / "execution_profile.yaml"
+                    profile_path.parent.mkdir(parents=True)
+                    simple_yaml.dump(
+                        {"dacon_competition_id": "236716", "dacon_daily_submission_limit": 5},
+                        profile_path,
+                    )
+                    kst = timezone(timedelta(hours=9))
+                    now_kst = datetime.now(timezone.utc).astimezone(kst).replace(tzinfo=None)
+                    midnight_kst = now_kst.replace(hour=0, minute=0, second=0, microsecond=0)
+                    today_a = (midnight_kst + timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+                    today_b = (midnight_kst + timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
+                    yesterday = (midnight_kst - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+
+                    with patch(
+                        "kaggle_research_agent.cli_app.dacon_api.fetch_my_submissions",
+                        return_value={
+                            "ok": True,
+                            "submissions": [
+                                {"c_time": today_a},
+                                {"c_time": today_b},
+                                {"c_time": yesterday},  # before KST midnight, must not count
+                            ],
+                        },
+                    ):
+                        result = cli_app.check_dacon_submission_limit("demo")
+
+            self.assertEqual(5, result["daily_submission_limit"])
+            self.assertEqual(3, result["remaining"])  # 5 - 2 counted since KST midnight
+            expected_reset = midnight_kst + timedelta(days=1)
+            self.assertEqual(expected_reset.strftime("%Y-%m-%d %H:%M KST"), result["next_reset_estimate"])
+
+    def test_check_omits_reset_estimate_when_no_submissions_are_counted_today(self):
+        # Nothing pending against the limit -- there is nothing to reset.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+                    from kaggle_research_agent import simple_yaml
+
+                    profile_path = root / "competitions" / "demo" / "execution_profile.yaml"
+                    profile_path.parent.mkdir(parents=True)
+                    simple_yaml.dump(
+                        {"dacon_competition_id": "236716", "dacon_daily_submission_limit": 5},
+                        profile_path,
+                    )
+
+                    with patch(
+                        "kaggle_research_agent.cli_app.dacon_api.fetch_my_submissions",
+                        return_value={"ok": True, "submissions": []},
+                    ):
+                        result = cli_app.check_dacon_submission_limit("demo")
+
+            self.assertEqual(5, result["remaining"])
+            self.assertIsNone(result["next_reset_estimate"])
+
+    def test_check_shows_limit_alone_when_remaining_cannot_be_computed(self):
+        # Per explicit instruction: when the limit is known but the
+        # remaining count can't be (e.g. no/expired session token), show the
+        # limit alone rather than a broken "?/5" or hiding it entirely.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+                    from kaggle_research_agent import simple_yaml
+
+                    profile_path = root / "competitions" / "demo" / "execution_profile.yaml"
+                    profile_path.parent.mkdir(parents=True)
+                    simple_yaml.dump(
+                        {"dacon_competition_id": "236716", "dacon_daily_submission_limit": 5},
+                        profile_path,
+                    )
+
+                    with patch(
+                        "kaggle_research_agent.cli_app.dacon_api.fetch_my_submissions",
+                        return_value=self._NO_SUBMISSION_HISTORY,
+                    ):
+                        result = cli_app.check_dacon_submission_limit("demo")
+
+            self.assertEqual(5, result["daily_submission_limit"])
+            self.assertIsNone(result["remaining"])
+            self.assertIsNone(result["next_reset_estimate"])
 
     def test_set_override_writes_and_clear_removes_it(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1743,6 +2044,159 @@ class DaconSubmissionLimitTest(unittest.TestCase):
                     cli_app.set_dacon_submission_limit_override("demo", None)
                     cleared = simple_yaml.load(profile_path, default={})
                     self.assertNotIn("dacon_daily_submission_limit", cleared)
+
+    def test_set_dacon_team_name_writes_and_clears(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+                    from kaggle_research_agent import simple_yaml
+
+                    profile_path = root / "competitions" / "demo" / "execution_profile.yaml"
+                    profile_path.parent.mkdir(parents=True)
+                    simple_yaml.dump({"dacon_competition_id": "236716"}, profile_path)
+
+                    cli_app.set_dacon_team_name("demo", "뚜로")
+                    written = simple_yaml.load(profile_path, default={})
+                    self.assertEqual("뚜로", written["dacon_team_name"])
+
+                    cli_app.set_dacon_team_name("demo", "")
+                    cleared = simple_yaml.load(profile_path, default={})
+                    self.assertNotIn("dacon_team_name", cleared)
+
+
+class BestTrialLocalFallbackTest(unittest.TestCase):
+    def test_best_trial_by_local_score_picks_highest_for_maximize(self):
+        rows = [
+            {"trial_id": "trial_001", "local_score": 0.5},
+            {"trial_id": "trial_002", "local_score": 0.8},
+        ]
+        best = cli_app._best_trial_by_local_score(rows, [], objective="maximize")
+        self.assertEqual("trial_002", best["trial_id"])
+
+    def test_best_trial_by_local_score_picks_lowest_for_minimize(self):
+        rows = [
+            {"trial_id": "trial_001", "local_score": 0.5},
+            {"trial_id": "trial_002", "local_score": 0.8},
+        ]
+        best = cli_app._best_trial_by_local_score(rows, [], objective="minimize")
+        self.assertEqual("trial_001", best["trial_id"])
+
+    def test_best_trial_by_local_score_ignores_rows_without_a_local_score(self):
+        best = cli_app._best_trial_by_local_score([{"trial_id": "trial_001", "local_score": None}], [])
+        self.assertIsNone(best)
+
+    def test_dacon_daily_limit_is_known_false_for_non_dacon_platform(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+                    from kaggle_research_agent import simple_yaml
+
+                    profile_path = root / "competitions" / "demo" / "execution_profile.yaml"
+                    profile_path.parent.mkdir(parents=True)
+                    simple_yaml.dump({"platform": "kaggle"}, profile_path)
+
+                    self.assertFalse(cli_app._dacon_daily_limit_is_known("demo"))
+
+    def test_dacon_daily_limit_is_known_true_for_manual_override(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+                    from kaggle_research_agent import simple_yaml
+
+                    profile_path = root / "competitions" / "demo" / "execution_profile.yaml"
+                    profile_path.parent.mkdir(parents=True)
+                    simple_yaml.dump(
+                        {"platform": "dacon", "dacon_daily_submission_limit": 5},
+                        profile_path,
+                    )
+
+                    self.assertTrue(cli_app._dacon_daily_limit_is_known("demo"))
+
+    def test_dacon_daily_limit_is_known_true_for_cached_auto_detection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+                    from kaggle_research_agent import simple_yaml
+
+                    profile_path = root / "competitions" / "demo" / "execution_profile.yaml"
+                    profile_path.parent.mkdir(parents=True)
+                    simple_yaml.dump(
+                        {"platform": "dacon", "dacon_daily_submission_limit_detected": 5},
+                        profile_path,
+                    )
+
+                    self.assertTrue(cli_app._dacon_daily_limit_is_known("demo"))
+
+    def test_dacon_daily_limit_is_known_false_when_neither_set(self):
+        # Must not attempt a live fetch to answer this -- it's checked on
+        # every dashboard render via experiment_snapshot.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.cli_app.project_root", return_value=root):
+                    from kaggle_research_agent import simple_yaml
+
+                    profile_path = root / "competitions" / "demo" / "execution_profile.yaml"
+                    profile_path.parent.mkdir(parents=True)
+                    simple_yaml.dump({"platform": "dacon", "dacon_competition_id": "236716"}, profile_path)
+
+                    with patch(
+                        "kaggle_research_agent.cli_app.dacon_api.fetch_daily_submission_limit",
+                        side_effect=AssertionError("must not fetch live from experiment_snapshot's hot path"),
+                    ):
+                        self.assertFalse(cli_app._dacon_daily_limit_is_known("demo"))
+
+
+class InferNextTrialTest(unittest.TestCase):
+    def test_a_locally_completed_but_unsubmitted_trial_counts_as_done(self):
+        # Submission is now optional (daily-limited competitions skip it),
+        # so a trial with only a local_score must still be treated as
+        # completed for numbering -- otherwise its number could be reused.
+        manual = [
+            {"trial_id": "trial_001", "local_score": 0.9, "lb_score": None},
+        ]
+        self.assertEqual("trial_002", cli_app._infer_next_trial(manual))
+
+    def test_a_submitted_trial_still_counts_as_done(self):
+        manual = [
+            {"trial_id": "trial_001", "local_score": None, "lb_score": 0.9},
+        ]
+        self.assertEqual("trial_002", cli_app._infer_next_trial(manual))
+
+
+class RollingWindowSubmissionStatsTest(unittest.TestCase):
+    # Not wired into any live code path -- kept working and tested because
+    # Kaggle resets its daily submission limit 24h after a team's first
+    # submission of the day, unlike DACON's local-midnight model, so this is
+    # the function to reach for if/when Kaggle gets the same display feature.
+    def test_computes_remaining_and_reset_from_rolling_24h_window(self):
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        recent = (now - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
+        also_recent = (now - timedelta(hours=20)).strftime("%Y-%m-%d %H:%M:%S")
+        stale = (now - timedelta(hours=30)).strftime("%Y-%m-%d %H:%M:%S")
+
+        with patch(
+            "kaggle_research_agent.cli_app.dacon_api.fetch_my_submissions",
+            return_value={
+                "ok": True,
+                "submissions": [
+                    {"c_time": recent},
+                    {"c_time": also_recent},
+                    {"c_time": stale},  # outside the 24h window, must not count
+                ],
+            },
+        ):
+            result = cli_app._rolling_24h_submission_window_stats("236716", 5)
+
+        self.assertEqual(3, result["remaining"])  # 5 - 2 counted-in-window submissions
+        expected_reset = (now - timedelta(hours=20) + timedelta(hours=24)).replace(microsecond=0)
+        self.assertEqual(expected_reset, result["next_reset_estimate"])
 
 
 if __name__ == "__main__":

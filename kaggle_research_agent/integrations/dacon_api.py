@@ -299,6 +299,123 @@ def _parse_daily_submission_limit(html: str) -> int | None:
         return None
 
 
+def overview_description_url(competition_id: str) -> str:
+    return f"https://dacon.io/competitions/official/{competition_id}/overview/description"
+
+
+def data_page_url(competition_id: str) -> str:
+    return f"https://dacon.io/competitions/official/{competition_id}/data"
+
+
+def fetch_competition_overview(
+    competition_id: str,
+    *,
+    fetch_html_fn: Callable[[str], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Scrape a DACON competition's "개요" (overview/description) tab: the
+    free-text explanation of the task, evaluation, and schedule.
+
+    This is the piece a Kaggle-only competition_onboarding.py could already
+    do via the Kaggle CLI but had no DACON equivalent for, leaving
+    overview.md as unhelpful placeholder text after every DACON registration.
+    """
+    if fetch_html_fn is None:
+        fetch_html_fn = _fetch_overview_html
+    fetched = fetch_html_fn(competition_id)
+    if not fetched.get("ok"):
+        return {
+            "action": "fetch_competition_overview",
+            "ok": False,
+            "status": fetched.get("status", "fetch_error"),
+            "error": fetched.get("error"),
+        }
+    text = _extract_first_ql_editor_text(fetched["html"])
+    if not text:
+        return {
+            "action": "fetch_competition_overview",
+            "ok": False,
+            "status": "not_found",
+            "error": "Could not find an overview/description section on the page.",
+        }
+    return {"action": "fetch_competition_overview", "ok": True, "status": "found", "text": text}
+
+
+def fetch_competition_data_description(
+    competition_id: str,
+    *,
+    fetch_html_fn: Callable[[str], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Scrape a DACON competition's "데이터" tab: per-file descriptions the
+    organizer wrote (e.g. what each CSV's columns mean), which is real
+    domain knowledge no amount of profiling the uploaded files themselves
+    can recover.
+    """
+    if fetch_html_fn is None:
+        fetch_html_fn = _fetch_data_page_html
+    fetched = fetch_html_fn(competition_id)
+    if not fetched.get("ok"):
+        return {
+            "action": "fetch_competition_data_description",
+            "ok": False,
+            "status": fetched.get("status", "fetch_error"),
+            "error": fetched.get("error"),
+        }
+    text = _extract_first_ql_editor_text(fetched["html"])
+    if not text:
+        return {
+            "action": "fetch_competition_data_description",
+            "ok": False,
+            "status": "not_found",
+            "error": "Could not find a data description section on the page.",
+        }
+    return {"action": "fetch_competition_data_description", "ok": True, "status": "found", "text": text}
+
+
+def _extract_first_ql_editor_text(html: str) -> str | None:
+    """DACON renders each free-text section (overview, per-file data
+    description) inside a rich-text editor's own container
+    (class="ql-editor"). A raw tag-strip over the whole page picks up
+    megabytes of unrelated <script>/<style> content first, and the real
+    content is duplicated later in the page by the client-hydration
+    payload -- so this targets the editor container directly via
+    BeautifulSoup and returns only the first non-empty one.
+    """
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style"]):
+        tag.decompose()
+    for container in soup.select(".ql-editor"):
+        text = container.get_text(" ", strip=True)
+        if text:
+            return re.sub(r"\s+", " ", text).strip()
+    return None
+
+
+def _fetch_overview_html(competition_id: str) -> dict[str, Any]:
+    import requests
+
+    url = overview_description_url(competition_id)
+    try:
+        response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        response.raise_for_status()
+    except Exception as exc:  # noqa: BLE001 - network/HTTP errors vary by cause
+        return {"ok": False, "status": "fetch_error", "error": str(exc)}
+    return {"ok": True, "html": response.text}
+
+
+def _fetch_data_page_html(competition_id: str) -> dict[str, Any]:
+    import requests
+
+    url = data_page_url(competition_id)
+    try:
+        response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        response.raise_for_status()
+    except Exception as exc:  # noqa: BLE001 - network/HTTP errors vary by cause
+        return {"ok": False, "status": "fetch_error", "error": str(exc)}
+    return {"ok": True, "html": response.text}
+
+
 def fetch_leaderboard(
     competition_id: str,
     *,

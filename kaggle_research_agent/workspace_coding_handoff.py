@@ -14,7 +14,21 @@ from .paths import competition_dir, trial_dir
 from .policies import load_policy
 from .rag_policy import evaluate_rag_policy
 from .retrieval.context_pack import build_context_pack
-from .store import read_text, write_text
+from .store import load_state, read_text, write_text
+from .trial_decision import SCORING_LOGIC_AXIS, _normalize_axis
+from .workspace_code_writer import (
+    SCORING_HARNESS_FILENAME,
+    run_workspace_code_writer,
+    validate_workspace_coding_result,
+)
+
+
+# Pseudo trial id used to generate/store the one-time scoring harness. It
+# deliberately does not start with "trial_" so state_db_sync.py's trial
+# discovery (which only picks up "trial_*" directories) never registers it
+# as a real trial, and its own LLM call budget is tracked separately from
+# any real trial's per-trial call cap.
+HARNESS_INIT_TRIAL_ID = "_harness_init"
 
 
 def prepare_workspace_coding_handoff(
@@ -24,6 +38,7 @@ def prepare_workspace_coding_handoff(
     expanded_snapshot: bool = False,
     retry_reason: str | None = None,
     runtime_failure_context: dict[str, Any] | None = None,
+    coding_feedback: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     out_dir = trial_dir(competition, trial_id)
     next_experiment_path = out_dir / "next_experiment.md"
@@ -60,6 +75,7 @@ def prepare_workspace_coding_handoff(
         expanded_snapshot=expanded_snapshot,
         retry_reason=retry_reason,
         runtime_failure_context=runtime_failure_context,
+        coding_feedback=coding_feedback,
     )
     # _build_handoff may discover further issues (e.g. the plan's own Find:
     # hints not matching the base trial's actual code) that were not knowable
@@ -94,6 +110,345 @@ def prepare_workspace_coding_handoff(
     return handoff
 
 
+def generate_scoring_harness(
+    competition: str,
+    *,
+    model: str,
+    provider: str,
+    allow_api: bool,
+) -> dict[str, Any]:
+    """One-time, competition-level generation of the locked local-validation
+    scoring harness (holdout split + score computation).
+
+    Reuses the standard code-writer + validation pipeline
+    (run_workspace_code_writer / validate_workspace_coding_result) scoped to
+    a single allowed file (scoring_harness.py) instead of a separate ad hoc
+    write/validate path -- this gets the same path-scope, Python syntax, and
+    fabricated-data checks for free, with no new validation code beyond the
+    one harness-specific check in workspace_code_writer.py.
+
+    Stored under HARNESS_INIT_TRIAL_ID, a pseudo trial id that never becomes
+    a real trial (state_db_sync.py only discovers "trial_*" directories) and
+    whose LLM call count is tracked separately from any real trial's
+    per-trial budget.
+    """
+    validation = validate_execution_profile(competition)
+    if validation["status"] != "ready":
+        return {"competition": competition, "status": "blocked", "reason": "execution_profile_not_ready"}
+    profile = load_execution_profile(competition)
+    project_root = Path(str(profile.get("project_root", "")))
+    if (project_root / SCORING_HARNESS_FILENAME).exists():
+        return {"competition": competition, "status": "already_exists"}
+
+    commands = profile.get("commands", {}) if profile else {}
+    predict_commands = list(commands.get("predict", [])) if isinstance(commands, dict) else []
+    target_file = _first_script_name_from_commands(predict_commands) or "predict_step.py"
+    predict_source = read_text(project_root / target_file, default="")
+    interface_issue = _predict_interface_readiness_issue(target_file, predict_source)
+    if interface_issue:
+        # Real incident: the very first attempt at this ran before any trial
+        # had ever written a compliant predict_step.py -- the scaffold's
+        # default predict_step.py (and this competition's pre-Phase-1
+        # trial_001) don't define load_samples()/predict() either, so every
+        # attempt was doomed regardless of what the harness itself wrote.
+        # Check this up front instead of spending an LLM call proving it.
+        return {
+            "competition": competition,
+            "status": "blocked",
+            "reason": "predict_interface_not_ready",
+            "issue": interface_issue,
+        }
+
+    artifacts = profile.get("artifacts", {}) if profile else {}
+    metrics_paths = artifacts.get("metrics", []) if isinstance(artifacts, dict) else []
+    metrics_path = metrics_paths[0] if metrics_paths else "outputs/metrics.json"
+    score_key = _metrics_output_contract(metrics_path)["score_key"]
+    declared_metric_name = str((load_state(competition) or {}).get("metric") or "").strip() or None
+
+    out_dir = trial_dir(competition, HARNESS_INIT_TRIAL_ID)
+    instructions = _harness_generation_instructions(
+        competition, score_key=score_key, declared_metric_name=declared_metric_name
+    )
+    # The handoff's scoring_interface_contract only describes the required
+    # function *signatures* -- without the actual source, the model has no
+    # way to see that load_samples()/predict() exist (or how they behave)
+    # and, empirically, falls back to writing its own independent pipeline
+    # instead of importing and calling them.
+    predict_context_file = f"experiments/{competition}/{HARNESS_INIT_TRIAL_ID}/predict_script_context.md"
+    write_text(
+        out_dir / "predict_script_context.md",
+        f"# {target_file} (verified to define load_samples/predict)\n\n```python\n{predict_source}\n```\n",
+    )
+    # The instructions must travel as a CONTEXT FILE, not only as the second
+    # argument to render_workspace_coding_request. That argument only shapes
+    # the human-readable audit markdown; the real API payload is built by
+    # workspace_code_writer._build_prompt from the handoff dict, which reads
+    # context_files. Passing them only to the renderer meant the model never
+    # saw "call load_samples(..., 'train')", "read the real labels", or
+    # "never hardcode the score" -- and it kept concluding, reasonably, that
+    # no labels were available and only format checks were possible.
+    instructions_context_file = f"experiments/{competition}/{HARNESS_INIT_TRIAL_ID}/harness_instructions.md"
+    write_text(out_dir / "harness_instructions.md", instructions)
+    coding_feedback: dict[str, Any] | None = None
+    result: dict[str, Any] = {}
+    for attempt in range(1, 3):
+        handoff = _build_harness_generation_handoff(
+            competition,
+            profile,
+            coding_feedback=coding_feedback,
+            context_files=[instructions_context_file, predict_context_file],
+            declared_metric_name=declared_metric_name,
+        )
+        write_text(
+            out_dir / "workspace_coding_handoff.json", json.dumps(handoff, ensure_ascii=False, indent=2) + "\n"
+        )
+        request_text = render_workspace_coding_request(handoff, instructions)
+        write_text(out_dir / "workspace_coding_agent_request.md", request_text)
+        log_decision(
+            competition,
+            HARNESS_INIT_TRIAL_ID,
+            decision_type="workspace_coding_handoff",
+            decision="ready",
+            reason="One-time scoring harness generation handoff prepared.",
+            evidence={"allowed_write_paths": handoff.get("allowed_write_paths", []), "attempt": attempt},
+            next_action="send-to-workspace-coding-agent",
+        )
+
+        result = run_workspace_code_writer(
+            competition,
+            HARNESS_INIT_TRIAL_ID,
+            model=model,
+            provider=provider,
+            allow_api=allow_api,
+        )
+        if result.get("status") == "accepted":
+            return {"competition": competition, "status": "completed", "code_writer": result}
+        # The code writer applies file updates to disk before validation runs,
+        # so a harness that failed review is still sitting in the workspace.
+        # It must be removed: the only "has this been generated yet?" signal
+        # is the file's existence, so leaving a rejected harness behind
+        # permanently locks it in -- every later cycle short-circuits on
+        # "already_exists" and the broken harness is never regenerated.
+        harness_path = project_root / SCORING_HARNESS_FILENAME
+        if harness_path.exists():
+            harness_path.unlink()
+        if attempt == 1:
+            rejected_issues = list(result.get("issues", []) or [])
+            if not rejected_issues:
+                break
+            coding_feedback = {
+                "changed_files": list(result.get("changed_files", []) or []),
+                "rejected_issues": rejected_issues,
+            }
+            continue
+        break
+    return {"competition": competition, "status": "blocked", "code_writer": result}
+
+
+def _build_harness_generation_handoff(
+    competition: str,
+    profile: dict[str, Any],
+    *,
+    coding_feedback: dict[str, Any] | None = None,
+    context_files: list[str] | None = None,
+    declared_metric_name: str | None = None,
+) -> dict[str, Any]:
+    artifacts = profile.get("artifacts", {}) if profile else {}
+    metrics_paths = artifacts.get("metrics", []) if isinstance(artifacts, dict) else []
+    metrics_path = metrics_paths[0] if metrics_paths else "outputs/metrics.json"
+    commands = profile.get("commands", {}) if profile else {}
+    predict_commands = list(commands.get("predict", [])) if isinstance(commands, dict) else []
+    validation_commands = list(commands.get("test", [])) if isinstance(commands, dict) else []
+    scope = profile.get("write_scope", {}) if profile else {}
+    model_owned_paths = list(scope.get("allowed", [])) if isinstance(scope, dict) else []
+    predict_script = _first_script_name_from_commands(predict_commands)
+    test_script = _first_script_name_from_commands(validation_commands)
+    forbidden = _unique(
+        [
+            *artifacts.get("metrics", []),
+            *artifacts.get("submission", []),
+            "data/",
+            *([predict_script] if predict_script else []),
+            *([test_script] if test_script else []),
+            *model_owned_paths,
+        ]
+    )
+    return {
+        "schema_version": "1.0",
+        "request_id": f"{competition}:{HARNESS_INIT_TRIAL_ID}:workspace-coding",
+        "competition": competition,
+        "trial_id": HARNESS_INIT_TRIAL_ID,
+        "handoff_type": "workspace_coding_agent_request",
+        "status": "ready",
+        "objective": "Write the one-time local validation scoring harness for this competition.",
+        "project_root": profile.get("project_root"),
+        "platform": profile.get("platform"),
+        "continuation_mode": None,
+        "source_trial_id": None,
+        "code_base_trial_id": None,
+        "recommended_base_trial": None,
+        "pending_human_review": False,
+        "review_source_trial": None,
+        "context_files": list(context_files or []),
+        "snapshot_mode": "standard",
+        "retry_reason": "harness_generation_review_feedback" if coding_feedback else None,
+        "runtime_failure_context": {},
+        "coding_feedback": coding_feedback or {},
+        "retrieval_context": {
+            "task": "scoring_harness_generation",
+            "document_count": 0,
+            "documents": [],
+            "skipped": True,
+            "skip_reason": "one_time_harness_generation_no_rag",
+        },
+        "data_card_summary": _load_data_card_summary(competition),
+        "edit_policy": {
+            "mode": "full_file_allowed",
+            "prefer_patch_updates": False,
+            "allow_full_file_updates": True,
+            "restore_base_before_patch": False,
+            "base_code_source": None,
+            "patch_budget": 0,
+            "patch_schema": {
+                "path": "project-root-relative file path",
+                "find": "exact existing text to replace",
+                "replace": "replacement text",
+                "reason": "short reason for the localized change",
+            },
+        },
+        "allowed_write_paths": [SCORING_HARNESS_FILENAME],
+        "forbidden_paths": forbidden,
+        "validation_commands": validation_commands,
+        "predict_commands": predict_commands,
+        "execution_constraints": {
+            "do_not_run_training": True,
+            "do_not_submit": True,
+            "do_not_edit_data_or_outputs": True,
+            "do_not_write_outside_allowed_paths": True,
+            "use_project_root_as_cwd": True,
+            "base_trial_code_is_authoritative": False,
+        },
+        "metrics_output_contract": _metrics_output_contract(metrics_path),
+        "scoring_interface_contract": _scoring_interface_contract(predict_commands, competition),
+        "declared_metric_name": declared_metric_name,
+        "artifact_policy": load_policy("artifact_policy"),
+        "required_output": {
+            "json_file": f"experiments/{competition}/{HARNESS_INIT_TRIAL_ID}/workspace_coding_result.json",
+            "markdown_file": f"experiments/{competition}/{HARNESS_INIT_TRIAL_ID}/workspace_coding_result.md",
+            "required_fields": ["status", "summary", "changed_files", "validation_results", "blocking_issues"],
+            "status_values": ["completed", "blocked", "failed"],
+            "next_action": "validate-workspace-code-change",
+        },
+        "profile_validation_status": "ready",
+        "profile_validation_issues": [],
+        "blocking_issues": [],
+        "next_action": "send-to-workspace-coding-agent",
+    }
+
+
+def _harness_path_applies(competition: str, profile: dict[str, Any]) -> bool:
+    """Whether this competition needs the separate scoring-harness path.
+
+    The classic single-table flow (Titanic, bike-sharing-demand, ...) already
+    computes cv_score inside train_step.py and never needed load_samples()/
+    predict(). Requiring that interface everywhere retroactively blocked those
+    working pipelines -- their predict_step.py has no such functions and never
+    needed any. So only opt a competition in when the classic flow cannot
+    carry it:
+
+    - a scoring harness already exists (already on this path), or
+    - the data card has no usable target column, which is exactly the shape
+      the single-table assumption cannot express (per-sample files in folders,
+      multi-column targets) and where validation silently goes missing.
+    """
+    project_root = profile.get("project_root") if profile else None
+    if project_root and (Path(str(project_root)) / SCORING_HARNESS_FILENAME).is_file():
+        return True
+    card = _load_json_object(competition_dir(competition) / "competition_data_card.json") or {}
+    if str(card.get("target_column") or "").strip():
+        return False
+    # Require positive evidence of the shape the single-table flow cannot
+    # express -- one file per sample. A merely-unprofiled competition (an
+    # empty or minimal data card) must not be dragged onto this path.
+    return card.get("dataset_layout") == "per_sample_files" and bool(card.get("directory_datasets"))
+
+
+def _predict_interface_readiness_issue(target_file: str, source: str) -> str | None:
+    if not source:
+        return f"predict_script_not_found:{target_file}"
+    missing = [
+        name
+        for name, pattern in (
+            ("load_samples", r"^\s*def\s+load_samples\s*\("),
+            ("predict", r"^\s*def\s+predict\s*\("),
+        )
+        if not re.search(pattern, source, re.MULTILINE)
+    ]
+    if missing:
+        return f"predict_interface_functions_not_defined:{target_file}:{','.join(missing)}"
+    return None
+
+
+def _harness_generation_instructions(
+    competition: str, *, score_key: str = "cv_score", declared_metric_name: str | None = None
+) -> str:
+    overview = read_text(competition_dir(competition) / "overview.md", default="").strip()
+    data_notes = read_text(competition_dir(competition) / "data_notes.md", default="").strip()
+    lines = [
+        "# One-Time Scoring Harness Generation",
+        "",
+        "This is not a modeling trial. Your only job is to write scoring_harness.py: the local "
+        "validation harness that will be reused, unchanged, by every future trial in this competition "
+        "unless a trial explicitly targets the scoring_logic improvement axis.",
+        "",
+        "## What scoring_harness.py must do",
+        "",
+        "- Hold out a portion of the real labeled training data. Never fabricate or synthesize data.",
+        "- You MUST call load_samples(..., 'train') -- the TRAIN split -- because that is the only split "
+        "with ground-truth labels. Read the real label file, match each held-out sample to its label, and "
+        "compute the metric from that comparison. Scoring the 'test' split is impossible (no labels).",
+        "- The score you write must be the value your own computation produced. NEVER hardcode a numeric "
+        "literal for the score key just to satisfy a required-key check, and never substitute format/"
+        "sanity checks (row counts, finite-value checks) for real scoring -- those are not a score. A "
+        "harness that reports a made-up number is worse than one that fails loudly.",
+        "- The prediction script's actual current source is included under 'Input Context Files' below "
+        "-- it has already been verified to define load_samples() and predict() at module level. Import "
+        "them directly (e.g. `from predict_step import load_samples, predict`, adjusted to its real "
+        "module name) and call them on the held-out inputs to get predictions.",
+        "- Do NOT write your own model training, feature extraction, or cross-validation pipeline here. "
+        "If you find yourself importing an estimator (e.g. from sklearn) or defining a training loop in "
+        "this file, stop -- that logic belongs in train_step.py/predict_step.py, not in the harness. The "
+        "harness's only job is: split data, call predict(), score the result.",
+        "- Compare those predictions against the real held-out labels using this competition's actual "
+        "evaluation metric described below, not a generic placeholder metric.",
+        (
+            f"- The metrics artifact must contain the numeric score under a key literally named \"{score_key}\" "
+            f"(preferred), OR under a key that names this competition's actual metric "
+            f"(\"{declared_metric_name}\"){' -- either satisfies the requirement' if declared_metric_name else ''}. "
+            f"Prefer writing \"{score_key}\" directly since that is what every other part of the system reads "
+            "by default; a metric-named key is only a fallback."
+        ),
+        "- You MUST write the score into the Metrics Output Contract's artifact file on disk. Returning "
+        "it from a function or printing it to stdout is NOT enough -- nothing downstream reads stdout, "
+        "so a harness that only prints its result is treated as having produced no score at all. The "
+        "module must perform the write itself when run as a script (under `if __name__ == \"__main__\":`), "
+        "because the pipeline executes it as a standalone command.",
+        "- Write the resulting score under the Metrics Output Contract's score_key, plus metric and "
+        "objective, to the metrics artifact. Read the artifact first and merge your keys into the "
+        "existing content instead of overwriting it -- train_step.py and predict_step.py may already "
+        "have written other diagnostic fields there (row counts, null checks, timestamps) and those "
+        "must survive.",
+        "- This file will be locked from ordinary trials right after this generation, so get the metric "
+        "computation right now -- it will not be revisited on every trial.",
+        "",
+    ]
+    if overview:
+        lines.extend(["## Competition Overview", "", overview, ""])
+    if data_notes:
+        lines.extend(["## Data Notes", "", data_notes, ""])
+    return "\n".join(lines)
+
+
 def _build_handoff(
     competition: str,
     trial_id: str,
@@ -106,6 +461,7 @@ def _build_handoff(
     expanded_snapshot: bool = False,
     retry_reason: str | None = None,
     runtime_failure_context: dict[str, Any] | None = None,
+    coding_feedback: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     out_dir = trial_dir(competition, trial_id)
     artifacts = profile.get("artifacts", {}) if profile else {}
@@ -127,6 +483,13 @@ def _build_handoff(
     is_runtime_repair = bool(runtime_failure_context)
     restore_base_before_patch = bool(code_base_trial_id and base_code_files and not is_runtime_repair)
     delta_plan = _load_json_object(out_dir / "delta_plan.json") or {}
+    primary_axis = _normalize_axis(delta_plan.get("primary_change_axis")) if isinstance(delta_plan, dict) else ""
+    if primary_axis == SCORING_LOGIC_AXIS:
+        forbidden = [p for p in forbidden if p != SCORING_HARNESS_FILENAME]
+        if SCORING_HARNESS_FILENAME not in allowed:
+            allowed = [*allowed, SCORING_HARNESS_FILENAME]
+    elif SCORING_HARNESS_FILENAME not in forbidden:
+        forbidden = [*forbidden, SCORING_HARNESS_FILENAME]
     if status == "ready" and not is_runtime_repair:
         # Check the plan's own Find: hints against the base trial's actual
         # code before any code-writing LLM call is spent generating a patch
@@ -207,6 +570,7 @@ def _build_handoff(
         ),
         "retry_reason": retry_reason,
         "runtime_failure_context": runtime_failure_context or {},
+        "coding_feedback": coding_feedback or {},
         "retrieval_context": _compact_retrieval_context(retrieval_context),
         "data_card_summary": data_card_summary,
         "edit_policy": {
@@ -235,18 +599,12 @@ def _build_handoff(
             "use_project_root_as_cwd": True,
             "base_trial_code_is_authoritative": restore_base_before_patch,
         },
-        "metrics_output_contract": {
-            "path": metrics_path,
-            "score_key": "cv_score",
-            "required_keys": ["cv_score", "metric", "objective"],
-            "notes": [
-                "Training code must write a finite numeric cv_score to the metrics artifact.",
-                "metric should match the competition metric name when known.",
-                "objective must be maximize or minimize.",
-                "Additional diagnostic keys such as validation_accuracy are allowed, but cv_score is the canonical score.",
-                "Every metrics and pipeline-summary value must be JSON serializable. Convert numpy scalars, callables, estimators, paths, and other objects to primitive values or stable strings before json.dumps.",
-            ],
-        },
+        "metrics_output_contract": _metrics_output_contract(metrics_path),
+        "scoring_interface_contract": (
+            _scoring_interface_contract(predict_commands, competition)
+            if _harness_path_applies(competition, profile)
+            else None
+        ),
         "artifact_policy": artifact_policy,
         "required_output": {
             "json_file": f"experiments/{competition}/{trial_id}/workspace_coding_result.json",
@@ -260,6 +618,87 @@ def _build_handoff(
         "blocking_issues": _unique(blocking_issues),
         "next_action": next_action,
     }
+
+
+def _first_script_name_from_commands(commands: list[str]) -> str | None:
+    for command in commands:
+        if not isinstance(command, str):
+            continue
+        for token in command.split():
+            if token.endswith(".py"):
+                return Path(token.replace("\\", "/")).name
+    return None
+
+
+def _metrics_output_contract(metrics_path: str) -> dict[str, Any]:
+    return {
+        "path": metrics_path,
+        "score_key": "cv_score",
+        "required_keys": ["cv_score", "metric", "objective"],
+        "notes": [
+            "Training code must write a finite numeric cv_score to the metrics artifact.",
+            "metric should match the competition metric name when known.",
+            "objective must be maximize or minimize.",
+            "Additional diagnostic keys such as validation_accuracy are allowed, but cv_score is the canonical score.",
+            "Every metrics and pipeline-summary value must be JSON serializable. Convert numpy scalars, callables, estimators, paths, and other objects to primitive values or stable strings before json.dumps.",
+        ],
+    }
+
+
+def _per_sample_dirs(competition: str) -> dict[str, str]:
+    card = _load_json_object(competition_dir(competition) / "competition_data_card.json") or {}
+    if card.get("dataset_layout") != "per_sample_files":
+        return {}
+    dirs = {}
+    for key in ("train_dir", "test_dir"):
+        value = str(card.get(key) or "").strip().strip("/")
+        if value:
+            dirs[key] = value
+    return dirs
+
+
+def _scoring_interface_contract(predict_commands: list[str], competition: str | None = None) -> dict[str, Any]:
+    return {
+        "target_file": (_first_script_name_from_commands(predict_commands) or "predict_step.py"),
+        "required_functions": [
+            {
+                "signature": "load_samples(data_dir: Path, split: str) -> list[Sample]",
+                "purpose": (
+                    "split is 'train' or 'test'. Read this competition's actual data layout for that split "
+                    "and return a list of samples in a shape your own predict() understands."
+                ),
+            },
+            {
+                "signature": "predict(sample: Sample) -> Prediction",
+                "purpose": "Given one sample from load_samples(), return this trial's prediction for it.",
+            },
+        ],
+        "notes": [
+            "Define both functions at module level in the target_file so they can be imported and called "
+            "directly (not only invoked through the __main__ CLI block).",
+            "load_samples must not depend on labels being present -- it is also called with split='test'.",
+            "These two functions are how local validation scoring will reuse your prediction logic without "
+            "duplicating it -- keep them as the single source of truth for 'given input, produce a prediction'.",
+            *_per_sample_load_notes(competition),
+        ],
+        "per_sample_dirs": _per_sample_dirs(competition) if competition else {},
+    }
+
+
+def _per_sample_load_notes(competition: str | None) -> list[str]:
+    dirs = _per_sample_dirs(competition) if competition else {}
+    if not dirs:
+        return []
+    train_dir = dirs.get("train_dir", "train")
+    test_dir = dirs.get("test_dir", "test")
+    return [
+        f"This competition stores ONE FILE PER SAMPLE. load_samples must iterate the split's real "
+        f"directory -- '{train_dir}/' for split='train', '{test_dir}/' for split='test' -- and read each "
+        "file's actual feature columns. The sample id is the filename stem.",
+        f"There is no single flat train.csv/test.csv here. Do NOT fall back to reading only "
+        "sample_submission.csv or the labels file for ids: that returns samples with no features, which "
+        "cannot be scored or learned from. If the directory is missing, raise -- never silently fall back.",
+    ]
 
 
 def _edit_mode_for_continuation(continuation: dict[str, Any]) -> str:
@@ -349,6 +788,20 @@ def render_workspace_coding_request(handoff: dict[str, Any], next_experiment: st
                 "```",
             ]
         )
+    coding_feedback = handoff.get("coding_feedback")
+    if isinstance(coding_feedback, dict) and coding_feedback:
+        lines.extend(
+            [
+                "",
+                "## Previous Attempt Was Rejected",
+                "",
+                "- Your last attempt at this same trial was blocked by automated review for the reasons listed "
+                "below. Produce a new attempt that specifically fixes each one -- do not repeat the same code.",
+                "```json",
+                json.dumps(coding_feedback, ensure_ascii=False, indent=2),
+                "```",
+            ]
+        )
     retrieval_context = handoff.get("retrieval_context", {})
     data_card_summary = handoff.get("data_card_summary", {})
     if retrieval_context:
@@ -420,6 +873,12 @@ def render_workspace_coding_request(handoff: dict[str, Any], next_experiment: st
             "own separate copy. A local score computed from validation code that still runs the OLD algorithm "
             "does not reflect what the submission actually contains, silently making the local CV score "
             "meaningless -- this must never happen even when the change is described as small or low-risk.",
+            "- Even when the model needs no training at all (e.g. a rule-based/heuristic predictor), you must still "
+            "implement a genuine local holdout validation: hold out part of the real labeled data, run the same "
+            "prediction logic against it, and compute the declared metric as an actual number. Writing a literal "
+            "null/None (or any other placeholder) as the primary validation score -- instead of a real computed "
+            "value -- is never acceptable, even temporarily or as a 'no training needed' shortcut. A missing score "
+            "is exactly as harmful as a fabricated one: it hides whether the trial's approach actually works.",
             "",
             "## Validation Commands",
             "",
@@ -440,6 +899,21 @@ def render_workspace_coding_request(handoff: dict[str, Any], next_experiment: st
     lines.extend(f"  - {field}" for field in metrics_contract["required_keys"])
     lines.extend(["- notes:"])
     lines.extend(f"  - {note}" for note in metrics_contract["notes"])
+    scoring_contract = handoff.get("scoring_interface_contract")
+    if isinstance(scoring_contract, dict) and scoring_contract:
+        lines.extend(
+            [
+                "",
+                "## Prediction Function Interface Contract",
+                "",
+                f"- target_file: {scoring_contract.get('target_file')}",
+                "- required_functions:",
+            ]
+        )
+        for item in scoring_contract.get("required_functions", []) or []:
+            lines.append(f"  - `{item.get('signature')}` -- {item.get('purpose')}")
+        lines.append("- notes:")
+        lines.extend(f"  - {note}" for note in scoring_contract.get("notes", []) or [])
     artifact_policy = handoff.get("artifact_policy", {})
     if artifact_policy:
         lines.extend(

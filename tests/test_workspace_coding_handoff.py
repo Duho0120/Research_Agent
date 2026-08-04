@@ -9,7 +9,11 @@ from unittest.mock import patch
 from kaggle_research_agent import simple_yaml
 from kaggle_research_agent.cli import main
 from kaggle_research_agent.workspace_code_writer import build_workspace_code_writer_payload
-from kaggle_research_agent.workspace_coding_handoff import prepare_workspace_coding_handoff
+from kaggle_research_agent.workspace_coding_handoff import (
+    HARNESS_INIT_TRIAL_ID,
+    generate_scoring_harness,
+    prepare_workspace_coding_handoff,
+)
 
 
 class WorkspaceCodingHandoffTest(unittest.TestCase):
@@ -81,6 +85,8 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             self.assertEqual(["src/", "tests/", "train.py"], result["allowed_write_paths"])
             self.assertIn("outputs/metrics.json", result["forbidden_paths"])
             self.assertIn("outputs/submission.csv", result["forbidden_paths"])
+            self.assertIn("scoring_harness.py", result["forbidden_paths"])
+            self.assertNotIn("scoring_harness.py", result["allowed_write_paths"])
             self.assertEqual("patch_only", result["edit_policy"]["mode"])
             self.assertTrue(result["edit_policy"]["prefer_patch_updates"])
             self.assertFalse(result["edit_policy"]["allow_full_file_updates"])
@@ -91,6 +97,11 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             self.assertEqual("outputs/metrics.json", result["metrics_output_contract"]["path"])
             self.assertEqual("cv_score", result["metrics_output_contract"]["score_key"])
             self.assertIn("cv_score", result["metrics_output_contract"]["required_keys"])
+            # Classic single-table competition (data card declares a target
+            # column): the harness interface is not imposed on it.
+            self.assertIsNone(result["scoring_interface_contract"])
+            request_text = (trial / "workspace_coding_agent_request.md").read_text(encoding="utf-8")
+            self.assertNotIn("## Prediction Function Interface Contract", request_text)
             self.assertFalse(result["artifact_policy"]["save_model"]["default"])
             self.assertIn("required_for_separate_predict_command", result["artifact_policy"]["save_model"]["allowed_when"])
             self.assertTrue(result["execution_constraints"]["do_not_run_training"])
@@ -313,6 +324,102 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             self.assertFalse((trial / "context_pack_workspace_code_writing.json").exists())
             self.assertFalse((trial / "retrieval_manifest_workspace_code_writing.json").exists())
 
+    def test_classic_single_table_competition_is_not_forced_onto_the_harness_interface(self):
+        # Regression: requiring load_samples()/predict() in every competition
+        # retroactively blocked the already-working single-table pipelines
+        # (Titanic, bike-sharing-demand). Their predict_step.py has no such
+        # functions and never needed them -- cv_score is computed inside
+        # train_step.py. Only competitions the single-table flow cannot carry
+        # (no usable target column) opt into the harness interface.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_execution_profile(root, project)
+            self._write_next_trial(root, continuation_mode="can_continue")
+            card_path = root / "competitions" / "demo" / "competition_data_card.json"
+            card = json.loads(card_path.read_text(encoding="utf-8"))
+            card["target_column"] = "Survived"
+            card_path.write_text(json.dumps(card), encoding="utf-8")
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = prepare_workspace_coding_handoff("demo", "trial_002")
+
+            self.assertIsNone(result["scoring_interface_contract"])
+
+    def test_handoff_keeps_scoring_harness_locked_for_an_unrelated_axis(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_execution_profile(root, project)
+            self._write_next_trial(
+                root,
+                continuation_mode="can_continue",
+                decision_context={
+                    "active_axis": "model_family",
+                    "axis_attempt_count": 1,
+                    "axis_attempt_limit": 3,
+                    "recommended_base_trial": "trial_001",
+                },
+            )
+            trial = root / "experiments" / "demo" / "trial_002"
+            (trial / "delta_plan.json").write_text(
+                json.dumps(
+                    {
+                        "plan_type": "delta_patch",
+                        "source_trial_id": "trial_001",
+                        "primary_change_axis": "model_family",
+                        "candidate": {"name": "KNNRegressor"},
+                        "code_change_targets": ["src/baseline.py"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (trial / "delta_plan.md").write_text("# Delta Patch Plan\n\n- candidate: KNNRegressor\n", encoding="utf-8")
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = prepare_workspace_coding_handoff("demo", "trial_002")
+
+            self.assertIn("scoring_harness.py", result["forbidden_paths"])
+            self.assertNotIn("scoring_harness.py", result["allowed_write_paths"])
+
+    def test_handoff_unlocks_scoring_harness_for_the_scoring_logic_axis(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_execution_profile(root, project)
+            self._write_next_trial(
+                root,
+                continuation_mode="can_continue",
+                decision_context={
+                    "active_axis": "validation_structure",
+                    "axis_attempt_count": 1,
+                    "axis_attempt_limit": 3,
+                    "recommended_base_trial": "trial_001",
+                },
+            )
+            trial = root / "experiments" / "demo" / "trial_002"
+            (trial / "delta_plan.json").write_text(
+                json.dumps(
+                    {
+                        "plan_type": "delta_patch",
+                        "source_trial_id": "trial_001",
+                        # Deliberately a synonym spelling, not the canonical
+                        # "scoring_logic" -- must still normalize to it.
+                        "primary_change_axis": "validation_structure",
+                        "candidate": {"name": "kfold_holdout"},
+                        "code_change_targets": ["scoring_harness.py"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (trial / "delta_plan.md").write_text("# Delta Patch Plan\n\n- candidate: kfold_holdout\n", encoding="utf-8")
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = prepare_workspace_coding_handoff("demo", "trial_002")
+
+            self.assertNotIn("scoring_harness.py", result["forbidden_paths"])
+            self.assertIn("scoring_harness.py", result["allowed_write_paths"])
+
     def test_continuation_handoff_skips_code_writing_rag_without_trigger(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -487,6 +594,55 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
             self.assertIn("WILL BE OVERWRITTEN", snapshot)
             # The authoritative base code is still available to patch against.
             self.assertIn("X = X.assign(hr_sin=1)", snapshot)
+
+    def test_coding_feedback_is_rendered_into_the_retry_prompt(self):
+        # Real incident: a retry after a guardrail block got more base-code
+        # context but was never told *why* it was rejected, so it reproduced
+        # the exact same rejected code. coding_feedback is how the specific
+        # rejected issues actually reach the prompt.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_execution_profile(root, project)
+            self._write_next_trial(root, continuation_mode="can_continue")
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                result = prepare_workspace_coding_handoff(
+                    "demo",
+                    "trial_002",
+                    coding_feedback={
+                        "changed_files": ["predict_step.py"],
+                        "rejected_issues": ["local_validation_not_computed:validation_method_none"],
+                    },
+                )
+
+            request_text = (
+                root / "experiments" / "demo" / "trial_002" / "workspace_coding_agent_request.md"
+            ).read_text(encoding="utf-8")
+
+        self.assertEqual(
+            {"changed_files": ["predict_step.py"], "rejected_issues": ["local_validation_not_computed:validation_method_none"]},
+            result["coding_feedback"],
+        )
+        self.assertIn("## Previous Attempt Was Rejected", request_text)
+        self.assertIn("local_validation_not_computed:validation_method_none", request_text)
+        self.assertIn("predict_step.py", request_text)
+
+    def test_no_coding_feedback_section_when_first_attempt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_execution_profile(root, project)
+            self._write_next_trial(root, continuation_mode="can_continue")
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                prepare_workspace_coding_handoff("demo", "trial_002")
+
+            request_text = (
+                root / "experiments" / "demo" / "trial_002" / "workspace_coding_agent_request.md"
+            ).read_text(encoding="utf-8")
+
+        self.assertNotIn("## Previous Attempt Was Rejected", request_text)
 
     def test_runtime_repair_still_shows_current_code_because_nothing_is_restored(self):
         # Runtime repair fixes a crash in code that already ran, so the base
@@ -696,12 +852,239 @@ class WorkspaceCodingHandoffTest(unittest.TestCase):
                 (root / "experiments" / "demo" / "trial_002" / "workspace_coding_handoff.json").exists()
             )
 
+    def test_generate_scoring_harness_skips_when_already_present(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_execution_profile(root, project)
+            (project / "scoring_harness.py").write_text("# already generated\n", encoding="utf-8")
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.workspace_coding_handoff.run_workspace_code_writer") as writer:
+                    result = generate_scoring_harness("demo", model="gpt-5", provider="openai", allow_api=True)
+
+            self.assertEqual("already_exists", result["status"])
+            writer.assert_not_called()
+
+    def test_generate_scoring_harness_skips_llm_call_when_predict_interface_not_ready(self):
+        # Real incident: harness generation ran before trial_001 had ever
+        # written a compliant predict_step.py (the scaffold's own default
+        # predict_step.py doesn't define load_samples()/predict() either),
+        # so every attempt was doomed regardless of what the harness wrote.
+        # This must be caught up front, without spending an LLM call.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_execution_profile(root, project)
+            # Overwrite with a predict.py that does NOT define the interface,
+            # matching the scaffold's default predict_step.py shape.
+            (project / "predict.py").write_text(
+                "from src.baseline import predict\n\nif __name__ == '__main__':\n    predict()\n",
+                encoding="utf-8",
+            )
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch("kaggle_research_agent.workspace_coding_handoff.run_workspace_code_writer") as writer:
+                    result = generate_scoring_harness("demo", model="gpt-5", provider="openai", allow_api=True)
+
+            self.assertEqual("blocked", result["status"])
+            self.assertEqual("predict_interface_not_ready", result["reason"])
+            self.assertIn("predict_interface_functions_not_defined:predict.py", result["issue"])
+            writer.assert_not_called()
+
+    def test_generate_scoring_harness_embeds_predict_source_in_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_execution_profile(root, project)
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch(
+                    "kaggle_research_agent.workspace_coding_handoff.run_workspace_code_writer",
+                    return_value={"status": "accepted", "changed_files": ["scoring_harness.py"]},
+                ):
+                    result = generate_scoring_harness("demo", model="gpt-5", provider="openai", allow_api=True)
+
+            self.assertEqual("completed", result["status"])
+            context_path = root / "experiments" / "demo" / HARNESS_INIT_TRIAL_ID / "predict_script_context.md"
+            self.assertTrue(context_path.exists())
+            self.assertIn("def load_samples", context_path.read_text(encoding="utf-8"))
+            handoff_path = root / "experiments" / "demo" / HARNESS_INIT_TRIAL_ID / "workspace_coding_handoff.json"
+            handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+            self.assertIn(
+                f"experiments/demo/{HARNESS_INIT_TRIAL_ID}/predict_script_context.md", handoff["context_files"]
+            )
+            request_text = (
+                root / "experiments" / "demo" / HARNESS_INIT_TRIAL_ID / "workspace_coding_agent_request.md"
+            ).read_text(encoding="utf-8")
+            self.assertIn("predict_script_context.md", request_text)
+
+    def test_generate_scoring_harness_writes_scoped_handoff_and_calls_code_writer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_execution_profile(root, project)
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch(
+                    "kaggle_research_agent.workspace_coding_handoff.run_workspace_code_writer",
+                    return_value={"status": "accepted", "changed_files": ["scoring_harness.py"]},
+                ) as writer:
+                    result = generate_scoring_harness("demo", model="gpt-5", provider="openai", allow_api=True)
+
+            self.assertEqual("completed", result["status"])
+            self.assertEqual(1, writer.call_count)
+            self.assertEqual("demo", writer.call_args.args[0])
+            self.assertEqual(HARNESS_INIT_TRIAL_ID, writer.call_args.args[1])
+
+            handoff_path = root / "experiments" / "demo" / HARNESS_INIT_TRIAL_ID / "workspace_coding_handoff.json"
+            self.assertTrue(handoff_path.exists())
+            handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+            self.assertEqual(["scoring_harness.py"], handoff["allowed_write_paths"])
+            self.assertIn("train.py", handoff["forbidden_paths"])
+            self.assertIn("outputs/metrics.json", handoff["forbidden_paths"])
+            self.assertIn("outputs/submission.csv", handoff["forbidden_paths"])
+            self.assertEqual("predict.py", handoff["scoring_interface_contract"]["target_file"])
+            self.assertEqual("cv_score", handoff["metrics_output_contract"]["score_key"])
+
+            request_path = root / "experiments" / "demo" / HARNESS_INIT_TRIAL_ID / "workspace_coding_agent_request.md"
+            self.assertTrue(request_path.exists())
+            request_text = request_path.read_text(encoding="utf-8")
+            self.assertIn('key literally named "cv_score"', request_text)
+
+    def test_generate_scoring_harness_threads_declared_metric_name_from_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_execution_profile(root, project)
+            simple_yaml.dump({"metric": "R-Hit@1cm"}, root / "competitions" / "demo" / "state.yaml")
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch(
+                    "kaggle_research_agent.workspace_coding_handoff.run_workspace_code_writer",
+                    return_value={"status": "accepted", "changed_files": ["scoring_harness.py"]},
+                ):
+                    generate_scoring_harness("demo", model="gpt-5", provider="openai", allow_api=True)
+
+            handoff_path = root / "experiments" / "demo" / HARNESS_INIT_TRIAL_ID / "workspace_coding_handoff.json"
+            handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+            self.assertEqual("R-Hit@1cm", handoff["declared_metric_name"])
+            request_text = (
+                root / "experiments" / "demo" / HARNESS_INIT_TRIAL_ID / "workspace_coding_agent_request.md"
+            ).read_text(encoding="utf-8")
+            self.assertIn("R-Hit@1cm", request_text)
+
+    def test_generate_scoring_harness_reports_blocked_code_writer_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_execution_profile(root, project)
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch(
+                    "kaggle_research_agent.workspace_coding_handoff.run_workspace_code_writer",
+                    return_value={"status": "blocked", "issues": ["scoring_harness_missing_interface_call:scoring_harness.py:predict"]},
+                ):
+                    result = generate_scoring_harness("demo", model="gpt-5", provider="openai", allow_api=True)
+
+            self.assertEqual("blocked", result["status"])
+
+    def test_generate_scoring_harness_removes_a_rejected_harness_so_it_can_be_regenerated(self):
+        # Real incident: the code writer applies file updates to disk before
+        # validation runs, so a harness that failed review was left sitting in
+        # the workspace. Since the only "already generated?" signal is the
+        # file's existence, that permanently locked the broken harness in --
+        # every later cycle short-circuited on "already_exists" and it was
+        # never regenerated.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_execution_profile(root, project)
+
+            def write_bad_harness(*args, **kwargs):
+                (project / "scoring_harness.py").write_text("# rejected\n", encoding="utf-8")
+                return {"status": "blocked", "issues": ["scoring_harness_missing_score_key:scoring_harness.py:cv_score"]}
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch(
+                    "kaggle_research_agent.workspace_coding_handoff.run_workspace_code_writer",
+                    side_effect=write_bad_harness,
+                ):
+                    result = generate_scoring_harness("demo", model="gpt-5", provider="openai", allow_api=True)
+
+            self.assertEqual("blocked", result["status"])
+            self.assertFalse((project / "scoring_harness.py").exists())
+
+    def test_generate_scoring_harness_retries_once_with_corrective_feedback(self):
+        # Real incident (see 포트폴리오.md): a real GPT-5 harness-generation
+        # call ignored the interface-reuse instruction and built its own
+        # independent CV pipeline instead of calling load_samples()/predict(),
+        # reproduced twice in a row in isolated testing. The retry must carry
+        # the specific rejected issues into the next handoff, the same
+        # pattern already proven for the regular per-trial code writer.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_execution_profile(root, project)
+            results = [
+                {
+                    "status": "blocked",
+                    "issues": ["scoring_harness_missing_interface_call:scoring_harness.py:load_samples"],
+                    "changed_files": ["scoring_harness.py"],
+                },
+                {"status": "accepted", "changed_files": ["scoring_harness.py"]},
+            ]
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch(
+                    "kaggle_research_agent.workspace_coding_handoff.run_workspace_code_writer", side_effect=results
+                ) as writer:
+                    result = generate_scoring_harness("demo", model="gpt-5", provider="openai", allow_api=True)
+
+            self.assertEqual("completed", result["status"])
+            self.assertEqual(2, writer.call_count)
+            handoff_path = root / "experiments" / "demo" / HARNESS_INIT_TRIAL_ID / "workspace_coding_handoff.json"
+            handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                ["scoring_harness_missing_interface_call:scoring_harness.py:load_samples"],
+                handoff["coding_feedback"]["rejected_issues"],
+            )
+            request_text = (
+                root / "experiments" / "demo" / HARNESS_INIT_TRIAL_ID / "workspace_coding_agent_request.md"
+            ).read_text(encoding="utf-8")
+            self.assertIn("## Previous Attempt Was Rejected", request_text)
+
+    def test_generate_scoring_harness_gives_up_after_one_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._write_project(root)
+            self._write_execution_profile(root, project)
+            blocked = {
+                "status": "blocked",
+                "issues": ["scoring_harness_missing_interface_call:scoring_harness.py:load_samples"],
+                "changed_files": ["scoring_harness.py"],
+            }
+
+            with patch("kaggle_research_agent.paths.project_root", return_value=root):
+                with patch(
+                    "kaggle_research_agent.workspace_coding_handoff.run_workspace_code_writer",
+                    side_effect=[blocked, blocked],
+                ) as writer:
+                    result = generate_scoring_harness("demo", model="gpt-5", provider="openai", allow_api=True)
+
+            self.assertEqual("blocked", result["status"])
+            self.assertEqual(2, writer.call_count)
+
     def _write_project(self, root: Path) -> Path:
         project = root / "external_project"
         (project / "src").mkdir(parents=True)
         (project / "tests").mkdir()
         (project / "outputs").mkdir()
         (project / "train.py").write_text("print('train')\n", encoding="utf-8")
+        (project / "predict.py").write_text(
+            "def load_samples(data_dir, split):\n    return []\n\n\ndef predict(sample):\n    return sample\n",
+            encoding="utf-8",
+        )
         (project / "src" / "model.py").write_text("MODEL = 'baseline'\n", encoding="utf-8")
         (project / "tests" / "test_model.py").write_text("def test_placeholder():\n    assert True\n", encoding="utf-8")
         (project / "outputs" / "metrics.json").write_text("{}", encoding="utf-8")
