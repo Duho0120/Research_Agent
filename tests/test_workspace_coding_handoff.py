@@ -17,6 +17,18 @@ from kaggle_research_agent.workspace_coding_handoff import (
 
 
 class WorkspaceCodingHandoffTest(unittest.TestCase):
+    def setUp(self):
+        # Harness generation now verifies the score by execution (scored once
+        # normally, once with predictions wrecked). These tests mock the code
+        # writer, so there is no runnable harness -- default the probe to a
+        # sensitive scorer; tests about the runtime check override it.
+        patcher = patch(
+            "kaggle_research_agent.workspace_coding_handoff.run_scoring_perturbation_probe",
+            return_value={"baseline": 0.42, "perturbed": 0.01},
+        )
+        self.addCleanup(patcher.stop)
+        patcher.start()
+
     def test_code_priority_is_generic_not_titanic_specific(self):
         from kaggle_research_agent.workspace_coding_handoff import (
             _code_file_priority,
@@ -1401,3 +1413,68 @@ class DataLoaderGenerationTest(unittest.TestCase):
                     result = generate_data_loader("demo", model="gpt-5", provider="openai", allow_api=True)
             self.assertEqual("already_exists", result["status"])
             writer.assert_not_called()
+
+
+class HarnessRuntimeSensitivityWiringTest(unittest.TestCase):
+    """Acceptance of a generated harness must depend on running it, not on
+    reading it. Both real fabrications -- a hardcoded score key and a
+    format-checks-only harness -- passed every text check."""
+
+    def _setup(self, root):
+        project = root / "external_project"
+        (project / "src").mkdir(parents=True)
+        (project / "outputs").mkdir()
+        (project / "predict.py").write_text(
+            "def load_samples(d, s):\n    return []\n\n\ndef predict(s):\n    return s\n", encoding="utf-8"
+        )
+        (project / "data_loader.py").write_text("def load_samples(d, s):\n    return []\n", encoding="utf-8")
+        (root / "python.exe").write_text("py", encoding="utf-8")
+        comp = root / "competitions" / "demo"
+        comp.mkdir(parents=True)
+        simple_yaml.dump(
+            {
+                "schema_version": "1.0",
+                "competition": "demo",
+                "platform": "dacon",
+                "project_root": str(project),
+                "python": str(root / "python.exe"),
+                "commands": {"test": ["{python} t.py"], "train": ["{python} tr.py"], "predict": ["{python} predict.py"]},
+                "artifacts": {"metrics": ["outputs/metrics.json"], "submission": ["outputs/submission.csv"]},
+                "write_scope": {"allowed": ["src/", "predict.py"], "forbidden": ["data/"]},
+                "submission_mode": "manual_external",
+            },
+            comp / "execution_profile.yaml",
+        )
+        (comp / "competition_data_card.json").write_text(json.dumps({"task_type": "unknown"}), encoding="utf-8")
+        return project
+
+    def _generate(self, root, project, probe_result):
+        def accept(*args, **kwargs):
+            (project / "scoring_harness.py").write_text("# generated\n", encoding="utf-8")
+            return {"status": "accepted", "changed_files": ["scoring_harness.py"], "issues": []}
+
+        with patch("kaggle_research_agent.paths.project_root", return_value=root):
+            with patch(
+                "kaggle_research_agent.workspace_coding_handoff.run_workspace_code_writer", side_effect=accept
+            ):
+                with patch(
+                    "kaggle_research_agent.workspace_coding_handoff.run_scoring_perturbation_probe",
+                    return_value=probe_result,
+                ):
+                    return generate_scoring_harness("demo", model="gpt-5", provider="openai", allow_api=True)
+
+    def test_harness_whose_score_reacts_to_predictions_is_kept(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._setup(root)
+            result = self._generate(root, project, {"baseline": 0.9, "perturbed": 0.0})
+            self.assertEqual("completed", result["status"])
+            self.assertTrue((project / "scoring_harness.py").exists())
+
+    def test_harness_whose_score_ignores_predictions_is_rejected_and_removed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = self._setup(root)
+            result = self._generate(root, project, {"baseline": 0.0, "perturbed": 0.0})
+            self.assertEqual("blocked", result["status"])
+            self.assertFalse((project / "scoring_harness.py").exists())

@@ -183,3 +183,116 @@ def evaluate_loader_contract(
 
 def _magnitude(value: int) -> int:
     return len(str(max(int(value), 1)))
+
+
+PERTURBATION_PROBE_SOURCE = '''
+import json, os, sys, runpy, importlib
+sys.path.insert(0, os.getcwd())
+
+harness_module, metrics_path, perturb = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
+
+if perturb:
+    # Replace the trial's predictions with deliberately wrong ones before the
+    # harness runs. A harness that really scores predictions must move; one
+    # that hardcodes a number, or only format-checks, cannot.
+    predict_module = importlib.import_module(sys.argv[4])
+    original = predict_module.predict
+
+    def _wrecked(sample):
+        value = original(sample)
+        if isinstance(value, dict):
+            return {k: (v * 0 - 999.0 if isinstance(v, (int, float)) else v) for k, v in value.items()}
+        if isinstance(value, (int, float)):
+            return -999.0
+        return value
+
+    predict_module.predict = _wrecked
+
+try:
+    runpy.run_module(harness_module, run_name="__main__")
+except SystemExit:
+    pass
+except Exception as exc:
+    print("<<PROBE>>" + json.dumps({"error": f"{type(exc).__name__}: {exc}"[:300]}))
+    raise SystemExit(0)
+
+score = None
+try:
+    with open(metrics_path, "r", encoding="utf-8") as handle:
+        score = json.load(handle).get(sys.argv[5])
+except Exception as exc:
+    print("<<PROBE>>" + json.dumps({"error": f"metrics_unreadable: {exc}"[:200]}))
+    raise SystemExit(0)
+print("<<PROBE>>" + json.dumps({"score": score}))
+'''
+
+
+def run_scoring_perturbation_probe(
+    project_root: Path,
+    python: str,
+    *,
+    harness_module: str,
+    predict_module: str,
+    metrics_path: Path | str,
+    score_key: str,
+    timeout: int = 900,
+) -> dict[str, Any]:
+    """Score once normally, once with predictions deliberately wrecked.
+
+    This is the check a fabricated harness cannot survive. Text checks were
+    bypassed by hardcoding the score key and by substituting format checks
+    for scoring; neither of those reacts to the predictions changing.
+    """
+    results: dict[str, Any] = {}
+    for label, perturb in (("baseline", "0"), ("perturbed", "1")):
+        with tempfile.TemporaryDirectory() as tmp:
+            probe = Path(tmp) / "_score_probe.py"
+            probe.write_text(PERTURBATION_PROBE_SOURCE, encoding="utf-8")
+            try:
+                completed = subprocess.run(
+                    [
+                        python,
+                        str(probe),
+                        harness_module,
+                        str(metrics_path),
+                        perturb,
+                        predict_module,
+                        score_key,
+                    ],
+                    cwd=str(project_root),
+                    text=True,
+                    capture_output=True,
+                    timeout=timeout,
+                )
+            except subprocess.TimeoutExpired:
+                return {"error": f"scoring_probe_timed_out:{label}"}
+        payload = _probe_payload(completed.stdout, completed.stderr)
+        if payload.get("error"):
+            return {"error": f"{label}:{payload['error']}"}
+        results[label] = payload.get("score")
+    return results
+
+
+def evaluate_scoring_sensitivity(results: dict[str, Any]) -> list[str]:
+    """A real scorer reacts to its inputs."""
+    if not isinstance(results, dict) or results.get("error"):
+        return [f"scoring_probe_error:{(results or {}).get('error', 'unknown')}"]
+    baseline, perturbed = results.get("baseline"), results.get("perturbed")
+    if not isinstance(baseline, (int, float)):
+        return [f"scoring_produced_no_numeric_score:{baseline!r}"[:120]]
+    if not isinstance(perturbed, (int, float)):
+        return [f"scoring_produced_no_numeric_score_when_perturbed:{perturbed!r}"[:120]]
+    if baseline == perturbed:
+        return ["scoring_ignores_predictions:score_unchanged_when_predictions_wrecked"]
+    return []
+
+
+def _probe_payload(stdout: str, stderr: str) -> dict[str, Any]:
+    marker = "<<PROBE>>"
+    for line in (stdout or "").splitlines():
+        if line.startswith(marker):
+            try:
+                return json.loads(line[len(marker) :])
+            except json.JSONDecodeError:
+                break
+    return {"error": f"probe_failed: {(stderr or stdout or '').strip()[-200:]}"}

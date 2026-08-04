@@ -16,7 +16,12 @@ from .rag_policy import evaluate_rag_policy
 from .retrieval.context_pack import build_context_pack
 from .store import load_state, read_text, write_text
 from .trial_decision import DATA_LOADING_AXIS, SCORING_LOGIC_AXIS, _normalize_axis
-from .runtime_contract import evaluate_loader_contract, run_sample_loading_probe
+from .runtime_contract import (
+    evaluate_loader_contract,
+    evaluate_scoring_sensitivity,
+    run_sample_loading_probe,
+    run_scoring_perturbation_probe,
+)
 from .workspace_code_writer import (
     DATA_LOADER_FILENAME,
     SCORING_HARNESS_FILENAME,
@@ -424,8 +429,38 @@ def generate_scoring_harness(
             provider=provider,
             allow_api=allow_api,
         )
+        runtime_issues: list[str] = []
         if result.get("status") == "accepted":
-            return {"competition": competition, "status": "completed", "code_writer": result}
+            sensitivity = run_scoring_perturbation_probe(
+                project_root,
+                str(profile.get("python") or "python"),
+                harness_module=Path(SCORING_HARNESS_FILENAME).stem,
+                predict_module=Path(
+                    _first_script_name_from_commands(
+                        list((profile.get("commands") or {}).get("predict", []))
+                    )
+                    or "predict_step.py"
+                ).stem,
+                metrics_path=project_root / metrics_path,
+                score_key=score_key,
+            )
+            runtime_issues = evaluate_scoring_sensitivity(sensitivity)
+            write_text(
+                out_dir / "harness_runtime_check.json",
+                json.dumps({"scores": sensitivity, "issues": runtime_issues}, ensure_ascii=False, indent=2)
+                + "\n",
+            )
+            log_decision(
+                competition,
+                HARNESS_INIT_TRIAL_ID,
+                decision_type="scoring_harness_runtime_check",
+                decision="passed" if not runtime_issues else "blocked",
+                reason="Generated harness was scored twice, once with predictions deliberately wrecked.",
+                evidence={"scores": sensitivity, "issues": runtime_issues},
+                next_action="use-scoring-harness" if not runtime_issues else "regenerate-scoring-harness",
+            )
+            if not runtime_issues:
+                return {"competition": competition, "status": "completed", "code_writer": result}
         # The code writer applies file updates to disk before validation runs,
         # so a harness that failed review is still sitting in the workspace.
         # It must be removed: the only "has this been generated yet?" signal
@@ -436,7 +471,7 @@ def generate_scoring_harness(
         if harness_path.exists():
             harness_path.unlink()
         if attempt == 1:
-            rejected_issues = list(result.get("issues", []) or [])
+            rejected_issues = _unique([*(result.get("issues") or []), *runtime_issues])
             if not rejected_issues:
                 break
             coding_feedback = {
@@ -719,6 +754,13 @@ def _harness_generation_instructions(
         "literal for the score key just to satisfy a required-key check, and never substitute format/"
         "sanity checks (row counts, finite-value checks) for real scoring -- those are not a score. A "
         "harness that reports a made-up number is worse than one that fails loudly.",
+        "- Load data through `data_loader.load_samples(data_dir, split)` when that module exists. It is "
+        "this competition's single source of truth for reading data and is already verified by execution; "
+        "re-implementing loading here would duplicate it and can drift.",
+        "- Your score will be verified by EXECUTION: the harness is run twice, the second time with the "
+        "trial's predictions deliberately replaced by wrong values. If the score does not change, the "
+        "harness is not actually scoring predictions and is rejected. Format/sanity checks and any "
+        "hardcoded number cannot pass this.",
         "- The prediction script's actual current source is included under 'Input Context Files' below "
         "-- it has already been verified to define load_samples() and predict() at module level. Import "
         "them directly (e.g. `from predict_step import load_samples, predict`, adjusted to its real "

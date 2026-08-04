@@ -109,5 +109,93 @@ class LoaderProbeExecutionTest(unittest.TestCase):
         )
 
 
+class ScoringSensitivityTest(unittest.TestCase):
+    """A scorer that does not react to its predictions is not scoring. This
+    is the check the fabricated harnesses could not have survived: one
+    hardcoded `"cv_score": 0.0` with a comment saying the key was required,
+    another substituted format checks for scoring. Neither moves when the
+    predictions change."""
+
+    def _workspace(self, root: Path, harness_body: str):
+        (root / "predict_step.py").write_text(
+            "def predict(sample):\n    return {'x': 1.0}\n", encoding="utf-8"
+        )
+        (root / "outputs").mkdir(exist_ok=True)
+        (root / "scoring_harness.py").write_text(harness_body, encoding="utf-8")
+
+    def _run(self, harness_body):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._workspace(root, harness_body)
+            from kaggle_research_agent.runtime_contract import run_scoring_perturbation_probe
+
+            return run_scoring_perturbation_probe(
+                root,
+                sys.executable,
+                harness_module="scoring_harness",
+                predict_module="predict_step",
+                metrics_path=root / "outputs" / "metrics.json",
+                score_key="cv_score",
+                timeout=120,
+            )
+
+    def test_a_real_scorer_moves_when_predictions_are_wrecked(self):
+        from kaggle_research_agent.runtime_contract import evaluate_scoring_sensitivity
+
+        results = self._run(
+            "import json\n"
+            "from predict_step import predict\n"
+            "if __name__ == '__main__':\n"
+            "    truth = [1.0, 1.0]\n"
+            "    preds = [predict({'id': i})['x'] for i in range(2)]\n"
+            "    err = sum(abs(p - t) for p, t in zip(preds, truth)) / len(truth)\n"
+            "    json.dump({'cv_score': err}, open('outputs/metrics.json', 'w'))\n"
+        )
+        self.assertNotEqual(results["baseline"], results["perturbed"])
+        self.assertEqual([], evaluate_scoring_sensitivity(results))
+
+    def test_hardcoded_score_is_caught(self):
+        from kaggle_research_agent.runtime_contract import evaluate_scoring_sensitivity
+
+        results = self._run(
+            "import json\n"
+            "if __name__ == '__main__':\n"
+            "    json.dump({'cv_score': 0.0}, open('outputs/metrics.json', 'w'))\n"
+        )
+        self.assertEqual(
+            ["scoring_ignores_predictions:score_unchanged_when_predictions_wrecked"],
+            evaluate_scoring_sensitivity(results),
+        )
+
+    def test_format_only_harness_is_caught(self):
+        from kaggle_research_agent.runtime_contract import evaluate_scoring_sensitivity
+
+        # Mirrors the real one: it calls predict, counts rows, and reports a
+        # constant -- busy-looking, but blind to prediction quality.
+        results = self._run(
+            "import json\n"
+            "from predict_step import predict\n"
+            "if __name__ == '__main__':\n"
+            "    rows = [predict({'id': i}) for i in range(3)]\n"
+            "    json.dump({'cv_score': 0.0, 'n': len(rows)}, open('outputs/metrics.json', 'w'))\n"
+        )
+        self.assertIn(
+            "scoring_ignores_predictions:score_unchanged_when_predictions_wrecked",
+            evaluate_scoring_sensitivity(results),
+        )
+
+    def test_missing_score_key_is_reported(self):
+        from kaggle_research_agent.runtime_contract import evaluate_scoring_sensitivity
+
+        results = self._run(
+            "import json\n"
+            "if __name__ == '__main__':\n"
+            "    json.dump({'other': 1}, open('outputs/metrics.json', 'w'))\n"
+        )
+        self.assertTrue(
+            evaluate_scoring_sensitivity(results)[0].startswith("scoring_produced_no_numeric_score")
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
