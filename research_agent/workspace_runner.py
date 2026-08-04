@@ -9,7 +9,12 @@ from typing import Any
 
 from .agents.memory import log_decision
 from .agents.policy_gate import classify_local_failure
-from .execution_profile import load_execution_profile, validate_execution_profile
+from .execution_profile import (
+    CONTRACT_MODEL,
+    execution_model,
+    load_execution_profile,
+    validate_execution_profile,
+)
 from .paths import trial_dir
 from .store import write_text
 from .workspace_code_writer import SCORING_HARNESS_FILENAME
@@ -28,12 +33,26 @@ def run_workspace_pipeline(
     trial_id: str,
     *,
     run_now: bool = False,
+    allow_constant_predictions: bool = False,
 ) -> dict[str, Any]:
     validation = validate_execution_profile(competition)
     try:
         profile = load_execution_profile(competition)
     except (FileNotFoundError, ValueError):
         profile = {}
+
+    # Single dispatch point for the two execution models. Callers do not
+    # choose -- the competition's profile does -- so a competition migrates by
+    # editing one field, and every entry point follows it at once.
+    if execution_model(profile) == CONTRACT_MODEL:
+        from .contract_execution import run_contract_pipeline
+
+        return run_contract_pipeline(
+            competition,
+            trial_id,
+            run_now=run_now,
+            allow_constant_predictions=allow_constant_predictions,
+        )
     commands = _render_commands(profile) if profile else {}
     result = {
         "competition": competition,

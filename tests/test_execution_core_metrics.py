@@ -295,6 +295,9 @@ class ProvisioningLadderTest(unittest.TestCase):
             )
         self.assertEqual("provisioned", again["source"])
         self.assertEqual([], calls)
+        # The label has to survive reuse -- it is what tells a reader how much
+        # to trust the score, and it is read downstream, not here.
+        self.assertEqual("high", again["confidence"])
 
 
 class WorkedExampleReachesProvisioningTest(unittest.TestCase):

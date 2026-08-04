@@ -19,6 +19,41 @@ def load_execution_profile(competition: str) -> dict[str, Any]:
     return profile
 
 
+CONTRACT_MODEL = "contract"
+LEGACY_MODEL = "legacy"
+
+
+def execution_model(profile: dict[str, Any]) -> str:
+    """Which execution model this competition runs under.
+
+    Defaults to legacy so that a profile written before the contract model
+    existed keeps behaving exactly as it did. Migration is per competition and
+    opt-in; nothing changes for a competition until its profile says so.
+    """
+    declared = str(profile.get("execution_model") or LEGACY_MODEL).strip().lower()
+    return CONTRACT_MODEL if declared == CONTRACT_MODEL else LEGACY_MODEL
+
+
+def contract_data_dir(profile: dict[str, Any]) -> Path:
+    """Where this competition's data lives.
+
+    Kept in the profile rather than assumed under project_root: a competition
+    migrated to the contract model may keep its data beside the workspace it
+    was originally unpacked into.
+    """
+    declared = str(profile.get("data_dir") or "data")
+    path = Path(declared)
+    return path if path.is_absolute() else Path(str(profile.get("project_root", ""))) / path
+
+
+def contract_submission_template(profile: dict[str, Any]) -> Path | None:
+    declared = profile.get("submission_template")
+    if not declared:
+        return None
+    path = Path(str(declared))
+    return path if path.is_absolute() else contract_data_dir(profile) / path
+
+
 def validate_execution_profile(competition: str) -> dict[str, Any]:
     profile_path = competition_dir(competition) / "execution_profile.yaml"
     issues: list[str] = []
@@ -64,7 +99,11 @@ def render_execution_profile_validation(result: dict[str, Any]) -> str:
 
 
 def _validate_required_fields(profile: dict[str, Any], competition: str, issues: list[str]) -> None:
-    for field in ["schema_version", "competition", "platform", "project_root", "python", "commands", "artifacts", "write_scope"]:
+    required = ["schema_version", "competition", "platform", "project_root", "python", "artifacts", "write_scope"]
+    # Under the contract model the framework owns the run, so there are no
+    # shell commands to declare; "data_dir" takes their place.
+    required.append("data_dir" if execution_model(profile) == CONTRACT_MODEL else "commands")
+    for field in required:
         if field not in profile:
             issues.append(f"missing_field:{field}")
     if profile.get("competition") not in {None, competition}:
@@ -91,7 +130,34 @@ def _validate_runtime_paths(profile: dict[str, Any], issues: list[str], checks: 
         issues.append("python_not_found")
 
 
+def _validate_contract(profile: dict[str, Any], issues: list[str], checks: dict[str, Any]) -> None:
+    """The contract model needs data and modules, not shell commands."""
+    data_dir = contract_data_dir(profile)
+    checks["contract_data_dir_exists"] = data_dir.is_dir()
+    if not data_dir.is_dir():
+        issues.append("contract_data_dir_not_found")
+
+    project_root = Path(str(profile.get("project_root", "")))
+    for module in ("data_loader", "model"):
+        present = (project_root / f"{module}.py").is_file()
+        checks[f"contract_{module}_present"] = present
+    # model.py is written per trial and may legitimately not exist yet; the
+    # loader is a competition-level asset that must be in place first.
+    if not checks["contract_data_loader_present"]:
+        issues.append("contract_data_loader_missing")
+
+    template = contract_submission_template(profile)
+    checks["contract_submission_template"] = str(template) if template else None
+    if template is not None and not template.is_file():
+        issues.append("contract_submission_template_not_found")
+
+
 def _validate_commands(profile: dict[str, Any], issues: list[str], checks: dict[str, Any]) -> None:
+    if execution_model(profile) == CONTRACT_MODEL:
+        checks["execution_model"] = CONTRACT_MODEL
+        _validate_contract(profile, issues, checks)
+        return
+    checks["execution_model"] = LEGACY_MODEL
     commands = profile.get("commands", {})
     if not isinstance(commands, dict):
         issues.append("commands_must_be_mapping")

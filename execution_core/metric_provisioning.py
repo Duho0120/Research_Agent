@@ -73,7 +73,11 @@ def provision_metric(
             truths=truths,
             worked_example=spec.worked_example,
         )
-        return {**result, **loaded, "source": "provisioned"}
+        # Confidence is carried on every path, not just the one that generated
+        # the module. A score's trustworthiness has to stay attached to it all
+        # the way to the dashboard, and a reused module loses nothing by being
+        # reused.
+        return {**result, **loaded, "source": "provisioned", "confidence": spec.confidence}
 
     builtin = metrics_module.METRICS.get(key)
     if builtin is not None:
