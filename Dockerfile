@@ -18,7 +18,6 @@ COPY requirements.txt /app/requirements.txt
 RUN python -m pip install --upgrade pip \
     && python -m pip install -r /app/requirements.txt
 
-COPY kaggle_research_agent /app/kaggle_research_agent
 COPY research_agent /app/research_agent
 COPY scripts /app/scripts
 COPY configs /app/configs
@@ -41,4 +40,4 @@ RUN chmod +x /app/scripts/docker_entrypoint.sh
 
 ENTRYPOINT ["/app/scripts/docker_entrypoint.sh"]
 EXPOSE 8080
-CMD ["python", "-B", "-m", "kaggle_research_agent.web_app"]
+CMD ["python", "-B", "-m", "research_agent.web_app"]
