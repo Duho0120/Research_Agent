@@ -306,6 +306,32 @@ def run_one_trial(
             "workspace_run": workspace_run,
             "metrics_collection": metrics_collection,
         }
+    # Final, unbypassable gate. run_code_writer_trial has its own copy of this
+    # check, but that one exists to *coach* -- it retries with feedback so the
+    # writer can fix itself. It only runs on the coding path, so a resumed or
+    # plain execution used to sail past it: trial_002 shipped a constant
+    # {x:0,y:0,z:0} predictor twice because resume skipped the whole function.
+    # Every branch above converges here, before the score is reconciled,
+    # synced or submitted, so a meaningless score stops here.
+    constant_issues = _constant_predictor_issues(competition, trial_id)
+    if constant_issues:
+        log_decision(
+            competition,
+            trial_id,
+            decision_type="constant_predictor_blocked",
+            decision="blocked",
+            reason="predict() returned an identical result for every sample; its score cannot reflect the change under test.",
+            evidence={"issues": constant_issues},
+            next_action="force_replan_next_cycle",
+        )
+        return {
+            "competition": competition,
+            "trial_id": trial_id,
+            "status": "blocked_constant_predictor",
+            "workspace_run": workspace_run,
+            "metrics_collection": metrics_collection,
+            "constant_predictor_issues": constant_issues,
+        }
     save_loop_state(phase="validating_execution_facts")
     consistency = reconcile_trial_execution_metadata(competition, trial_id)
     if consistency.get("status") == "blocked":

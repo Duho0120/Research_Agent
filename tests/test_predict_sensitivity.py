@@ -197,5 +197,62 @@ class ConstantPredictorBlocksAfterRetryTest(unittest.TestCase):
         result = self._run([["predict_ignores_input:same_output_for_every_sample"], []])
         self.assertEqual("completed", result["status"])
 
+
+class EveryPathReachesTheConstantCheckTest(unittest.TestCase):
+    """The check inside run_code_writer_trial only coaches -- it retries with
+    feedback so the writer can fix itself, and it only runs on the coding
+    path. Real incident: trial_002 was already complete, so run_one_trial took
+    its resume branch, skipped run_code_writer_trial entirely, and shipped a
+    constant {x:0,y:0,z:0} predictor as a result twice. The final gate sits
+    where all three branches converge instead."""
+
+    ISSUES = ["predict_ignores_input:same_output_for_every_sample"]
+
+    def _run_one_trial(self, *, code_writer: bool, resumable: bool):
+        from scripts import generic_workspace_auto_loop as loop
+
+        completed = {
+            "workspace_run": {"status": "completed"},
+            "metrics_collection": {"status": "collected"},
+        }
+        patches = {
+            "validate_execution_profile": {"status": "ready", "issues": []},
+            "load_execution_profile": {"project_root": "irrelevant"},
+            "_recover_completed_execution": completed if resumable else None,
+            "run_workspace_pipeline": completed["workspace_run"],
+            "collect_workspace_metrics": completed["metrics_collection"],
+            "_constant_predictor_issues": self.ISSUES,
+        }
+        with unittest.mock.patch.object(loop, "save_loop_state"):
+            with unittest.mock.patch.object(loop, "log_decision") as logged:
+                with unittest.mock.patch.object(loop, "write_loop_trial_result"):
+                    with unittest.mock.patch.multiple(
+                        loop, **{name: unittest.mock.DEFAULT for name in patches}
+                    ) as mocks:
+                        for name, value in patches.items():
+                            mocks[name].return_value = value
+                        result = loop.run_one_trial(
+                            "demo",
+                            "trial_002",
+                            submit=False,
+                            kaggle_slug=None,
+                            poll_attempts=0,
+                            poll_interval_seconds=0.0,
+                            code_writer=code_writer,
+                        )
+        return result, logged
+
+    def test_resume_path_is_blocked(self):
+        result, logged = self._run_one_trial(code_writer=True, resumable=True)
+        self.assertEqual("blocked_constant_predictor", result["status"])
+        self.assertEqual(self.ISSUES, result["constant_predictor_issues"])
+        self.assertEqual(
+            "constant_predictor_blocked", logged.call_args.kwargs["decision_type"]
+        )
+
+    def test_plain_execution_path_is_blocked(self):
+        result, _ = self._run_one_trial(code_writer=False, resumable=False)
+        self.assertEqual("blocked_constant_predictor", result["status"])
+
 if __name__ == "__main__":
     unittest.main()
