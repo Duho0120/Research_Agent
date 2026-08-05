@@ -179,6 +179,88 @@ class PromptTest(unittest.TestCase):
             self.assertEqual("EXACT-TEXT\n", path.read_text(encoding="utf-8"))
 
 
+class BaseCodeRestoreTest(unittest.TestCase):
+    """The base trial's code is restored into the workspace and shown to the
+    writer, so a continuation plan is built against what is actually there.
+
+    Real incident: without this, trial_005's plan was built from an empty
+    base_summary and asked the writer to tune a LogisticRegression that never
+    existed -- the real model was a polynomial extrapolator -- because nothing
+    in the prompt said what code was actually running."""
+
+    def _snapshot(self, competition: str, trial_id: str, content: str):
+        from research_agent.code_snapshot import save_trial_code_snapshot
+
+        with tempfile.TemporaryDirectory() as project_tmp:
+            project_root = Path(project_tmp)
+            (project_root / "model.py").write_text(content, encoding="utf-8")
+            save_trial_code_snapshot(
+                contract_coding.trial_dir(competition, trial_id),
+                project_root,
+                ["model.py"],
+                allowed_paths=["model.py"],
+            )
+
+    def test_the_base_trials_code_is_written_into_the_new_workspace(self):
+        with tempfile.TemporaryDirectory() as exp_tmp, tempfile.TemporaryDirectory() as ws_tmp:
+            with unittest.mock.patch.object(contract_coding, "trial_dir", lambda _c, t: Path(exp_tmp) / t):
+                self._snapshot("demo", "trial_004", "MARKER = 'polyfit-source'\n")
+
+                workspace = Path(ws_tmp)
+                with unittest.mock.patch.object(
+                    contract_coding, "load_execution_profile",
+                    return_value={"project_root": str(workspace)},
+                ):
+                    handoff = contract_coding.build_contract_handoff(
+                        "demo", "trial_005", plan="p", source_trial_id="trial_004"
+                    )
+
+            self.assertEqual(["model.py"], handoff["base_code_restored"])
+            self.assertEqual([], handoff["base_code_issues"])
+            self.assertIn("MARKER = 'polyfit-source'", (workspace / "model.py").read_text(encoding="utf-8"))
+
+    def test_the_restored_source_appears_in_the_prompt_not_a_blank_slate(self):
+        with tempfile.TemporaryDirectory() as exp_tmp, tempfile.TemporaryDirectory() as ws_tmp:
+            with unittest.mock.patch.object(contract_coding, "trial_dir", lambda _c, t: Path(exp_tmp) / t):
+                self._snapshot("demo", "trial_004", "def fit(t):\n    return {'degree': 2}\n")
+                with unittest.mock.patch.object(
+                    contract_coding, "load_execution_profile",
+                    return_value={"project_root": ws_tmp},
+                ):
+                    handoff = contract_coding.build_contract_handoff(
+                        "demo", "trial_005", plan="tune the degree", source_trial_id="trial_004"
+                    )
+
+            self.assertIn("degree", handoff["prompt"])
+            self.assertIn("modifying one file", handoff["prompt"])
+            self.assertNotIn("from scratch", handoff["prompt"])
+
+    def test_no_source_trial_is_a_from_scratch_baseline(self):
+        with tempfile.TemporaryDirectory() as ws_tmp:
+            with unittest.mock.patch.object(
+                contract_coding, "load_execution_profile", return_value={"project_root": ws_tmp}
+            ):
+                handoff = contract_coding.build_contract_handoff("demo", "trial_001", plan="p")
+        self.assertEqual([], handoff["base_code_restored"])
+        self.assertEqual([], handoff["base_code_issues"])
+        self.assertIn("from scratch", handoff["prompt"])
+
+    def test_a_missing_snapshot_falls_back_to_scratch_with_a_visible_issue(self):
+        """Not silently guessed around: a source trial that predates this
+        mechanism, or is a legacy trial, has no snapshot to restore."""
+        with tempfile.TemporaryDirectory() as exp_tmp, tempfile.TemporaryDirectory() as ws_tmp:
+            with unittest.mock.patch.object(contract_coding, "trial_dir", lambda _c, t: Path(exp_tmp) / t):
+                with unittest.mock.patch.object(
+                    contract_coding, "load_execution_profile", return_value={"project_root": ws_tmp}
+                ):
+                    handoff = contract_coding.build_contract_handoff(
+                        "demo", "trial_003", plan="p", source_trial_id="trial_002_legacy"
+                    )
+        self.assertEqual([], handoff["base_code_restored"])
+        self.assertEqual(["no_base_snapshot:model.py:trial_002_legacy"], handoff["base_code_issues"])
+        self.assertIn("from scratch", handoff["prompt"])
+
+
 class CodeWriterTest(unittest.TestCase):
     def test_no_api_permission_blocks_without_calling_out(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -21,6 +21,7 @@ from execution_core.contract import DEFAULT_HOLDOUT_RATIO, DEFAULT_SEED
 from execution_core.metric_provisioning import provision_metric
 
 from .agents.memory import log_decision
+from .code_snapshot import save_trial_code_snapshot
 from .execution_profile import (
     contract_data_dir,
     contract_submission_template,
@@ -39,6 +40,7 @@ def run_contract_pipeline(
     run_now: bool = False,
     allow_constant_predictions: bool = False,
     generate_metric: Any | None = None,
+    writable_paths: list[str] | None = None,
 ) -> dict[str, Any]:
     """Run one trial under the contract model, in the old runner's shape."""
     validation = validate_execution_profile(competition)
@@ -123,7 +125,30 @@ def run_contract_pipeline(
 
     result["status"] = "completed"
     result["next_action"] = "collect-metrics"
+    # Only a completed trial's code is worth keeping as a future base: a
+    # failed or constant-predictor trial has nothing a continuation should
+    # build on, and snapshotting it would let a broken trial get restored as
+    # someone else's starting point.
+    result["code_snapshot"] = _snapshot_code(
+        competition, trial_id, Path(str(profile["project_root"])), writable_paths or ["model.py"]
+    )
     return _finish(result)
+
+
+def _snapshot_code(
+    competition: str, trial_id: str, project_root: Path, writable_paths: list[str]
+) -> dict[str, Any]:
+    """Persist this trial's code, so recommended_base_trial has something to
+    hand the next trial. Reuses code_snapshot.py's storage format unchanged --
+    the legacy continuation path already reads it via load_trial_code_snapshot,
+    so nothing downstream needs to know a contract trial wrote it.
+    """
+    return save_trial_code_snapshot(
+        trial_dir(competition, trial_id),
+        project_root,
+        writable_paths,
+        allowed_paths=writable_paths,
+    )
 
 
 def _failed_status(trial: dict[str, Any]) -> str:
@@ -179,7 +204,7 @@ def _render(result: dict[str, Any]) -> str:
         "",
     ]
     for field in ("cv_score", "metric", "objective", "n_train", "holdout_count",
-                  "n_test", "distinct_holdout_predictions", "fit_returned"):
+                  "n_test", "distinct_holdout_predictions", "fit_returned", "split"):
         if trial.get(field) is not None:
             lines.append(f"- {field}: {trial[field]}")
     provisioning = result.get("metric_provisioning") or {}

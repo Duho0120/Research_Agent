@@ -34,6 +34,7 @@ from execution_core.contract import (
 )
 
 from .agents.memory import log_decision
+from .code_snapshot import load_trial_code_snapshot
 from .execution_profile import contract_data_dir, load_execution_profile
 from .paths import trial_dir
 from .store import write_text
@@ -51,20 +52,33 @@ def build_contract_handoff(
     *,
     plan: str,
     primary_axis: str = "",
+    source_trial_id: str | None = None,
     feedback: dict[str, Any] | None = None,
     loader_sample: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Everything the code writer is given, in one place."""
+    """Everything the code writer is given, in one place.
+
+    When source_trial_id names a prior trial, its code is restored into the
+    workspace and shown in the prompt as the thing to modify. Real incident:
+    without this, a continuation plan built on an empty base_summary asked the
+    writer to tune a LogisticRegression that never existed -- the model was a
+    polynomial extrapolator -- because nothing told it what was actually there.
+    """
     profile = load_execution_profile(competition)
     writable = _writable_files(primary_axis)
+    project_root = Path(str(profile.get("project_root", "")))
+    base_code, base_issues = _restore_base_code(competition, source_trial_id, project_root, writable)
     return {
         "competition": competition,
         "trial_id": trial_id,
         "execution_model": "contract",
-        "project_root": str(profile.get("project_root", "")),
+        "project_root": str(project_root),
         "primary_change_axis": primary_axis,
+        "source_trial_id": source_trial_id,
         "allowed_paths": writable,
         "forbidden_paths": _forbidden_files(writable),
+        "base_code_restored": sorted(base_code),
+        "base_code_issues": base_issues,
         "prompt": _build_prompt(
             competition,
             plan=plan,
@@ -72,8 +86,34 @@ def build_contract_handoff(
             writable=writable,
             loader_sample=loader_sample,
             feedback=feedback,
+            base_code=base_code,
         ),
     }
+
+
+def _restore_base_code(
+    competition: str, source_trial_id: str | None, project_root: Path, writable: list[str]
+) -> tuple[dict[str, str], list[str]]:
+    """Write the base trial's writable files into the workspace and return them.
+
+    Falls back to scratch -- issues recorded, nothing invented -- when there is
+    no source trial or its snapshot does not exist (a legacy trial, or one that
+    predates this mechanism). A missing base is reported, not silently guessed
+    around.
+    """
+    if not source_trial_id:
+        return {}, []
+    snapshot = dict(load_trial_code_snapshot(trial_dir(competition, source_trial_id)))
+    restored: dict[str, str] = {}
+    issues: list[str] = []
+    for path in writable:
+        content = snapshot.get(path)
+        if content is None:
+            issues.append(f"no_base_snapshot:{path}:{source_trial_id}")
+            continue
+        write_text(project_root / path, content)
+        restored[path] = content
+    return restored, issues
 
 
 def _writable_files(primary_axis: str) -> list[str]:
@@ -101,9 +141,16 @@ def _build_prompt(
     writable: list[str],
     loader_sample: dict[str, Any] | None,
     feedback: dict[str, Any] | None,
+    base_code: dict[str, str] | None = None,
 ) -> str:
+    base_code = base_code or {}
+    opening = (
+        "You are modifying one file for an automated ML experiment."
+        if base_code
+        else "You are writing one file for an automated ML experiment, from scratch."
+    )
     sections = [
-        "You are writing one file for an automated ML experiment.",
+        opening,
         "",
         f"Writable files, and nothing else: {', '.join(writable)}",
         "",
@@ -148,6 +195,18 @@ def _build_prompt(
             json.dumps(loader_sample, ensure_ascii=False, indent=2)[:4000],
             "```",
         ]
+
+    if base_code:
+        sections += [
+            "",
+            "## Current code (this is what you are modifying)",
+            "",
+            "This is the actual, currently-scoring implementation. Change exactly what",
+            "the plan below calls for and leave the rest alone -- do not rewrite it from",
+            "scratch, and do not invent behaviour that is not in this source.",
+        ]
+        for path, content in base_code.items():
+            sections += ["", f"### {path}", "", "```python", content.strip(), "```"]
 
     sections += ["", "## This trial's plan", "", plan.strip()]
     if primary_axis:
@@ -399,6 +458,9 @@ def write_contract_coding_request(competition: str, trial_id: str, handoff: dict
         evidence={
             "allowed_paths": handoff.get("allowed_paths"),
             "primary_change_axis": handoff.get("primary_change_axis"),
+            "source_trial_id": handoff.get("source_trial_id"),
+            "base_code_restored": handoff.get("base_code_restored"),
+            "base_code_issues": handoff.get("base_code_issues"),
             "prompt_chars": len(handoff["prompt"]),
         },
         next_action="run-code-writer",
