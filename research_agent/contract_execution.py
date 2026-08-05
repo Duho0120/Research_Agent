@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from execution_core import run_trial
+from execution_core.contract import DEFAULT_HOLDOUT_RATIO, DEFAULT_SEED
 from execution_core.metric_provisioning import provision_metric
 
 from .agents.memory import log_decision
@@ -89,6 +90,13 @@ def run_contract_pipeline(
         metric=metric["spec"],
         submission_template=contract_submission_template(profile),
         allow_constant_predictions=allow_constant_predictions,
+        metric_confidence=metric.get("confidence"),
+        # The validation structure is a legitimate improvement axis, so it is
+        # configurable -- but it lives in the profile, outside the workspace,
+        # where changing it is a deliberate act rather than a side effect of
+        # rewriting a scorer.
+        holdout_ratio=float(profile.get("holdout_ratio") or DEFAULT_HOLDOUT_RATIO),
+        seed=int(profile.get("split_seed") or DEFAULT_SEED),
         timeout=int(profile.get("timeout_seconds") or 3600),
     )
     result["trial"] = {key: value for key, value in trial.items() if key != "child"}

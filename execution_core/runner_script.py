@@ -35,6 +35,7 @@ def build_runner_source(
 
 
 _BODY = '''
+import hashlib
 import importlib
 import json
 import os
@@ -110,6 +111,12 @@ try:
         train_all, label_keys, holdout_ratio=HOLDOUT_RATIO, seed=SEED
     )
     truths = [{key: jsonable(sample[key]) for key in label_keys} for sample in holdout]
+    # Recorded, not acted on. Two scores are only comparable if they came from
+    # the same holdout, and when a trial deliberately changes the validation
+    # structure this is the only trace of it left in the artifacts.
+    holdout_fingerprint = hashlib.sha256(
+        "|".join(str(sample["id"]) for sample in holdout).encode("utf-8")
+    ).hexdigest()[:16]
 
     stage = "fit"
     started = time.time()
@@ -138,6 +145,11 @@ try:
             "n_train": len(train),
             "n_holdout": len(holdout),
             "n_test": len(test),
+            "split": {
+                "ratio": HOLDOUT_RATIO,
+                "seed": SEED,
+                "fingerprint": holdout_fingerprint,
+            },
             "truths": truths,
             "holdout_predictions": holdout_predictions,
             "test_ids": test_ids,

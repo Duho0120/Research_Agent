@@ -49,6 +49,7 @@ def run_trial(
     holdout_ratio: float = DEFAULT_HOLDOUT_RATIO,
     seed: int = DEFAULT_SEED,
     allow_constant_predictions: bool = False,
+    metric_confidence: str | None = None,
     timeout: int = 1800,
 ) -> dict[str, Any]:
     """Fit, predict, score and write this trial's artifacts.
@@ -65,6 +66,9 @@ def run_trial(
         "cv_score": None,
         "issues": [],
         "project_root": str(root),
+        # Travels with the score all the way to the artifacts: how much a
+        # number can be leaned on is part of the number.
+        "metric_confidence": metric_confidence,
     }
 
     missing = [module for module in (loader_module, model_module) if not (root / f"{module}.py").is_file()]
@@ -123,6 +127,7 @@ def run_trial(
 
     distinct = _distinct_predictions(child["holdout_predictions"])
     result["distinct_holdout_predictions"] = distinct
+    result["split"] = child.get("split")
     result["holdout_count"] = child["n_holdout"]
     result["n_train"] = child["n_train"]
     result["n_test"] = child["n_test"]
@@ -306,6 +311,8 @@ def _write_metrics(outputs: Path, result: dict[str, Any], child: dict[str, Any])
                 "n_train": child["n_train"],
                 "n_test": child["n_test"],
                 "distinct_holdout_predictions": result["distinct_holdout_predictions"],
+                "split": result["split"],
+                "metric_confidence": result.get("metric_confidence"),
                 "generated_by": "execution_core",
             },
             ensure_ascii=False,
