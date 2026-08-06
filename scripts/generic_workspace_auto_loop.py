@@ -19,8 +19,21 @@ from research_agent.cli_app import (  # noqa: E402
     check_dacon_submission_limit,
     dacon_auto_submit_allowed,
 )
+from research_agent.contract_coding import (  # noqa: E402
+    build_contract_handoff,
+    load_sample_preview,
+    run_contract_code_writer,
+    validate_contract_code,
+    write_contract_coding_request,
+)
 from research_agent.demo_one_cycle import prepare_workspace_trial_plan  # noqa: E402
-from research_agent.execution_profile import load_execution_profile, validate_execution_profile  # noqa: E402
+from research_agent.execution_facts import resolve_trial_plan  # noqa: E402
+from research_agent.execution_profile import (  # noqa: E402
+    CONTRACT_MODEL,
+    execution_model,
+    load_execution_profile,
+    validate_execution_profile,
+)
 from research_agent.graph.workspace_loop_graph import (  # noqa: E402
     WorkspaceLoopCallbacks,
     resume_workspace_loop_graph,
@@ -37,6 +50,7 @@ from research_agent.trial_artifacts import (  # noqa: E402
     reconcile_trial_execution_metadata,
     trial_artifact_path,
 )
+from research_agent.trial_decision import load_latest_decision_context  # noqa: E402
 from research_agent.workspace_after_coding import run_workspace_after_coding  # noqa: E402
 from research_agent.workspace_code_writer import run_workspace_code_writer  # noqa: E402
 from research_agent.runtime_contract import (  # noqa: E402
@@ -663,6 +677,26 @@ def run_code_writer_trial(
     trial_llm_calls: int | None,
     strategy_calls_today: int | None,
 ) -> dict[str, Any]:
+    # Single dispatch point, mirroring run_workspace_pipeline: the competition's
+    # own profile decides, not the caller. The legacy retry machinery below is
+    # built entirely around patch-mismatch and snapshot-context failures that
+    # cannot happen under the contract model, so a contract competition takes
+    # a separate, much shorter path rather than a branch threaded through it.
+    try:
+        profile = load_execution_profile(competition)
+    except (FileNotFoundError, ValueError):
+        profile = {}
+    if execution_model(profile) == CONTRACT_MODEL:
+        return run_contract_code_writer_trial(
+            competition,
+            trial_id,
+            model=model,
+            provider=provider,
+            allow_api=allow_api,
+            trial_llm_calls=trial_llm_calls,
+            strategy_calls_today=strategy_calls_today,
+        )
+
     ignored_feedback_source = _previous_cycle_ignored_feedback_source_trial(competition, trial_id)
     if ignored_feedback_source is not None:
         print(
@@ -888,6 +922,184 @@ def run_code_writer_trial(
             "code_writer_attempt": attempt,
         }
     return last_blocked or {"competition": competition, "trial_id": trial_id, "status": "code_writer_blocked"}
+
+
+CONTRACT_CODE_WRITER_ATTEMPTS = 2
+
+
+def run_contract_code_writer_trial(
+    competition: str,
+    trial_id: str,
+    *,
+    model: str,
+    provider: str,
+    allow_api: bool,
+    trial_llm_calls: int | None,
+    strategy_calls_today: int | None,
+) -> dict[str, Any]:
+    """The contract model's code-writing stage.
+
+    Shorter than the legacy version above because execution_core's failures
+    already come back structured -- a failed_stage and an error, or
+    blocked_constant_predictor -- so one feedback path covers every failure
+    instead of legacy's separate detectors for patch mismatches, missing
+    snapshot context and repeated violations. There is nothing here for those
+    to detect: the contract model always returns a whole file, never a patch.
+    """
+    plan = resolve_trial_plan(competition, trial_id)
+    plan_text = _read_text(trial_dir(competition, trial_id) / "next_experiment.md")
+    primary_axis = str(plan.get("primary_change_axis") or "")
+    plan_source_trial_id = plan.get("source_trial_id")
+    loader_sample = load_sample_preview(competition)
+    # A trial with no source at all is the first of its lineage -- a constant
+    # submission-format baseline is a legitimate thing to run once, the same
+    # exemption _constant_predictor_issues makes for the legacy path.
+    is_baseline = not plan_source_trial_id
+
+    # The trial to restore code from is not necessarily plan_source_trial_id.
+    # plan_following_trial always passes the mechanically-previous trial as
+    # source_trial_id for narrative continuity, but if that trial regressed,
+    # recommended_base_trial (from the decision card) points at the last
+    # trial that was actually good -- the diagram's "regress to previous
+    # BEST" arrow. Legacy makes exactly this distinction as code_base_trial_id
+    # in workspace_coding_handoff.py; missing it here would have restored the
+    # rejected trial's code as everyone's starting point instead of the best
+    # one's.
+    code_base_trial_id = (
+        str(load_latest_decision_context(competition).get("recommended_base_trial") or "")
+        or plan_source_trial_id
+    )
+
+    feedback: dict[str, Any] | None = None
+    last_blocked: dict[str, Any] | None = None
+    for attempt in range(1, CONTRACT_CODE_WRITER_ATTEMPTS + 1):
+        handoff = build_contract_handoff(
+            competition,
+            trial_id,
+            plan=plan_text,
+            primary_axis=primary_axis,
+            source_trial_id=code_base_trial_id,
+            feedback=feedback,
+            loader_sample=loader_sample,
+        )
+        write_contract_coding_request(competition, trial_id, handoff)
+
+        coding = run_contract_code_writer(
+            competition, trial_id, handoff, model=model, provider=provider, allow_api=allow_api
+        )
+        if coding.get("status") != "accepted":
+            last_blocked = {
+                "competition": competition,
+                "trial_id": trial_id,
+                "status": f"code_writer_{coding.get('status')}",
+                "handoff": handoff,
+                "code_writer": coding,
+                "code_writer_attempt": attempt,
+            }
+            if attempt < CONTRACT_CODE_WRITER_ATTEMPTS:
+                feedback = {"failed_stage": "code_writer", "issues": coding.get("issues") or [], "error": coding.get("error")}
+                continue
+            return last_blocked
+
+        project_root = Path(str(load_execution_profile(competition).get("project_root", "")))
+        static_issues = validate_contract_code(project_root, handoff, coding.get("changed_files") or [])
+        if static_issues:
+            last_blocked = {
+                "competition": competition,
+                "trial_id": trial_id,
+                "status": "code_writer_static_check_failed",
+                "handoff": handoff,
+                "code_writer": coding,
+                "issues": static_issues,
+                "code_writer_attempt": attempt,
+            }
+            if attempt < CONTRACT_CODE_WRITER_ATTEMPTS:
+                feedback = {"failed_stage": "static_check", "issues": static_issues}
+                continue
+            return last_blocked
+
+        workspace_run = run_workspace_pipeline(
+            competition, trial_id, run_now=True, allow_constant_predictions=is_baseline
+        )
+        if workspace_run.get("status") == "blocked_constant_predictor":
+            last_blocked = {
+                "competition": competition,
+                "trial_id": trial_id,
+                "status": "code_writer_blocked",
+                "handoff": handoff,
+                "code_writer": coding,
+                "workspace_run": workspace_run,
+                "constant_predictor_issues": workspace_run.get("constant_predictor_issues"),
+                "code_writer_attempt": attempt,
+            }
+            if attempt < CONTRACT_CODE_WRITER_ATTEMPTS:
+                print(
+                    "Predict returns the same output for every sample; asking the code writer to "
+                    "actually use the input...",
+                    flush=True,
+                )
+                feedback = {
+                    "failed_stage": "predict",
+                    "issues": workspace_run.get("constant_predictor_issues") or [],
+                    "error": "predict() returned the same output for every sample in the holdout.",
+                }
+                continue
+            last_blocked["feedback_ignored"] = True
+            print(
+                "Predict still returns the same output for every sample after a corrective retry; "
+                "stopping instead of running a trial whose predictions cannot improve.",
+                flush=True,
+            )
+            log_decision(
+                competition,
+                trial_id,
+                decision_type="constant_predictor_blocked",
+                decision="blocked",
+                reason="predict() returned an identical result for every sample after a corrective retry.",
+                evidence={"issues": workspace_run.get("constant_predictor_issues")},
+                next_action="force_replan_next_cycle",
+            )
+            return last_blocked
+
+        if workspace_run.get("status") != "completed":
+            last_blocked = {
+                "competition": competition,
+                "trial_id": trial_id,
+                "status": f"workspace_run_{workspace_run.get('status')}",
+                "handoff": handoff,
+                "code_writer": coding,
+                "workspace_run": workspace_run,
+                "code_writer_attempt": attempt,
+            }
+            if attempt < CONTRACT_CODE_WRITER_ATTEMPTS:
+                failure = workspace_run.get("failure") or {}
+                feedback = {
+                    "failed_stage": workspace_run.get("failed_stage"),
+                    "issues": workspace_run.get("issues") or [],
+                    "error": failure.get("error"),
+                }
+                continue
+            return last_blocked
+
+        metrics_collection = collect_workspace_metrics(competition, trial_id)
+        return {
+            "competition": competition,
+            "trial_id": trial_id,
+            "status": "completed",
+            "handoff": handoff,
+            "code_writer": coding,
+            "workspace_run": workspace_run,
+            "metrics_collection": metrics_collection,
+            "code_writer_attempt": attempt,
+        }
+    return last_blocked or {"competition": competition, "trial_id": trial_id, "status": "code_writer_blocked"}
+
+
+def _read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
 
 
 # A blocking reason belonging to this list means the same underlying thing:
@@ -1444,15 +1656,6 @@ def main() -> int:
     return 0 if result["status"] in {"completed", "paused"} else 1
 
 
-if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except Exception as error:
-        save_loop_state(status="failed", current_trial=None, error=str(error), pid=None)
-        print(f"Workspace auto loop failed: {error}", file=sys.stderr)
-        raise
-
-
 def _constant_predictor_issues(competition: str, trial_id: str) -> list[str]:
     """A predictor that answers identically for every sample is not modeling.
 
@@ -1460,6 +1663,14 @@ def _constant_predictor_issues(competition: str, trial_id: str) -> list[str]:
     is legitimately allowed to be a constant submission-format baseline.
     Skipped unless the competition-level loader exists, since without it
     there is no structure-agnostic way to fetch comparable samples.
+
+    This is the legacy path's own probe (predict_step.py); under the contract
+    model it always sees a missing module and reports a probe error, which is
+    filtered out below rather than treated as a finding -- harmless, since
+    execution_core.run_trial already runs this exact check natively for
+    contract trials. It stays here rather than branching on execution_model
+    because run_one_trial calls it unconditionally as the final,
+    unbypassable gate for every execution path.
     """
     path = trial_dir(competition, trial_id) / "continuation_context.json"
     try:
@@ -1486,3 +1697,12 @@ def _constant_predictor_issues(competition: str, trial_id: str) -> list[str]:
     # Probe failures (import errors, too few samples) are not evidence of a
     # constant predictor -- only the positive finding blocks.
     return [i for i in issues if i.startswith("predict_ignores_input")]
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception as error:
+        save_loop_state(status="failed", current_trial=None, error=str(error), pid=None)
+        print(f"Workspace auto loop failed: {error}", file=sys.stderr)
+        raise

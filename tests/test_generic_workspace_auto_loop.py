@@ -1481,5 +1481,237 @@ class GenericWorkspaceAutoLoopTest(unittest.TestCase):
             writer.writerows(rows)
 
 
+class ScriptEntrypointOrderingTest(unittest.TestCase):
+    """A def after `if __name__ == "__main__":` is unreachable when this file
+    is run directly, because main() calls straight into it before the module
+    finishes loading -- a NameError that only a real `python
+    scripts/generic_workspace_auto_loop.py ...` invocation can surface.
+
+    Real incident: _constant_predictor_issues (the final, unbypassable gate in
+    run_one_trial) was defined after the guard. Every unit test imports this
+    module -- which runs it top to bottom regardless of __name__ -- so all 45
+    of them passed while the real CLI crashed with NameError on the very first
+    live run. Import-based testing cannot see this class of bug; only running
+    the file can."""
+
+    def test_nothing_is_defined_after_the_main_guard(self):
+        source = Path(generic_workspace_auto_loop.__file__).read_text(encoding="utf-8")
+        lines = source.splitlines()
+        guard_lines = [i for i, line in enumerate(lines) if line.startswith('if __name__ == "__main__"')]
+        self.assertEqual(1, len(guard_lines), "expected exactly one __main__ guard")
+        after_guard = lines[guard_lines[0] + 1 :]
+        stray = [line for line in after_guard if line.startswith(("def ", "class "))]
+        self.assertEqual([], stray, "these definitions are unreachable when the script is run directly")
+
+
+class ContractCodeWriterDispatchTest(unittest.TestCase):
+    """One dispatch point, at the top of run_code_writer_trial, mirroring
+    run_workspace_pipeline. A contract competition never touches the legacy
+    handoff/patch machinery; a legacy competition never touches the new one."""
+
+    def _call(self, profile: dict):
+        with patch.object(generic_workspace_auto_loop, "load_execution_profile", return_value=profile):
+            with patch.object(
+                generic_workspace_auto_loop, "run_contract_code_writer_trial",
+                return_value={"status": "completed", "via": "contract"},
+            ) as contract_fn:
+                with patch.object(generic_workspace_auto_loop, "prepare_workspace_coding_handoff") as legacy_fn:
+                    result = generic_workspace_auto_loop.run_code_writer_trial(
+                        "demo", "trial_005", model="gpt-5", provider="openai",
+                        allow_api=True, trial_llm_calls=None, strategy_calls_today=None,
+                    )
+        return result, contract_fn, legacy_fn
+
+    def test_contract_profile_takes_the_new_path(self):
+        result, contract_fn, legacy_fn = self._call({"execution_model": "contract"})
+        self.assertEqual("contract", result["via"])
+        contract_fn.assert_called_once()
+        legacy_fn.assert_not_called()
+
+    def test_legacy_profile_is_untouched(self):
+        _result, contract_fn, legacy_fn = self._call({"commands": {"train": ["x"]}})
+        contract_fn.assert_not_called()
+        # The legacy path runs (and will fail fast on a handoff-not-ready
+        # response from the mock); what matters is that it was reached at all.
+        legacy_fn.assert_called_once()
+
+
+class ContractCodeWriterTrialTest(unittest.TestCase):
+    """The contract model's code-writing stage: one feedback path covers every
+    failure, because execution_core's failures already arrive structured."""
+
+    def _run(self, *, coding_results, static_issues_per_attempt, workspace_run_results,
+              source_trial_id="trial_004", recommended_base_trial=None):
+        with patch.object(
+            generic_workspace_auto_loop, "resolve_trial_plan",
+            return_value={"primary_change_axis": "feature_engineering", "source_trial_id": source_trial_id},
+        ):
+            with patch.object(
+                generic_workspace_auto_loop, "load_latest_decision_context",
+                return_value={"recommended_base_trial": recommended_base_trial},
+            ):
+                with patch.object(generic_workspace_auto_loop, "_read_text", return_value="PLAN"):
+                    with patch.object(generic_workspace_auto_loop, "load_sample_preview", return_value=None):
+                        with patch.object(generic_workspace_auto_loop, "build_contract_handoff") as handoff_fn:
+                            handoff_fn.side_effect = lambda *a, **kw: {"prompt": "p", "allowed_paths": ["model.py"], "_feedback": kw.get("feedback")}
+                            with patch.object(generic_workspace_auto_loop, "write_contract_coding_request"):
+                                with patch.object(
+                                    generic_workspace_auto_loop, "run_contract_code_writer", side_effect=coding_results
+                                ):
+                                    with patch.object(
+                                        generic_workspace_auto_loop, "load_execution_profile",
+                                        return_value={"project_root": "C:/ws"},
+                                    ):
+                                        with patch.object(
+                                            generic_workspace_auto_loop, "validate_contract_code",
+                                            side_effect=static_issues_per_attempt,
+                                        ):
+                                            with patch.object(
+                                                generic_workspace_auto_loop, "run_workspace_pipeline",
+                                                side_effect=workspace_run_results,
+                                            ) as pipeline_fn:
+                                                with patch.object(
+                                                    generic_workspace_auto_loop, "collect_workspace_metrics",
+                                                    return_value={"status": "collected", "cv_score": 0.5},
+                                                ):
+                                                    with patch.object(generic_workspace_auto_loop, "log_decision"):
+                                                        result = generic_workspace_auto_loop.run_contract_code_writer_trial(
+                                                            "demo", "trial_005", model="gpt-5", provider="openai",
+                                                            allow_api=True, trial_llm_calls=None, strategy_calls_today=None,
+                                                        )
+        return result, handoff_fn, pipeline_fn
+
+    def test_happy_path_completes_on_the_first_attempt(self):
+        result, handoff_fn, pipeline_fn = self._run(
+            coding_results=[{"status": "accepted", "changed_files": ["model.py"]}],
+            static_issues_per_attempt=[[]],
+            workspace_run_results=[{"status": "completed"}],
+        )
+        self.assertEqual("completed", result["status"])
+        self.assertEqual(1, handoff_fn.call_count)
+        pipeline_fn.assert_called_once_with(
+            "demo", "trial_005", run_now=True, allow_constant_predictions=False
+        )
+
+    def test_a_baseline_trial_is_allowed_a_constant_submission_format(self):
+        _result, _handoff_fn, pipeline_fn = self._run(
+            coding_results=[{"status": "accepted", "changed_files": ["model.py"]}],
+            static_issues_per_attempt=[[]],
+            workspace_run_results=[{"status": "completed"}],
+            source_trial_id=None,
+        )
+        pipeline_fn.assert_called_once_with(
+            "demo", "trial_005", run_now=True, allow_constant_predictions=True
+        )
+
+    def test_code_is_restored_from_the_recommended_base_trial_not_the_mechanical_previous_one(self):
+        """plan_following_trial always passes the mechanically-previous trial
+        as source_trial_id for narrative continuity. If that trial regressed,
+        the code to build from must still be the last trial that was actually
+        good -- the diagram's "regress to previous BEST" arrow.
+
+        Real incident: trial_006's plan named trial_005 (the trial that had
+        just been rejected for a catastrophic regression) as source_trial_id.
+        Restoring code from source_trial_id directly would have made the
+        rejected code everyone's next starting point. Legacy already draws
+        this distinction as code_base_trial_id in workspace_coding_handoff.py;
+        this is that same distinction, made here."""
+        _result, handoff_fn, _pipeline_fn = self._run(
+            coding_results=[{"status": "accepted", "changed_files": ["model.py"]}],
+            static_issues_per_attempt=[[]],
+            workspace_run_results=[{"status": "completed"}],
+            source_trial_id="trial_005",
+            recommended_base_trial="trial_004",
+        )
+        self.assertEqual("trial_004", handoff_fn.call_args_list[0].kwargs["source_trial_id"])
+
+    def test_falls_back_to_the_plan_source_trial_when_no_decision_card_recommends_one(self):
+        _result, handoff_fn, _pipeline_fn = self._run(
+            coding_results=[{"status": "accepted", "changed_files": ["model.py"]}],
+            static_issues_per_attempt=[[]],
+            workspace_run_results=[{"status": "completed"}],
+            source_trial_id="trial_004",
+            recommended_base_trial=None,
+        )
+        self.assertEqual("trial_004", handoff_fn.call_args_list[0].kwargs["source_trial_id"])
+
+    def test_static_check_failure_retries_with_feedback_then_succeeds(self):
+        result, handoff_fn, _pipeline_fn = self._run(
+            coding_results=[
+                {"status": "accepted", "changed_files": ["model.py"]},
+                {"status": "accepted", "changed_files": ["model.py"]},
+            ],
+            static_issues_per_attempt=[["model_missing_function:predict"], []],
+            workspace_run_results=[{"status": "completed"}],
+        )
+        self.assertEqual("completed", result["status"])
+        self.assertEqual(2, handoff_fn.call_count)
+        second_call_feedback = handoff_fn.call_args_list[1].kwargs["feedback"]
+        self.assertEqual("static_check", second_call_feedback["failed_stage"])
+        self.assertIn("model_missing_function:predict", second_call_feedback["issues"])
+
+    def test_constant_predictor_retries_once_then_blocks(self):
+        result, _handoff_fn, _pipeline_fn = self._run(
+            coding_results=[
+                {"status": "accepted", "changed_files": ["model.py"]},
+                {"status": "accepted", "changed_files": ["model.py"]},
+            ],
+            static_issues_per_attempt=[[], []],
+            workspace_run_results=[
+                {"status": "blocked_constant_predictor", "constant_predictor_issues": ["predict_ignores_input:same_output_for_every_sample"]},
+                {"status": "blocked_constant_predictor", "constant_predictor_issues": ["predict_ignores_input:same_output_for_every_sample"]},
+            ],
+        )
+        self.assertEqual("code_writer_blocked", result["status"])
+        self.assertTrue(result["feedback_ignored"])
+
+    def test_constant_predictor_fixed_on_retry_completes(self):
+        result, _handoff_fn, _pipeline_fn = self._run(
+            coding_results=[
+                {"status": "accepted", "changed_files": ["model.py"]},
+                {"status": "accepted", "changed_files": ["model.py"]},
+            ],
+            static_issues_per_attempt=[[], []],
+            workspace_run_results=[
+                {"status": "blocked_constant_predictor", "constant_predictor_issues": ["predict_ignores_input:same_output_for_every_sample"]},
+                {"status": "completed"},
+            ],
+        )
+        self.assertEqual("completed", result["status"])
+
+    def test_execution_failure_carries_the_real_error_into_the_retry_prompt(self):
+        _result, handoff_fn, _pipeline_fn = self._run(
+            coding_results=[
+                {"status": "accepted", "changed_files": ["model.py"]},
+                {"status": "accepted", "changed_files": ["model.py"]},
+            ],
+            static_issues_per_attempt=[[], []],
+            workspace_run_results=[
+                {
+                    "status": "failed",
+                    "failed_stage": "fit",
+                    "issues": ["execution_failed:fit"],
+                    "failure": {"error": "ZeroDivisionError: division by zero"},
+                },
+                {"status": "completed"},
+            ],
+        )
+        second_call_feedback = handoff_fn.call_args_list[1].kwargs["feedback"]
+        self.assertEqual("fit", second_call_feedback["failed_stage"])
+        self.assertIn("ZeroDivisionError", second_call_feedback["error"])
+
+    def test_code_writer_rejection_blocks_after_the_retry_budget(self):
+        result, handoff_fn, _pipeline_fn = self._run(
+            coding_results=[
+                {"status": "blocked", "issues": ["invalid_json_output"]},
+                {"status": "blocked", "issues": ["invalid_json_output"]},
+            ],
+            static_issues_per_attempt=[],
+            workspace_run_results=[],
+        )
+        self.assertEqual("code_writer_blocked", result["status"])
+        self.assertEqual(2, handoff_fn.call_count)
+
+
 if __name__ == "__main__":
     unittest.main()
