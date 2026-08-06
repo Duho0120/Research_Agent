@@ -52,6 +52,7 @@ from .chat_history import (
 from .interface_contract import respond_to_request, submit_human_insight
 from .paths import competition_dir, project_root
 from .state_db import default_db_path, state_db_connection
+from .state_db_sync import sync_state_db
 from .workspace_preparer import prepare_workspace, refresh_workspace_inventory
 from .user_insight_policy import latest_user_insight_record, user_insight_target_trial_ids
 
@@ -223,6 +224,16 @@ class ResearchAgentHandler(BaseHTTPRequestHandler):
                     status=HTTPStatus.INTERNAL_SERVER_ERROR,
                 )
                 return
+            # submit_trial_manually writes submission_run.json (and the lb_score
+            # it just read back from DACON) straight to disk; nothing else in
+            # this request pulls that into the state DB the dashboard reads
+            # from. Without this, the score sat correctly on disk but stayed
+            # invisible until someone happened to click the manual refresh
+            # link (real incident this fixes).
+            try:
+                sync_state_db(competition)
+            except Exception:
+                pass  # a submission that already succeeded must not be reported as failed over a display refresh
             self._send_json(result, status=HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST)
             return
         if parsed.path == "/api/dacon-auto-submit":

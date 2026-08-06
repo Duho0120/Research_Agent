@@ -1,7 +1,10 @@
+import http.client
 import json
 import tempfile
+import threading
 import unittest
 import zipfile
+from http.server import ThreadingHTTPServer
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
@@ -20,6 +23,77 @@ def _multipart_body(boundary: str, files: list[tuple[str, bytes]]) -> bytes:
         chunks.append(header + content + b"\r\n")
     chunks.append(f"--{boundary}--\r\n".encode("utf-8"))
     return b"".join(chunks)
+
+
+class _QuietHandler(web_app.ResearchAgentHandler):
+    """ResearchAgentHandler, minus per-request stderr logging.
+
+    BaseHTTPRequestHandler logs each request via sys.stderr from the
+    request-handling thread. Under pytest's output capture that write races
+    the test thread's own capture teardown and hangs the run rather than
+    failing it -- silently, with no traceback, which is worse than not
+    testing this at all. The dispatch logic under test is unaffected.
+    """
+
+    def log_message(self, format, *args):  # noqa: A002 - matches base signature
+        pass
+
+
+class SubmitTrialEndpointTest(unittest.TestCase):
+    """Real incident: a submission's score landed correctly in
+    submission_run.json, but the dashboard reads from the state DB and
+    nothing synced it there -- the score sat on disk, invisible, until
+    someone happened to click the manual refresh link. This starts a real
+    server rather than calling the handler function directly, because the
+    bug was in the HTTP dispatch wiring itself, not in any function a direct
+    call could exercise in isolation."""
+
+    def setUp(self):
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), _QuietHandler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.addCleanup(self.server.shutdown)
+        self.addCleanup(self.thread.join, 5)
+
+    def _post_submit(self, competition: str, trial_id: str) -> dict:
+        connection = http.client.HTTPConnection(*self.server.server_address, timeout=10)
+        body = f"competition={competition}&trial_id={trial_id}"
+        connection.request(
+            "POST", "/api/submit-trial", body=body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        response = connection.getresponse()
+        payload = json.loads(response.read())
+        connection.close()
+        return payload
+
+    def test_a_successful_submission_is_synced_into_the_state_db(self):
+        with patch.object(
+            web_app, "submit_trial_manually",
+            return_value={"ok": True, "status": "submitted", "submitted_lb_score": 0.472},
+        ):
+            with patch.object(web_app, "sync_state_db") as sync_fn:
+                self._post_submit("demo", "trial_004")
+        sync_fn.assert_called_once_with("demo")
+
+    def test_a_blocked_submission_is_still_reported_even_if_sync_fails(self):
+        """The submission's own result must not be swallowed by a display
+        refresh that happens to fail."""
+        with patch.object(
+            web_app, "submit_trial_manually",
+            return_value={"ok": False, "status": "missing_team_name", "message": "x"},
+        ):
+            with patch.object(web_app, "sync_state_db", side_effect=RuntimeError("db locked")):
+                result = self._post_submit("demo", "trial_004")
+        self.assertEqual("missing_team_name", result["status"])
+
+    def test_missing_trial_id_never_reaches_submit_or_sync(self):
+        with patch.object(web_app, "submit_trial_manually") as submit_fn:
+            with patch.object(web_app, "sync_state_db") as sync_fn:
+                result = self._post_submit("demo", "")
+        self.assertFalse(result["ok"])
+        submit_fn.assert_not_called()
+        sync_fn.assert_not_called()
 
 
 class WebAppTest(unittest.TestCase):
